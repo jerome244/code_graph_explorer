@@ -107,3 +107,6 @@ AUTH_USER_MODEL = "accounts.User"
 # Media (ZIP uploads)
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+# Optional – set via env in prod for private repos / higher rate limits
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")

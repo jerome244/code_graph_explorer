@@ -4,13 +4,23 @@ from .base import BaseModel
 from .project import Project
 
 class ProjectAnalysis(BaseModel):
-    """
-    Stores one analysis generated from an uploaded ZIP.
-    """
+    SOURCE_UPLOAD = "upload"
+    SOURCE_GITHUB = "github"
+    SOURCE_CHOICES = [
+        (SOURCE_UPLOAD, "Upload"),
+        (SOURCE_GITHUB, "GitHub"),
+    ]
+
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="analyses")
-    zip_file = models.FileField(upload_to="uploads/%Y/%m/%d/")
-    summary = models.JSONField(default=dict, blank=True)  # counts, stats
-    graph = models.JSONField(default=dict, blank=True)    # {nodes:[], edges:[], tree_by_file:{}}
+    # keep the file for traceability; optional so we can store metadata-only later if you want
+    zip_file = models.FileField(upload_to="uploads/%Y/%m/%d/", blank=True, null=True)
+
+    # NEW
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_UPLOAD)
+    source_meta = models.JSONField(default=dict, blank=True)
+
+    summary = models.JSONField(default=dict, blank=True)
+    graph = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ("-created_at", "id")

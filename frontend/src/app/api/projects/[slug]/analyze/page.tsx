@@ -100,3 +100,25 @@ function Bucket({ title, items }: { title: string; items: string[] }) {
     </div>
   );
 }
+
+function GithubImportForm({ slug }: { slug: string }) {
+  async function importFromGithub(formData: FormData) {
+    "use server";
+    const repo = formData.get("repo");
+    const ref  = formData.get("ref");
+    await fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? ""}/api/projects/${slug}/import/github`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repo, ref }), // don't send token from client by default
+    });
+  }
+  return (
+    <form action={importFromGithub} className="border rounded p-4 space-y-2">
+      <div className="font-semibold">Import from GitHub</div>
+      <input name="repo" className="w-full border rounded p-2"
+             placeholder="owner/name or https://github.com/owner/name" required />
+      <input name="ref" className="w-full border rounded p-2" placeholder="branch/tag/sha (optional)" />
+      <button className="bg-black text-white rounded px-3 py-1">Import</button>
+    </form>
+  );
+}

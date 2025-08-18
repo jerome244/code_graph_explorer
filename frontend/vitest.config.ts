@@ -15,6 +15,10 @@ export default defineConfig({
     include: ["src/**/*.{test,spec}.?(c|m)[tj]s?(x)"],
     exclude: ["node_modules", ".next", "dist"],
     testTimeout: 10000,
-    environmentMatchGlobs: [["src/app/api/**", "node"]],
+    environmentMatchGlobs: [
+      ["src/app/**/actions.test.ts", "node"],
+      ["src/app/**/getProjects.test.ts", "node"],
+      ["src/app/api/**", "node"],
+    ],
   },
 });

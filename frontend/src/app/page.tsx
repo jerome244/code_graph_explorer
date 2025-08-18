@@ -1,5 +1,8 @@
-// File: src/app/page.tsx
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState, useTransition } from "react";
 
 export default function HomePage() {
   return (
@@ -21,12 +24,8 @@ export default function HomePage() {
             <PrimaryLink href="/register">Create Account</PrimaryLink>
           </Card>
 
-          <Card title="Upload" desc="Upload a project archive (ZIP) for analysis">
-            <PrimaryLink href="/upload">Upload Project</PrimaryLink>
-          </Card>
-
-          <Card title="Graph" desc="Jump straight to the graph view">
-            <PrimaryLink href="/graph">Open Graph</PrimaryLink>
+          <Card title="Upload" desc="Jump to the graph page and upload your ZIP there.">
+            <UploadRedirectButton />
           </Card>
         </section>
 
@@ -67,5 +66,56 @@ function PrimaryLink({ href, children }: { href: string; children: React.ReactNo
     >
       {children}
     </Link>
+  );
+}
+
+/** Single-button flow: create (or reuse) a quick-start project → go to /projects/[slug]/graph */
+function UploadRedirectButton() {
+  const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  const handleClick = () => {
+    setError(null);
+    startTransition(async () => {
+      // Choose a predictable slug; retry with a short suffix if it already exists.
+      const baseSlug = "quick-start";
+      const candidates = [baseSlug, `${baseSlug}-${Date.now().toString(36).slice(-5)}`];
+
+      for (const slug of candidates) {
+        const name = slug.replace(/-/g, " "); // backend slugifies name → slug
+        const res = await fetch("/api/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            description: "Auto-created from Home → Upload",
+          }),
+        });
+
+        if (res.ok || res.status === 409) {
+          router.push(`/projects/${encodeURIComponent(slug)}/graph`);
+          return;
+        }
+      }
+
+      setError("Could not prepare a project. Please try again.");
+    });
+  };
+
+  return (
+    <div>
+      <button
+        onClick={handleClick}
+        disabled={isPending}
+        className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:opacity-90 disabled:opacity-60"
+      >
+        {isPending ? "Opening Graph…" : "Go to Graph & Upload"}
+      </button>
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      <p className="mt-2 text-xs text-slate-500">
+        We’ll create (or reuse) a quick-start project and take you to the graph page.
+      </p>
+    </div>
   );
 }

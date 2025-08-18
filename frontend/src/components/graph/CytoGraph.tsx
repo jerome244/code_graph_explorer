@@ -1,273 +1,302 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import CytoscapeComponent from "react-cytoscapejs";
-import cytoscape, { Stylesheet } from "cytoscape";
-import dagre from "cytoscape-dagre";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-cytoscape.use(dagre);
+type NodeData = {
+  id: string;
+  label?: string;
+  path?: string;
+  start?: number;
+  end?: number;
+  lang?: string;
+};
 
-type NodeIn = { id: string; type: string; label?: string; lang?: string; file?: string };
-type EdgeIn = { source: string; target: string; type: "declares" | "calls" | "styled-by" };
+type EdgeData = { id: string; source: string; target: string; label?: string };
 
-type Props = { nodes: NodeIn[]; edges: EdgeIn[] };
+type Props = {
+  slug: string;
+  nodes: NodeData[];
+  edges: EdgeData[];
+};
 
-function toElements(nodes: NodeIn[], edges: EdgeIn[]) {
-  // build unique edge ids to avoid duplicates
-  const elements: any[] = [];
-  for (const n of nodes) {
-    elements.push({
-      data: {
-        id: n.id,
-        label: n.label ?? n.id,
-        type: n.type,
-        lang: n.lang,
-        file: n.file,
-      },
-      selectable: true,
-      grabbable: true,
-    });
-  }
-  const seen = new Set<string>();
-  for (const e of edges) {
-    const id = `${e.type}:${e.source}->${e.target}`;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    elements.push({
-      data: { id, source: e.source, target: e.target, type: e.type },
-      selectable: true,
-    });
-  }
-  return elements;
-}
+type Pop = {
+  id: string;
+  title: string;
+  path?: string;
+  start?: number;
+  end?: number;
+  content: string;
+  x: number;
+  y: number;
+  lang?: string;
+};
 
-const stylesheet: Stylesheet[] = [
-  { selector: "node", style: {
-      "label": "data(label)",
-      "font-size": 10,
-      "text-valign": "center",
-      "text-halign": "center",
-      "text-wrap": "wrap",
-      "text-max-width": 160,
-      "background-color": "#e5e7eb",
-      "border-width": 1,
-      "border-color": "#9ca3af",
-      "width": "label",
-      "height": "label",
-      "padding": "6px",
-      "shape": "round-rectangle",
-    }},
-  { selector: 'node[type = "file"]', style: {
-      "background-color": "#dbeafe",
-      "border-color": "#60a5fa",
-      "shape": "rectangle",
-      "font-weight": 600,
-    }},
-  { selector: 'node[type = "function"]', style: {
-      "background-color": "#ecfccb",
-      "border-color": "#84cc16",
-    }},
-  { selector: 'node[type = "unresolved"]', style: {
-      "background-color": "#fee2e2",
-      "border-color": "#f87171",
-      "line-style": "dotted",
-    }},
-  { selector: 'node[type ^= "html-"]', style: {
-      "background-color": "#fde68a",
-      "border-color": "#f59e0b",
-    }},
-  { selector: 'node[type ^= "css-"]', style: {
-      "background-color": "#ddd6fe",
-      "border-color": "#8b5cf6",
-    }},
+export default function Cy({ slug, nodes, edges }: Props) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const cyRef = useRef<any>(null);
+  const resizeObsRef = useRef<ResizeObserver | null>(null);
+  const [pops, setPops] = useState<Record<string, Pop>>({});
 
-  { selector: "edge", style: {
-      "curve-style": "bezier",
-      "width": 1.5,
-      "line-color": "#94a3b8",
-      "target-arrow-shape": "triangle",
-      "target-arrow-color": "#94a3b8",
-      "arrow-scale": 0.8,
-      "opacity": 0.8,
-    }},
-  { selector: 'edge[type = "declares"]', style: {
-      "line-color": "#3b82f6",
-      "target-arrow-color": "#3b82f6",
-    }},
-  { selector: 'edge[type = "calls"]', style: {
-      "line-color": "#10b981",
-      "target-arrow-color": "#10b981",
-    }},
-  { selector: 'edge[type = "styled-by"]', style: {
-      "line-color": "#f59e0b",
-      "target-arrow-color": "#f59e0b",
-      "line-style": "dashed",
-    }},
+  const elements = useMemo(() => {
+    return [
+      ...nodes.map((n) => ({ data: n })), // nodes
+      ...edges.map((e) => ({ data: e })), // edges
+    ];
+  }, [nodes, edges]);
 
-  // highlight classes
-  { selector: ".faded", style: { "opacity": 0.15 } },
-  { selector: ".highlight", style: { "border-width": 2, "border-color": "#111827" } },
-];
-
-export default function CytoGraph({ nodes, edges }: Props) {
-  const cyRef = useRef<cytoscape.Core | null>(null);
-  const elements = useMemo(() => toElements(nodes, edges), [nodes, edges]);
-
-  const [layoutName, setLayoutName] = useState<"dagre" | "cose" | "grid">("dagre");
-  const [filters, setFilters] = useState({
-    files: true,
-    functions: true,
-    html: true,
-    css: true,
-    unresolved: true,
-  });
-  const [selected, setSelected] = useState<any | null>(null);
-
-  const runLayout = () => {
-    const cy = cyRef.current!;
-    cy.layout(
-      layoutName === "dagre"
-        ? { name: "dagre", rankDir: "LR", nodeSep: 20, rankSep: 40, edgeSep: 10 }
-        : layoutName === "cose"
-        ? { name: "cose", animate: false, gravity: 1.25, idealEdgeLength: 100 }
-        : { name: "grid", rows: undefined, cols: undefined }
-    ).run();
-    cy.fit(undefined, 40);
+  const positionForNode = (node: any): { x: number; y: number } => {
+    const rp = node.renderedPosition();
+    return { x: rp.x, y: rp.y };
   };
 
-  // Initialize events & run first layout
-  const onCyReady = (cy: cytoscape.Core) => {
-    cyRef.current = cy;
-
-    cy.on("tap", "node", (evt) => {
-      const n = evt.target;
-      setSelected({
-        id: n.id(),
-        type: n.data("type"),
-        label: n.data("label"),
-        lang: n.data("lang"),
-        file: n.data("file"),
-        degree: n.degree(),
-        indegree: n.indegree(),
-        outdegree: n.outdegree(),
-      });
-
-      // highlight neighborhood
-      cy.elements().removeClass("faded highlight");
-      const neighborhood = n.closedNeighborhood();
-      cy.elements().difference(neighborhood).addClass("faded");
-      n.addClass("highlight");
-      neighborhood.edges().addClass("highlight");
-    });
-
-    cy.on("tap", (evt) => {
-      if (evt.target === cy) {
-        cy.elements().removeClass("faded highlight");
-        setSelected(null);
-      }
-    });
-
-    runLayout();
-  };
-
-  // Re-apply filters whenever toggled
-  useEffect(() => {
+  const updatePopPositions = useCallback(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    cy.elements().style("display", "element"); // reset
 
-    const hideSelectors: string[] = [];
-    if (!filters.files) hideSelectors.push('node[type = "file"]');
-    if (!filters.functions) hideSelectors.push('node[type = "function"]');
-    if (!filters.html) hideSelectors.push('node[type ^= "html-"]');
-    if (!filters.css) hideSelectors.push('node[type ^= "css-"]');
-    if (!filters.unresolved) hideSelectors.push('node[type = "unresolved"]');
+    setPops((old) => {
+      let changed = false;
+      const next: Record<string, Pop> = {};
 
-    if (hideSelectors.length) {
-      cy.$(hideSelectors.join(", ")).style("display", "none");
-      // also hide edges connected to hidden nodes
-      const hidden = cy.$(hideSelectors.join(", "));
-      hidden.connectedEdges().style("display", "none");
+      for (const id of Object.keys(old)) {
+        const coll = cy.$id(id);
+        const exists = coll && (typeof coll.nonempty === "function" ? coll.nonempty() : coll.length > 0);
+        if (exists) {
+          const { x, y } = positionForNode(coll);
+          const prev = old[id];
+          if (prev.x !== x || prev.y !== y) {
+            changed = true;
+            next[id] = { ...prev, x, y };
+          } else {
+            next[id] = prev;
+          }
+        } else {
+          next[id] = old[id];
+        }
+      }
+
+      return changed ? next : old;
+    });
+  }, []);
+
+  const fetchCodeFor = async (nodeData: NodeData): Promise<string> => {
+    if (!nodeData.path) return "No file path on node.";
+    const params = new URLSearchParams({ path: nodeData.path });
+    if (nodeData.start) params.set("start", String(nodeData.start));
+    if (nodeData.end) params.set("end", String(nodeData.end));
+
+    const r = await fetch(`/api/projects/${slug}/file?` + params.toString(), { cache: "no-store" });
+    if (!r.ok) return `Error ${r.status}: ${await r.text()}`;
+    return await r.text();
+  };
+
+  const openPop = async (node: any) => {
+    const d = node.data() as NodeData;
+    const { x, y } = positionForNode(node);
+
+    setPops((old) => {
+      if (old[d.id]) return old;
+      return {
+        ...old,
+        [d.id]: {
+          id: d.id,
+          title: d.label || d.path || d.id,
+          path: d.path,
+          start: d.start,
+          end: d.end,
+          content: "Loading…",
+          x,
+          y,
+          lang: d.lang,
+        },
+      };
+    });
+
+    try {
+      const code = await fetchCodeFor(d);
+      setPops((old) => (old[d.id] ? { ...old, [d.id]: { ...old[d.id], content: code } } : old));
+    } catch (e: any) {
+      setPops((old) =>
+        old[d.id] ? { ...old, [d.id]: { ...old[d.id], content: String(e?.message || e) } } : old
+      );
     }
-    // keep view tidy
-    cy.resize();
-  }, [filters]);
+  };
+
+  const closePop = (id: string) => {
+    setPops((old) => {
+      const { [id]: _, ...rest } = old;
+      return rest;
+    });
+  };
+
+  // Init Cytoscape (useLayoutEffect so container has real size)
+  useLayoutEffect(() => {
+    let destroyed = false;
+    let cyLocal: any;
+
+    (async () => {
+      const cytoscape = (await import("cytoscape")).default;
+      if (!containerRef.current || destroyed) return;
+
+      // clean up a stray instance if Strict Mode double-mounted
+      try {
+        cyRef.current?.destroy();
+      } catch {}
+      cyRef.current = null;
+
+      cyLocal = cytoscape({
+        container: containerRef.current,
+        elements: [], // add after init to avoid timing weirdness
+        layout: { name: "cose", animate: false },
+        style: [
+          {
+            selector: "node",
+            style: {
+              "background-color": "#6b7280",
+              label: "data(label)",
+              "font-size": 10,
+              "text-wrap": "wrap",
+              "text-max-width": 100,
+              "text-valign": "center",
+              "text-halign": "center",
+              color: "#111827",
+            },
+          },
+          {
+            selector: "edge",
+            style: {
+              width: 1.5,
+              "line-color": "#cbd5e1",
+              "target-arrow-color": "#cbd5e1",
+              "target-arrow-shape": "triangle",
+              "curve-style": "bezier",
+            },
+          },
+          { selector: ":selected", style: { "background-color": "#111827", color: "white" } },
+        ],
+      });
+
+      if (destroyed) {
+        try { cyLocal.destroy(); } catch {}
+        return;
+      }
+
+      cyRef.current = cyLocal;
+
+      // add elements then layout + fit
+      if (elements.length) cyLocal.add(elements);
+      const layout = cyLocal.layout({ name: "cose", animate: false });
+      layout.run();
+      cyLocal.ready(() => {
+        try {
+          if (!cyLocal.destroyed()) cyLocal.fit(undefined, 20);
+        } catch {}
+      });
+
+      // open popovers
+      cyLocal.on("tap", "node", (e: any) => openPop(e.target));
+
+      // keep popovers attached while panning/zooming/dragging
+      const rePos = () => updatePopPositions();
+      cyLocal.on("pan zoom drag free position", rePos);
+      window.addEventListener("resize", rePos);
+
+      // ResizeObserver to keep canvas sized and visible
+      if (!resizeObsRef.current && containerRef.current) {
+        resizeObsRef.current = new ResizeObserver(() => {
+          try {
+            if (!cyLocal.destroyed()) {
+              cyLocal.resize();
+              cyLocal.fit(undefined, 20);
+              updatePopPositions();
+            }
+          } catch {}
+        });
+        resizeObsRef.current.observe(containerRef.current);
+      }
+
+      // initial position sync after layout
+      updatePopPositions();
+    })();
+
+    return () => {
+      destroyed = true;
+      try {
+        if (resizeObsRef.current && containerRef.current) {
+          resizeObsRef.current.unobserve(containerRef.current);
+        }
+      } catch {}
+      try {
+        const cy = cyRef.current;
+        if (cy) {
+          cy.removeAllListeners?.(); // in case plugin adds any
+          cy.destroy();
+        }
+      } catch {}
+      cyRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [elements, updatePopPositions]);
+
+  // Reposition when elements change (no loops)
+  useLayoutEffect(() => {
+    updatePopPositions();
+  }, [elements, updatePopPositions]);
+
+  const hasData = nodes.length + edges.length > 0;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-      {/* Controls */}
-      <div className="lg:col-span-1 border rounded-xl p-4 space-y-3">
-        <div>
-          <div className="font-semibold mb-1">Layout</div>
-          <select
-            className="border rounded p-2 w-full"
-            value={layoutName}
-            onChange={(e) => setLayoutName(e.target.value as any)}
-          >
-            <option value="dagre">Dagre (LR)</option>
-            <option value="cose">COSE (force)</option>
-            <option value="grid">Grid</option>
-          </select>
-          <button
-            className="mt-2 border rounded px-3 py-1"
-            onClick={() => runLayout()}
-          >
-            Re-run layout
-          </button>
-          <button
-            className="mt-2 ml-2 border rounded px-3 py-1"
-            onClick={() => cyRef.current?.fit(undefined, 40)}
-          >
-            Fit
-          </button>
-        </div>
+    <div className="relative w-full h-[75vh] border rounded-lg overflow-hidden">
+      {/* cytoscape canvas container */}
+      <div
+        ref={containerRef}
+        className="absolute inset-0"
+        style={{ minHeight: 320, minWidth: 320 }} // safety: ensure non-zero size
+      />
 
-        <div>
-          <div className="font-semibold mb-1">Filter</div>
-          {[
-            ["files", "Files"],
-            ["functions", "Functions"],
-            ["html", "HTML"],
-            ["css", "CSS"],
-            ["unresolved", "Unresolved"],
-          ].map(([key, label]) => (
-            <label key={key} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={(filters as any)[key]}
-                onChange={(e) => setFilters((f) => ({ ...f, [key]: e.target.checked }))}
-              />
-              {label}
-            </label>
-          ))}
+      {/* empty-state helper */}
+      {!hasData && (
+        <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-500">
+          No nodes/edges to display.
         </div>
+      )}
 
-        <div>
-          <div className="font-semibold mb-1">Selected</div>
-          {!selected ? (
-            <p className="text-sm text-gray-600">Click a node to see details.</p>
-          ) : (
-            <div className="text-sm space-y-1">
-              <div><span className="font-medium">Label:</span> {selected.label}</div>
-              <div><span className="font-medium">Type:</span> {selected.type}{selected.lang ? ` (${selected.lang})` : ""}</div>
-              {selected.file && <div><span className="font-medium">File:</span> {selected.file}</div>}
-              <div><span className="font-medium">Degree:</span> {selected.degree} (in {selected.indegree} / out {selected.outdegree})</div>
+      {/* popovers overlay */}
+      <div className="absolute inset-0 pointer-events-none">
+        {Object.values(pops).map((p) => (
+          <div
+            key={p.id}
+            style={{
+              position: "absolute",
+              left: Math.max(8, p.x + 8),
+              top: Math.max(8, p.y + 8),
+              maxWidth: 420,
+              zIndex: 30,
+            }}
+            className="pointer-events-auto shadow-lg border rounded-xl bg-white"
+          >
+            <div className="flex items-center justify-between px-3 py-2 border-b">
+              <div className="text-xs font-semibold truncate" title={p.title}>
+                {p.title}
+                {p.start ? (
+                  <span className="text-gray-500">
+                    {" "}
+                    · L{p.start}
+                    {p.end ? `–${p.end}` : ""}
+                  </span>
+                ) : null}
+              </div>
+              <button
+                className="text-xs border rounded px-2 py-0.5"
+                onClick={() => closePop(p.id)}
+              >
+                Close
+              </button>
             </div>
-          )}
-        </div>
-      </div>
-
-      {/* Graph */}
-      <div className="lg:col-span-3 h-[70vh] border rounded-xl overflow-hidden">
-        <CytoscapeComponent
-          elements={elements}
-          stylesheet={stylesheet}
-          style={{ width: "100%", height: "100%" }}
-          cy={(cy) => onCyReady(cy)}
-          wheelSensitivity={0.2}
-          minZoom={0.05}
-          maxZoom={3}
-        />
+            <pre className="text-xs p-3 overflow-auto max-h-64 whitespace-pre-wrap">
+{p.content}
+            </pre>
+          </div>
+        ))}
       </div>
     </div>
   );

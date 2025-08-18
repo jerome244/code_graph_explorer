@@ -19,6 +19,7 @@ export default defineConfig({
       ["src/app/**/actions.test.ts", "node"],
       ["src/app/**/getProjects.test.ts", "node"],
       ["src/app/api/**", "node"],
+      ["**/*.node.test.*", "node"],
     ],
   },
 });

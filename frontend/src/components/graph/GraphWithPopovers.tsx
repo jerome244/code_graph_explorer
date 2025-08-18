@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 type NodeData = {
   id: string;
   label?: string;
-  path?: string;     // file path (required to fetch code)
-  start?: number;    // optional 1-based line start
-  end?: number;      // optional 1-based line end (inclusive)
+  path?: string;
+  start?: number;
+  end?: number;
   lang?: string;
 };
 
@@ -20,13 +20,13 @@ type Props = {
 };
 
 type Pop = {
-  id: string;              // node id
-  title: string;           // label or path
+  id: string;
+  title: string;
   path?: string;
   start?: number;
   end?: number;
-  content: string;         // code text (or loading/error)
-  x: number;               // rendered pixel coords within container
+  content: string;
+  x: number;
   y: number;
   lang?: string;
 };
@@ -34,38 +34,50 @@ type Pop = {
 export default function GraphWithPopovers({ slug, nodes, edges }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cyRef = useRef<any>(null);
+  const resizeObsRef = useRef<ResizeObserver | null>(null);
   const [pops, setPops] = useState<Record<string, Pop>>({});
 
   const elements = useMemo(() => {
     return [
-      ...nodes.map((n) => ({ data: n })),
-      ...edges.map((e) => ({ data: e })),
+      ...nodes.map((n) => ({ data: n })), // nodes
+      ...edges.map((e) => ({ data: e })), // edges
     ];
   }, [nodes, edges]);
 
-  // helper: update position for an existing popup
-  const positionForNode = (node: any): {x:number,y:number} => {
+  const positionForNode = (node: any): { x: number; y: number } => {
     const rp = node.renderedPosition();
     return { x: rp.x, y: rp.y };
   };
 
-  const updatePopPositions = () => {
+  const updatePopPositions = useCallback(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    setPops((old) => {
-      const next: Record<string, Pop> = { ...old };
-      Object.keys(next).forEach((id) => {
-        const node = cy.$id(id);
-        if (node && node.nonempty()) {
-          const { x, y } = positionForNode(node);
-          next[id] = { ...next[id], x, y };
-        }
-      });
-      return next;
-    });
-  };
 
-  // load code for node (via Next proxy)
+    setPops((old) => {
+      let changed = false;
+      const next: Record<string, Pop> = {};
+
+      for (const id of Object.keys(old)) {
+        const coll = cy.$id(id);
+        const exists = coll && (typeof coll.nonempty === "function" ? coll.nonempty() : coll.length > 0);
+        if (exists) {
+          const { x, y } = positionForNode(coll);
+          const prev = old[id];
+          if (prev.x !== x || prev.y !== y) {
+            changed = true;
+            next[id] = { ...prev, x, y };
+          } else {
+            next[id] = prev;
+          }
+        } else {
+          next[id] = old[id];
+        }
+      }
+
+      return changed ? next : old;
+    });
+  }, []);
+
   const fetchCodeFor = async (nodeData: NodeData): Promise<string> => {
     if (!nodeData.path) return "No file path on node.";
     const params = new URLSearchParams({ path: nodeData.path });
@@ -81,7 +93,6 @@ export default function GraphWithPopovers({ slug, nodes, edges }: Props) {
     const d = node.data() as NodeData;
     const { x, y } = positionForNode(node);
 
-    // if already open, just focus/leave as is (don’t close)
     setPops((old) => {
       if (old[d.id]) return old;
       return {
@@ -100,12 +111,13 @@ export default function GraphWithPopovers({ slug, nodes, edges }: Props) {
       };
     });
 
-    // fetch code and update
     try {
       const code = await fetchCodeFor(d);
       setPops((old) => (old[d.id] ? { ...old, [d.id]: { ...old[d.id], content: code } } : old));
     } catch (e: any) {
-      setPops((old) => (old[d.id] ? { ...old, [d.id]: { ...old[d.id], content: String(e?.message || e) } } : old));
+      setPops((old) =>
+        old[d.id] ? { ...old, [d.id]: { ...old[d.id], content: String(e?.message || e) } } : old
+      );
     }
   };
 
@@ -116,20 +128,28 @@ export default function GraphWithPopovers({ slug, nodes, edges }: Props) {
     });
   };
 
-  useEffect(() => {
-    let cy: any;
-    let mounted = true;
+  // Init Cytoscape (useLayoutEffect so container has real size)
+  useLayoutEffect(() => {
+    let destroyed = false;
+    let cyLocal: any;
 
     (async () => {
       const cytoscape = (await import("cytoscape")).default;
-      if (!containerRef.current) return;
+      if (!containerRef.current || destroyed) return;
 
-      cy = cytoscape({
+      // clean up a stray instance if Strict Mode double-mounted
+      try {
+        cyRef.current?.destroy();
+      } catch {}
+      cyRef.current = null;
+
+      cyLocal = cytoscape({
         container: containerRef.current,
-        elements,
+        elements: [], // add after init to avoid timing weirdness
         layout: { name: "cose", animate: false },
         style: [
-          { selector: "node",
+          {
+            selector: "node",
             style: {
               "background-color": "#6b7280",
               label: "data(label)",
@@ -141,42 +161,104 @@ export default function GraphWithPopovers({ slug, nodes, edges }: Props) {
               color: "#111827",
             },
           },
-          { selector: "edge",
-            style: { width: 1.5, "line-color": "#cbd5e1", "target-arrow-color": "#cbd5e1", "target-arrow-shape":"triangle" }
+          {
+            selector: "edge",
+            style: {
+              width: 1.5,
+              "line-color": "#cbd5e1",
+              "target-arrow-color": "#cbd5e1",
+              "target-arrow-shape": "triangle",
+              "curve-style": "bezier",
+            },
           },
           { selector: ":selected", style: { "background-color": "#111827", color: "white" } },
         ],
       });
-      cyRef.current = cy;
 
-      // events: open popovers
-      cy.on("tap", "node", (e: any) => openPop(e.target));
+      if (destroyed) {
+        try { cyLocal.destroy(); } catch {}
+        return;
+      }
 
-      // keep popovers attached while panning/zooming
+      cyRef.current = cyLocal;
+
+      // add elements then layout + fit
+      if (elements.length) cyLocal.add(elements);
+      const layout = cyLocal.layout({ name: "cose", animate: false });
+      layout.run();
+      cyLocal.ready(() => {
+        try {
+          if (!cyLocal.destroyed()) cyLocal.fit(undefined, 20);
+        } catch {}
+      });
+
+      // open popovers
+      cyLocal.on("tap", "node", (e: any) => openPop(e.target));
+
+      // keep popovers attached while panning/zooming/dragging
       const rePos = () => updatePopPositions();
-      cy.on("pan zoom drag free position", rePos);
+      cyLocal.on("pan zoom drag free position", rePos);
       window.addEventListener("resize", rePos);
 
-      if (!mounted) return;
+      // ResizeObserver to keep canvas sized and visible
+      if (!resizeObsRef.current && containerRef.current) {
+        resizeObsRef.current = new ResizeObserver(() => {
+          try {
+            if (!cyLocal.destroyed()) {
+              cyLocal.resize();
+              cyLocal.fit(undefined, 20);
+              updatePopPositions();
+            }
+          } catch {}
+        });
+        resizeObsRef.current.observe(containerRef.current);
+      }
+
+      // initial position sync after layout
+      updatePopPositions();
     })();
 
     return () => {
-      mounted = false;
-      window.removeEventListener("resize", updatePopPositions as any);
-      try { cyRef.current?.destroy(); } catch {}
+      destroyed = true;
+      try {
+        if (resizeObsRef.current && containerRef.current) {
+          resizeObsRef.current.unobserve(containerRef.current);
+        }
+      } catch {}
+      try {
+        const cy = cyRef.current;
+        if (cy) {
+          cy.removeAllListeners?.(); // in case plugin adds any
+          cy.destroy();
+        }
+      } catch {}
       cyRef.current = null;
-      setPops({});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [elements]);
+  }, [elements, updatePopPositions]);
 
-  // also reposition when elements change
-  useEffect(() => { updatePopPositions(); });
+  // Reposition when elements change (no loops)
+  useLayoutEffect(() => {
+    updatePopPositions();
+  }, [elements, updatePopPositions]);
+
+  const hasData = nodes.length + edges.length > 0;
 
   return (
     <div className="relative w-full h-[75vh] border rounded-lg overflow-hidden">
       {/* cytoscape canvas container */}
-      <div ref={containerRef} className="absolute inset-0" />
+      <div
+        ref={containerRef}
+        className="absolute inset-0"
+        style={{ minHeight: 320, minWidth: 320 }} // safety: ensure non-zero size
+      />
+
+      {/* empty-state helper */}
+      {!hasData && (
+        <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-500">
+          No nodes/edges to display.
+        </div>
+      )}
 
       {/* popovers overlay */}
       <div className="absolute inset-0 pointer-events-none">
@@ -195,7 +277,13 @@ export default function GraphWithPopovers({ slug, nodes, edges }: Props) {
             <div className="flex items-center justify-between px-3 py-2 border-b">
               <div className="text-xs font-semibold truncate" title={p.title}>
                 {p.title}
-                {p.start ? <span className="text-gray-500"> · L{p.start}{p.end ? `–${p.end}` : ""}</span> : null}
+                {p.start ? (
+                  <span className="text-gray-500">
+                    {" "}
+                    · L{p.start}
+                    {p.end ? `–${p.end}` : ""}
+                  </span>
+                ) : null}
               </div>
               <button
                 className="text-xs border rounded px-2 py-0.5"

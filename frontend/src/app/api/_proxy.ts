@@ -1,5 +1,4 @@
-import { NextResponse } from "next/server";
-import { getAccessToken } from "@/lib/jwt";
+import { getAccessTokenServerServer } from "@/lib/jwt";
 
 export async function proxyWithAuth(
   req: Request,
@@ -7,27 +6,39 @@ export async function proxyWithAuth(
   opts?: RequestInit
 ) {
   const DJANGO = process.env.DJANGO_API_BASE_URL!;
-  const access = getAccessToken();
+  const access = await getAccessTokenServerServer();
 
-  const headers = new Headers(opts?.headers || {});
+  const headers = new Headers(opts?.headers);
   if (access) headers.set("Authorization", `Bearer ${access}`);
 
-  // pass through body if present
   const init: RequestInit = {
-    method: opts?.method || "GET",
+    method: opts?.method ?? req.method,
     headers,
-    body: opts?.body,
+    // only pass body for non-GET/HEAD if caller didn’t override
+    body:
+      opts?.body ??
+      (req.method !== "GET" && req.method !== "HEAD" ? (req as any).body : undefined),
   };
 
+  // First attempt
   let r = await fetch(`${DJANGO}${djangoPath}`, init);
   if (r.status !== 401) return r;
 
-  // try refreshing
-  const ref = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? ""}/api/auth/refresh`, { method: "POST" });
-  if (!ref.ok) return r; // return original 401
+  // Try refresh with an ABSOLUTE URL
+  let origin = process.env.NEXT_PUBLIC_BASE_URL;
+  if (!origin) {
+    try {
+      origin = new URL(req.url).origin;
+    } catch {
+      origin = "http://localhost"; // test/dev fallback
+    }
+  }
 
-  // retry request with new access cookie already set by /auth/refresh
-  const access2 = getAccessToken();
+  const ref = await fetch(`${origin}/api/auth/refresh`, { method: "POST" });
+  if (!ref.ok) return r; // still 401 → give up
+
+  // Retry with new access token
+  const access2 = await getAccessTokenServerServer();
   if (access2) headers.set("Authorization", `Bearer ${access2}`);
   r = await fetch(`${DJANGO}${djangoPath}`, { ...init, headers });
   return r;

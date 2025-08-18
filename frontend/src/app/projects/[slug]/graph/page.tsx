@@ -1,38 +1,43 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+import { useParams } from "next/navigation";
 import GraphWithPopovers from "@/components/graph/GraphWithPopovers";
 
-type NodeData = { id: string; label?: string; path?: string; start?: number; end?: number; lang?: string };
-type EdgeData = { id: string; source: string; target: string; label?: string };
+type Node = any; // your real type
+type Edge = any;
 
-export default function GraphPage({ params }: { params: { slug: string } }) {
-  const [nodes, setNodes] = useState<NodeData[]>([]);
-  const [edges, setEdges] = useState<EdgeData[]>([]);
+export default function GraphPage() {
+  const { slug } = useParams<{ slug: string }>(); // ✅ no Promise
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
+    if (!slug) return;
     setErr(null);
-    const r = await fetch(`/api/projects/${params.slug}/analysis`, { cache: "no-store" });
-    if (!r.ok) { setErr(await r.text()); return; }
-    const data = await r.json();
-    // Expect data.graph.nodes / data.graph.edges
-    setNodes((data.graph?.nodes ?? []).map((n: any) => n.data ?? n));
-    setEdges((data.graph?.edges ?? []).map((e: any) => e.data ?? e));
-  }
+    const r = await fetch(`/api/projects/${encodeURIComponent(String(slug))}/analysis`, {
+      cache: "no-store",
+    });
+    const txt = await r.text();
+    if (!r.ok) { setErr(txt || "Failed to load analysis."); return; }
+    const data = JSON.parse(txt);
+    setNodes(data?.graph?.nodes ?? []);
+    setEdges(data?.graph?.edges ?? []);
+  }, [slug]);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+  useEffect(() => { void load(); }, [load]);
 
   return (
     <main className="p-6 space-y-4">
       <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Graph: {params.slug}</h1>
+        <h1 className="text-2xl font-semibold">Graph: {String(slug ?? "")}</h1>
         <button className="border rounded px-3 py-1" onClick={load}>Reload</button>
       </header>
 
       {err && <p className="text-red-600 text-sm">{err}</p>}
 
-      <GraphWithPopovers slug={params.slug} nodes={nodes} edges={edges} />
+      <GraphWithPopovers slug={String(slug ?? "")} nodes={nodes} edges={edges} />
     </main>
   );
 }

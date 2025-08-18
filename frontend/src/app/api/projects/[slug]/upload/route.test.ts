@@ -6,7 +6,7 @@ import { server } from "@/test/mocks/server";
 process.env.DJANGO_API_BASE_URL = "http://django.local";
 
 // Mock the jwt accessor used by the route
-vi.mock("@/lib/jwt", () => ({ getAccessToken: () => "TEST_TOKEN" }));
+vi.mock("@/lib/jwt", () => ({ getAccessTokenServer: () => "TEST_TOKEN" }));
 
 // Now import the route (after env & mocks)
 import { POST } from "./route";

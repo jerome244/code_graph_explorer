@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { proxyWithAuth } from "../_proxy";
 
-export async function GET() {
-  const r = await proxyWithAuth(new Request(""), "/api/projects/");
+export async function GET(req: Request) {
+  const r = await proxyWithAuth(req, "/api/projects/");
   const data = await r.json();
   return NextResponse.json(data, { status: r.status });
 }

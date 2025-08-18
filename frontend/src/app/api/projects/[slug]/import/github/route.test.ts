@@ -9,7 +9,7 @@ process.env.DJANGO_API_BASE_URL = "http://django.local";
 // Dynamic token mock we can tweak per test
 let TOKEN: string | undefined = "TEST_TOKEN";
 vi.mock("@/lib/jwt", () => ({
-  getAccessToken: () => TOKEN,
+  getAccessTokenServer: () => TOKEN,
 }));
 
 // Import the route after env + mocks

@@ -43,16 +43,28 @@ class ProjectViewSet(viewsets.ModelViewSet):
     lookup_field = "slug"
 
     def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
+        owner = self.request.user if (self.request.user and self.request.user.is_authenticated) else None
+        serializer.save(owner=owner)
+
+    def get_permissions(self):
+        if self.action == "create":  # POST /api/projects
+            return [permissions.AllowAny()]
+        return super().get_permissions()
 
 
 class ProjectUploadAnalyzeView(APIView):
-    permission_classes = [permissions.IsAuthenticated, RoleBasedProjectPermission]
+    permission_classes = [permissions.AllowAny]
 
     def post(self, request, slug: str):
         project = get_object_or_404(Project, slug=slug)
-        # object-level check (owner/manager/superuser)
-        self.check_object_permissions(request, project)
+
+        # Public project: allow anyone; Private: owner/manager/superuser only
+        if getattr(project, "owner_id", None) is not None:
+            user = request.user
+            if not (user and user.is_authenticated):
+                return Response({"detail": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+            if not (user.is_superuser or user.groups.filter(name="manager").exists() or project.owner_id == user.id):
+                return Response({"detail": "Forbidden."}, status=status.HTTP_403_FORBIDDEN)
 
         file = request.FILES.get("file")
         if not file:
@@ -74,17 +86,20 @@ class ProjectUploadAnalyzeView(APIView):
                 "tree_by_file": result["tree_by_file"],
             },
         )
-        return Response(
-            ProjectAnalysisResultSerializer(analysis).data,
-            status=status.HTTP_201_CREATED,
-        )
+        return Response(ProjectAnalysisResultSerializer(analysis).data, status=status.HTTP_201_CREATED)
 
 
 class ProjectLatestAnalysisView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
 
     def get(self, request, slug: str):
         project = get_object_or_404(Project, slug=slug)
+        if getattr(project, "owner_id", None) is not None:
+            user = request.user
+            if not (user and user.is_authenticated):
+                return Response({"detail": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+            if not (user.is_superuser or user.groups.filter(name="manager").exists() or project.owner_id == user.id):
+                return Response({"detail": "Forbidden."}, status=status.HTTP_403_FORBIDDEN)
         analysis = project.analyses.order_by("-created_at").first()
         if not analysis:
             return Response({"error": "No analyses yet."}, status=404)
@@ -184,19 +199,17 @@ def project_file(request, slug: str):
         return JsonResponse({"detail": "'start'/'end' must be integers."}, status=400)
 
     # Restrict to owner; adjust if you support roles/team access
-    project = get_object_or_404(Project, slug=slug, owner=request.user)
+    project = get_object_or_404(Project, slug=slug)
 
-    # latest analysis
-    analysis = project.analyses.order_by("-created_at").first()
-    if not analysis or not analysis.zip_file:
-        return JsonResponse({"detail": "No analysis/zip for project."}, status=404)
-
-    # Check that requested file is in the graph's tree_by_file
-    graph = analysis.graph or {}
-    tree_by_file = graph.get("tree_by_file") or {}
-    if path not in tree_by_file:
-        return JsonResponse({"detail": "File not found in analysis."}, status=404)
-
+    if getattr(project, "owner_id", None) is not None:
+        user = request.user
+        if not (user and user.is_authenticated):
+            return JsonResponse({"detail": "Authentication required."}, status=401)
+        is_manager = getattr(user, "is_superuser", False) or (
+            getattr(user, "is_authenticated", False) and user.groups.filter(name="manager").exists()
+        )
+        if not (is_manager or project.owner_id == getattr(user, "id", None)):
+            return JsonResponse({"detail": "Forbidden."}, status=403)
     # open the ZIP and read the file content
     try:
         # ensure file pointer at start

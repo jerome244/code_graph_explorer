@@ -3,6 +3,7 @@ from django.contrib import admin
 from django.urls import path, include
 import config.admin  # run admin branding
 from core.views import ProjectImportGithubView
+from core import views
 
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import (
@@ -35,6 +36,7 @@ urlpatterns = [
     path("api/projects/<slug:slug>/upload/", ProjectUploadAnalyzeView.as_view(), name="project-upload"),
     path("api/projects/<slug:slug>/analysis/latest/", ProjectLatestAnalysisView.as_view(), name="project-analysis-latest"),
     path("api/projects/<slug:slug>/import/github/", ProjectImportGithubView.as_view(), name="project-import-github"),
+    path("api/projects/<slug:slug>/file", views.project_file, name="project-file"),
 
 ]
 

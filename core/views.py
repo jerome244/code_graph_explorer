@@ -138,3 +138,89 @@ class ProjectImportGithubView(APIView):
         )
         analysis.zip_file.save(filename, cf, save=True)
         return Response(ProjectAnalysisResultSerializer(analysis).data, status=201)
+
+# core/views.py
+from django.http import HttpResponse, JsonResponse
+from django.shortcuts import get_object_or_404
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+import zipfile
+from io import BytesIO
+import json
+import re
+
+from .models import Project  # and Analysis exported via core.models/__init__.py
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def project_file(request, slug: str):
+    """
+    Returns plain text of a file from the latest Analysis ZIP.
+    Query params:
+      - path (required): file path inside the ZIP (must exist in tree_by_file)
+      - start (optional, 1-based): line start
+      - end (optional, 1-based, inclusive): line end
+    """
+    path = request.GET.get("path")
+    if not path:
+        return JsonResponse({"detail": "Missing 'path'."}, status=400)
+
+    # basic path sanity
+    if path.startswith("/") or ".." in path.split("/"):
+        return JsonResponse({"detail": "Invalid path."}, status=400)
+
+    start = request.GET.get("start")
+    end = request.GET.get("end")
+
+    try:
+        start_i = int(start) if start else None
+        end_i = int(end) if end else None
+        if start_i is not None and start_i < 1:
+            return JsonResponse({"detail": "'start' must be >= 1."}, status=400)
+        if start_i is not None and end_i is not None and end_i < start_i:
+            return JsonResponse({"detail": "'end' must be >= start."}, status=400)
+    except ValueError:
+        return JsonResponse({"detail": "'start'/'end' must be integers."}, status=400)
+
+    # Restrict to owner; adjust if you support roles/team access
+    project = get_object_or_404(Project, slug=slug, owner=request.user)
+
+    # latest analysis
+    analysis = project.analyses.order_by("-created_at").first()
+    if not analysis or not analysis.zip_file:
+        return JsonResponse({"detail": "No analysis/zip for project."}, status=404)
+
+    # Check that requested file is in the graph's tree_by_file
+    graph = analysis.graph or {}
+    tree_by_file = graph.get("tree_by_file") or {}
+    if path not in tree_by_file:
+        return JsonResponse({"detail": "File not found in analysis."}, status=404)
+
+    # open the ZIP and read the file content
+    try:
+        # ensure file pointer at start
+        analysis.zip_file.open("rb")
+        data = analysis.zip_file.read()
+        with zipfile.ZipFile(BytesIO(data)) as zf:
+            with zf.open(path, "r") as f:
+                raw = f.read()
+    except KeyError:
+        return JsonResponse({"detail": "Path not present in zip."}, status=404)
+    except zipfile.BadZipFile:
+        return JsonResponse({"detail": "Corrupted zip."}, status=500)
+
+    # decode to utf-8 (fallback)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1", errors="replace")
+
+    # line slicing (1-based, inclusive)
+    if start_i is not None or end_i is not None:
+        lines = text.splitlines(keepends=True)
+        s = (start_i or 1) - 1
+        e = end_i if end_i is not None else len(lines)
+        text = "".join(lines[s:e])
+
+    return HttpResponse(text, content_type="text/plain; charset=utf-8")

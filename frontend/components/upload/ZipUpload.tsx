@@ -3,13 +3,7 @@
 
 import { useCallback } from "react";
 import type { ElementDefinition } from "cytoscape";
-import {
-  buildTree,
-  extOK,
-  isJunk,
-  normalizePath,
-  type TreeNode,
-} from "@/lib/fileTree";
+import { buildTree, extOK, isJunk, normalizePath, type TreeNode } from "@/lib/fileTree";
 import { treeToCy } from "@/lib/cyto";
 
 export default function ZipUpload({
@@ -32,7 +26,6 @@ export default function ZipUpload({
       setStatus("Reading zip…");
 
       try {
-        // Lazy-load only in the browser
         const { default: JSZip } = await import("jszip");
         const buf = await f.arrayBuffer();
         const zip = await JSZip.loadAsync(buf);
@@ -41,7 +34,6 @@ export default function ZipUpload({
         const files: Record<string, string> = {};
         const jobs: Promise<void>[] = [];
 
-        // Iterate files in archive
         zip.forEach((relativePath: string, entry: any) => {
           if (entry.dir) return;
           const p = normalizePath(relativePath);
@@ -50,33 +42,29 @@ export default function ZipUpload({
           filePaths.push(p);
           const file = zip.file(relativePath);
           if (file) {
-            jobs.push(
-              file.async("string").then((text: string) => {
-                files[p] = text;
-              })
-            );
+            jobs.push(file.async("string").then((text: string) => { files[p] = text; }));
           }
         });
 
         await Promise.all(jobs);
 
         if (filePaths.length === 0) {
-          setStatus("No supported files found (.c .py .html .css .js  — tip: add .ts/.tsx in lib/fileTree.ts)");
+          setStatus("No supported files found (.c .py .html .css .js)");
           onParsed({
             tree: { name: "root", path: "", kind: "folder", children: [] },
             elements: [],
             count: 0,
             files: {},
           });
-          // allow re-uploading the same file
           input.value = "";
           return;
         }
 
         const tree = buildTree(filePaths);
 
-        // ⬇️ New: pass file contents so cy builder can parse functions + calls
-        const { elements } = treeToCy(tree, files);
+        // ✅ normalize treeToCy result to array
+        const res: any = treeToCy(tree, files as any);
+        const elements: ElementDefinition[] = Array.isArray(res) ? res : res?.elements ?? [];
 
         onParsed({ tree, elements, count: filePaths.length, files });
         setStatus(`${filePaths.length} files loaded`);
@@ -90,7 +78,6 @@ export default function ZipUpload({
           files: {},
         });
       } finally {
-        // allow selecting the same file again later
         input.value = "";
       }
     },
@@ -98,14 +85,7 @@ export default function ZipUpload({
   );
 
   return (
-    <label
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 8,
-        cursor: "pointer",
-      }}
-    >
+    <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
       <input
         type="file"
         accept=".zip,application/zip,application/x-zip-compressed"

@@ -32,13 +32,18 @@ export default function CytoGraph({
   onHideNode,     // right-click hide for non-rect nodes
   onUpdateFile,   // save edits from popup
 }: {
-  elements: ElementDefinition[];
+  elements: ElementDefinition[] | { elements: ElementDefinition[] } | any; // ← robust
   hiddenIds?: string[];
   files?: Record<string, string>;
   onNodeSelect?: (id: string) => void;
   onHideNode?: (id: string) => void;
   onUpdateFile?: (path: string, content: string) => void;
 }) {
+  // ✅ normalize to always be an array for the whole component
+  const els: ElementDefinition[] = Array.isArray(elements)
+    ? elements
+    : (elements as any)?.elements ?? [];
+
   const cyRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -74,13 +79,13 @@ export default function CytoGraph({
   // function names for highlight + lines
   const fnNames = useMemo(() => {
     const names = new Set<string>();
-    for (const el of elements || []) {
+    for (const el of els) {                     // ← use normalized els
       if ((el as any).group !== "edges") continue;
       const fn = (el as any).data?.fn;
       if (typeof fn === "string" && fn) names.add(fn);
     }
     return Array.from(names);
-  }, [elements]);
+  }, [els]);
 
   // lines overlay
   const [connections, setConnections] = useState<Conn[]>([]);
@@ -169,7 +174,7 @@ export default function CytoGraph({
   const isRect = (n: any) => n.hasClass("shape-rect");
   const isText = (n: any) => n.hasClass("shape-text");
 
-  // ── NEW: color panel state for rectangles ─────────────────────────────
+  // color panel state for rectangles
   const [colorPanel, setColorPanel] = useState<{ id: string; x: number; y: number; color: string } | null>(null);
   const presetColors = ["#fde68a", "#fca5a5", "#93c5fd", "#bbf7d0", "#e9d5ff", "#fef08a", "#fecaca", "#a7f3d0", "#c7d2fe"];
 
@@ -228,8 +233,8 @@ export default function CytoGraph({
               shape: "round-rectangle",
               width: 160,
               height: 100,
-              "background-color": "data(bg)",   // ← from data
-              "border-color": "data(border)",   // ← from data
+              "background-color": "data(bg)",
+              "border-color": "data(border)",
               "border-width": 1,
               label: "data(label)",
               "font-size": 12,
@@ -308,12 +313,12 @@ export default function CytoGraph({
         const n = evt.target;
         const id = n.id();
 
-        // ── Rectangles: open color panel instead of hide/delete ──
+        // Rectangles: open color panel instead of hide/delete
         if (isAdhoc(n) && isRect(n)) {
           const rp = evt.renderedPosition;
           const current = n.data("bg") || n.style("background-color") || "#fde68a";
           setColorPanel({ id, x: rp.x, y: rp.y, color: current });
-          return; // do not hide
+          return;
         }
 
         // Others keep old behavior (hide)
@@ -429,19 +434,19 @@ export default function CytoGraph({
     })();
   }, [onNodeSelect, onHideNode, labelEdit?.id, colorPanel?.id]);
 
-  // rebuild only when elements change
+  // rebuild only when els change (normalized)
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
     cy.startBatch(); cy.elements().remove();
-    if (elements?.length) {
-      cy.add(elements);
+    if (els.length) {
+      cy.add(els);
       const layout = cy.layout({ name: "cose", nodeDimensionsIncludeLabels: true, padding: 20 });
       layout.run();
       cy.fit(undefined, 80);
     }
     cy.endBatch();
     scheduleConnections();
-  }, [elements]);
+  }, [els]);
 
   // apply hide/show incrementally
   useEffect(() => {
@@ -474,13 +479,13 @@ export default function CytoGraph({
     const cy = cyRef.current; if (!cy || !palette) return;
     const id = makeId(kind);
     const pos = palette.model;
-    const isRect = kind === "rect";
+    const isRectK = kind === "rect";
     const data: any = {
       id,
-      label: kind === "text" ? "Text" : isRect ? "Rectangle" : "New node",
-      ...(isRect ? { bg: "#fde68a", border: "#f59e0b" } : {}),
+      label: kind === "text" ? "Text" : isRectK ? "Rectangle" : "New node",
+      ...(isRectK ? { bg: "#fde68a", border: "#f59e0b" } : {}),
     };
-    const classes = `adhoc${isRect ? " shape-rect" : kind === "text" ? " shape-text" : ""}`;
+    const classes = `adhoc${isRectK ? " shape-rect" : kind === "text" ? " shape-text" : ""}`;
     cy.add({ group: "nodes", data, position: pos, classes });
     setPalette(null);
   };
@@ -730,7 +735,7 @@ export default function CytoGraph({
         </div>
       )}
 
-      {/* ── Color Panel for rectangles ── */}
+      {/* Color Panel for rectangles */}
       {colorPanel && (
         <div
           style={{

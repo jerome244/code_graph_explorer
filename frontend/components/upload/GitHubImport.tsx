@@ -4,13 +4,7 @@
 import { useCallback, useState } from "react";
 import type { ElementDefinition } from "cytoscape";
 import { parseRepoInput } from "@/lib/github";
-import {
-  buildTree,
-  extOK,
-  isJunk,
-  normalizePath,
-  type TreeNode,
-} from "@/lib/fileTree";
+import { buildTree, extOK, isJunk, normalizePath, type TreeNode } from "@/lib/fileTree";
 import { treeToCy } from "@/lib/cyto";
 
 export default function GitHubImport({
@@ -38,7 +32,6 @@ export default function GitHubImport({
     setStatus("Fetching from GitHub…");
 
     try {
-      // Call our server proxy (already in your repo at /api/github/zip)
       const resp = await fetch("/api/github/zip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -54,7 +47,6 @@ export default function GitHubImport({
 
       const buf = await resp.arrayBuffer();
 
-      // Lazy-load jszip only in the browser
       const { default: JSZip } = await import("jszip");
       const zip = await JSZip.loadAsync(buf);
 
@@ -69,11 +61,7 @@ export default function GitHubImport({
         filePaths.push(p);
         const file = zip.file(relativePath);
         if (file) {
-          jobs.push(
-            file.async("string").then((text: string) => {
-              files[p] = text;
-            })
-          );
+          jobs.push(file.async("string").then((text: string) => { files[p] = text; }));
         }
       });
 
@@ -91,15 +79,30 @@ export default function GitHubImport({
         return;
       }
 
-      const tree = buildTree(filePaths);
-      const elements = treeToCy(tree);
-      onParsed({ tree, elements, count: filePaths.length, files });
+      // Optional: strip the single top-level folder GitHub zips add
+      const rootPrefix = (() => {
+        const first = filePaths[0]?.split("/")[0];
+        if (!first) return "";
+        const allHave = filePaths.every(p => p.startsWith(first + "/"));
+        return allHave ? first + "/" : "";
+      })();
 
-      setStatus(
-        `${filePaths.length} files loaded from ${spec.owner}/${spec.repo}${
-          spec.ref ? `@${spec.ref}` : ""
-        }`
-      );
+      const cleanPaths = rootPrefix ? filePaths.map(p => p.slice(rootPrefix.length)) : filePaths;
+      const remappedFiles: Record<string,string> = {};
+      for (const p of filePaths) {
+        const np = rootPrefix ? p.slice(rootPrefix.length) : p;
+        remappedFiles[np] = files[p];
+      }
+
+      const tree = buildTree(cleanPaths);
+
+      // ✅ normalize treeToCy result to array
+      const res: any = treeToCy(tree, remappedFiles as any);
+      const elements: ElementDefinition[] = Array.isArray(res) ? res : res?.elements ?? [];
+
+      onParsed({ tree, elements, count: cleanPaths.length, files: remappedFiles });
+
+      setStatus(`${cleanPaths.length} files loaded from ${spec.owner}/${spec.repo}${spec.ref ? `@${spec.ref}` : ""}`);
     } catch (e: any) {
       console.error(e);
       setStatus(`Import failed: ${e?.message || e}`);
@@ -140,9 +143,5 @@ export default function GitHubImport({
 }
 
 async function safeJson(res: Response) {
-  try {
-    return await res.json();
-  } catch {
-    return null;
-  }
+  try { return await res.json(); } catch { return null; }
 }

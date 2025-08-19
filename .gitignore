@@ -1,0 +1,78 @@
+# ----- OS cruft -----
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+__MACOSX/
+
+# ----- Python / Django -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.python-version
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Django runtime / artifacts
+db.sqlite3
+media/
+staticfiles/
+*.log
+
+# Packaging / build
+build/
+dist/
+wheels/
+.eggs/
+*.egg-info/
+.eggs/
+
+# Tests / coverage / caches
+.pytest_cache/
+.coverage*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.cache/
+
+# Type checkers / linters
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+
+# ----- Node / Next.js -----
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+out/
+frontend/out/
+.turbo/
+.vercel/
+coverage/
+
+# ----- Env files (keep examples) -----
+.env
+.env.*
+!.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# ----- Editors / IDE -----
+.vscode/
+.idea/
+*.swp
+*.swo
+.history/
+
+# ----- Misc -----
+*.orig
+*.rej

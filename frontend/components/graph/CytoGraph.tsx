@@ -8,13 +8,16 @@ import { highlightSource } from "@/lib/analyze";
 type Popup = { id: string; label: string };
 type Conn = { x1: number; y1: number; x2: number; y2: number; color: string };
 
+// helper id
+const makeId = (() => { let c = 0; return (p="custom") => `${p}-${Date.now().toString(36)}-${(c++).toString(36)}`; })();
+
 export default function CytoGraph({
   elements,
   hiddenIds = [],
   files = {},
   onNodeSelect,
-  onHideNode,     // from graph right-click
-  onUpdateFile,   // <-- NEW: save edits back to parent
+  onHideNode,     // right-click hide -> parent updates tree/hiddenIds
+  onUpdateFile,   // save edits from popup
 }: {
   elements: ElementDefinition[];
   hiddenIds?: string[];
@@ -26,45 +29,36 @@ export default function CytoGraph({
   const cyRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
+  // popups for file nodes
   const [popups, setPopups] = useState<Popup[]>([]);
   const popupRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // Per-popup Hide/Show lines (muted popups don't generate anchors)
+  // per-popup line mute
   const [mutedPopups, setMutedPopups] = useState<Set<string>>(new Set());
   const mutedRef = useRef<Set<string>>(new Set());
   useEffect(() => { mutedRef.current = mutedPopups; }, [mutedPopups]);
 
-  // Inline editing state per popup
+  // popup inline code editing
   const [editing, setEditing] = useState<Set<string>>(new Set());
   const [buffers, setBuffers] = useState<Record<string, string>>({});
   const isEditing = (id: string) => editing.has(id);
-
   const startEdit = (id: string, initial: string) => {
-    setEditing((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
-    setBuffers((prev) => (id in prev ? prev : { ...prev, [id]: initial }));
-    setMutedPopups((prev) => new Set(prev).add(id)); // mute lines while editing
+    setEditing(s => (s.has(id) ? s : new Set(s).add(id)));
+    setBuffers(b => (id in b ? b : { ...b, [id]: initial }));
+    setMutedPopups(m => new Set(m).add(id));
   };
   const cancelEdit = (id: string) => {
-    setEditing((prev) => {
-      const next = new Set(prev); next.delete(id); return next;
-    });
-    setMutedPopups((prev) => {
-      const next = new Set(prev); next.delete(id); return next;
-    });
-    setBuffers((prev) => {
-      const { [id]: _, ...rest } = prev; return rest;
-    });
+    setEditing(s => { const n = new Set(s); n.delete(id); return n; });
+    setMutedPopups(m => { const n = new Set(m); n.delete(id); return n; });
+    setBuffers(b => { const { [id]: _, ...rest } = b; return rest; });
   };
   const saveEdit = (id: string) => {
     const content = buffers[id];
-    if (typeof content === "string") {
-      onUpdateFile?.(id, content);
-    }
-    // exit edit mode (parent will re-parse & re-render edges/files)
+    if (typeof content === "string") onUpdateFile?.(id, content);
     cancelEdit(id);
   };
 
-  // Function names used for code highlighting (from edges with data.fn)
+  // function names for highlight + lines
   const fnNames = useMemo(() => {
     const names = new Set<string>();
     for (const el of elements || []) {
@@ -75,78 +69,60 @@ export default function CytoGraph({
     return Array.from(names);
   }, [elements]);
 
-  // ---------------- Cross-popup connection overlay ----------------
+  // lines overlay
   const [connections, setConnections] = useState<Conn[]>([]);
   const rafConn = useRef<number>(0);
   const scheduleConnections = () => {
     if (rafConn.current) return;
     rafConn.current = requestAnimationFrame(() => { rafConn.current = 0; recomputeConnections(); });
   };
-
   const recomputeConnections = () => {
-    const container = containerRef.current;
-    if (!container) return;
+    const container = containerRef.current; if (!container) return;
     const crect = container.getBoundingClientRect();
-
-    type Anchor = { x: number; y: number; color: string; popupId: string; fn: string };
+    type Anchor = { x:number; y:number; color:string; popupId:string; fn:string };
     const perFn: Record<string, Anchor[]> = {};
 
     popupRefs.current.forEach((popupEl, popupId) => {
-      if (mutedRef.current.has(popupId)) return;      // muted (including editing) -> skip
+      if (mutedRef.current.has(popupId)) return;
       const hits = Array.from(popupEl.querySelectorAll<HTMLElement>(".fn-hit[data-fn]"));
       if (!hits.length) return;
-
       const firstPerFn: Record<string, HTMLElement> = {};
-      for (const el of hits) {
-        const fn = el.dataset.fn!;
-        if (!firstPerFn[fn]) firstPerFn[fn] = el;
-      }
+      for (const el of hits) { const fn = el.dataset.fn!; if (!firstPerFn[fn]) firstPerFn[fn] = el; }
       for (const [fn, el] of Object.entries(firstPerFn)) {
         const r = el.getBoundingClientRect();
-        const x = r.left + r.width / 2 - crect.left;
-        const y = r.top + r.height / 2 - crect.top;
+        const x = r.left + r.width/2 - crect.left;
+        const y = r.top + r.height/2 - crect.top;
         const color = el.dataset.color || "#999";
         (perFn[fn] ||= []).push({ x, y, color, popupId, fn });
       }
     });
 
     const conns: Conn[] = [];
-    Object.values(perFn).forEach((anchors) => {
+    Object.values(perFn).forEach(anchors => {
       if (anchors.length < 2) return;
-      for (let i = 0; i < anchors.length - 1; i++) {
-        for (let j = i + 1; j < anchors.length; j++) {
-          const a = anchors[i], b = anchors[j];
-          conns.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, color: a.color });
-        }
+      for (let i=0;i<anchors.length-1;i++) for (let j=i+1;j<anchors.length;j++) {
+        const a = anchors[i], b = anchors[j];
+        conns.push({ x1:a.x, y1:a.y, x2:b.x, y2:b.y, color:a.color });
       }
     });
     setConnections(conns);
   };
 
-  // Manage popup refs + listeners (scroll/resize)
+  // popup ref management
   const cleanupRefs = useRef<Map<string, () => void>>(new Map());
   const setPopupRef = (id: string) => (el: HTMLDivElement | null) => {
     if (!el) {
-      cleanupRefs.current.get(id)?.();
-      cleanupRefs.current.delete(id);
-      popupRefs.current.delete(id);
-      scheduleConnections();
-      return;
+      cleanupRefs.current.get(id)?.(); cleanupRefs.current.delete(id);
+      popupRefs.current.delete(id); scheduleConnections(); return;
     }
     popupRefs.current.set(id, el);
-
     const codePane = el.querySelector<HTMLElement>(".popup-code");
     const onScroll = () => scheduleConnections();
     const ro = new ResizeObserver(() => scheduleConnections());
     if (codePane) { codePane.addEventListener("scroll", onScroll, { passive: true }); ro.observe(codePane); }
     ro.observe(el);
-
     cleanupRefs.current.set(id, () => { codePane?.removeEventListener("scroll", onScroll); ro.disconnect(); });
-
-    // initial placement + lines
     scheduleConnections();
-
-    // snap near node if cy exists
     const cy = cyRef.current;
     if (cy) {
       const node = cy.getElementById(id);
@@ -157,7 +133,30 @@ export default function CytoGraph({
     }
   };
 
-  // ---------------- Cytoscape init (run once) ----------------
+  // quick palette (dblclick background)
+  const [palette, setPalette] = useState<{ x:number; y:number; model:{x:number;y:number} } | null>(null);
+
+  // inline label editor for adhoc nodes
+  const [labelEdit, setLabelEdit] = useState<{ id: string; value: string; x: number; y: number; w: number } | null>(null);
+
+  // selection of adhoc rects for resize handles
+  const [selectedRects, setSelectedRects] = useState<string[]>([]);
+  const handleRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const setHandleRef = (id: string) => (el: HTMLDivElement | null) => {
+    if (!el) handleRefs.current.delete(id);
+    else handleRefs.current.set(id, el);
+  };
+
+  // resize state
+  const resizingRef = useRef<{
+    id: string; startX: number; startY: number; startRW: number; startRH: number; startZoom: number;
+  } | null>(null);
+
+  const isAdhoc = (n: any) => n.hasClass("adhoc");
+  const isRect = (n: any) => n.hasClass("shape-rect");
+  const isText = (n: any) => n.hasClass("shape-text");
+
+  // Cytoscape init
   useEffect(() => {
     (async () => {
       if (!containerRef.current || cyRef.current) return;
@@ -167,12 +166,15 @@ export default function CytoGraph({
         elements: [],
         wheelSensitivity: 0.2,
         style: [
+          // Base nodes (file nodes)
           {
             selector: "node",
             style: {
+              "z-index-compare": "manual",
+              "z-index": 10,
               width: 12,
               height: 12,
-              "background-color": "#111111ff",
+              "background-color": "#111111",
               label: "data(label)",
               "font-size": 8,
               "min-zoomed-font-size": 6,
@@ -183,6 +185,7 @@ export default function CytoGraph({
               "text-outline-width": 1,
             },
           },
+          // Edges
           {
             selector: "edge",
             style: {
@@ -196,24 +199,71 @@ export default function CytoGraph({
               opacity: 0.95,
             },
           },
+          // Selected node border
           { selector: "node:selected", style: { "border-width": 2, "border-color": "#2563eb" } },
+
+          // ── Custom shapes (behind) ───────────────────────────────────────────
+          {
+            selector: "node.adhoc.shape-rect",
+            style: {
+              "z-index-compare": "manual",
+              "z-index": 0, // behind everything else
+              shape: "round-rectangle",
+              width: 160,
+              height: 100,
+              "background-color": "#fde68a",
+              "border-color": "#f59e0b",
+              "border-width": 1,
+              label: "data(label)",
+              "font-size": 12,
+              color: "#0f172a",
+              "text-wrap": "wrap",
+              "text-max-width": 150,
+              "text-valign": "center",
+              "text-halign": "center",
+            },
+          },
+          {
+            selector: "node.adhoc.shape-text",
+            style: {
+              "z-index-compare": "manual",
+              "z-index": 5, // between rects and file nodes
+              shape: "round-rectangle",
+              width: 220,
+              height: 44,
+              "background-opacity": 0,
+              "border-width": 0,
+              label: "data(label)",
+              "font-size": 13,
+              color: "#0f172a",
+              "text-wrap": "wrap",
+              "text-max-width": 220,
+              "text-valign": "center",
+              "text-halign": "center",
+            },
+          },
         ],
       });
 
-      // Left click toggles popup
+      // tap node: code popup only for file-nodes (not adhoc)
       cy.on("tap", "node", (evt: any) => {
-        const id = evt.target.id();
-        const label = evt.target.data("label") || id;
+        const n = evt.target;
+        const id = n.id();
+        const label = n.data("label") || id;
+        if (!n || n.hidden()) return;
 
-        const node = cy.getElementById(id);
-        if (!node || node.hidden()) return;
+        setPalette(null);
+
+        if (isAdhoc(n)) {
+          // just let selection happen; no file popup for adhoc
+          return;
+        }
 
         setPopups((prev) => {
           const open = prev.some((p) => p.id === id);
           if (open) {
-            // close; also exit edit/mute
-            setEditing((s) => { const n = new Set(s); n.delete(id); return n; });
-            setMutedPopups((s) => { const n = new Set(s); n.delete(id); return n; });
+            setEditing((s) => { const nn = new Set(s); nn.delete(id); return nn; });
+            setMutedPopups((s) => { const nn = new Set(s); nn.delete(id); return nn; });
             return prev.filter((p) => p.id !== id);
           }
           onNodeSelect?.(id);
@@ -221,22 +271,52 @@ export default function CytoGraph({
         });
       });
 
-      // Right click: hide node (parent updates hiddenIds); close popup & exit edit
+      // double-click node: inline label editor for adhoc nodes
+      cy.on("dbltap", "node", (evt: any) => {
+        const n = evt.target;
+        if (!isAdhoc(n)) return;
+        const bb = n.renderedBoundingBox();
+        setLabelEdit({
+          id: n.id(),
+          value: n.data("label") || "",
+          x: bb.x1,
+          y: bb.y1 - 28,
+          w: Math.max(120, bb.w),
+        });
+      });
+
+      // Right click: hide node
       cy.on("cxttap", "node", (evt: any) => {
         const id = evt.target.id();
         onHideNode?.(id);
+        setPalette(null);
         setPopups((prev) => prev.filter((p) => p.id !== id));
         setEditing((s) => { const n = new Set(s); n.delete(id); return n; });
         setMutedPopups((s) => { const n = new Set(s); n.delete(id); return n; });
         scheduleConnections();
       });
 
-      // rAF-throttled reposition + lines on move/zoom/layout
+      // Double-click on empty background → open palette
+      cy.on("dbltap", (evt: any) => {
+        if (evt.target !== cy) return; // background only
+        const rp = evt.renderedPosition; // px in container
+        const mp = evt.position;         // model coords
+        setPalette({ x: rp.x, y: rp.y, model: { x: mp.x, y: mp.y } });
+      });
+
+      // selection change -> update selected rects (for resize handle)
+      cy.on("select unselect", "node.adhoc.shape-rect", () => {
+        const sel = cy.$("node.adhoc.shape-rect:selected").map((n: any) => n.id());
+        setSelectedRects(sel);
+      });
+
+      // rAF-throttled reposition + lines + handles + label editor
       let raf = 0;
       const schedule = () => {
         if (raf) return;
         raf = requestAnimationFrame(() => {
           raf = 0;
+          // popups near nodes
           popupRefs.current.forEach((el, id) => {
             const node = cy.getElementById(id);
             if (el && node && node.length) {
@@ -244,18 +324,57 @@ export default function CytoGraph({
               el.style.transform = `translate(${pos.x + 14}px, ${pos.y - 14}px)`;
             }
           });
+          // resize handles at bottom-right of rects
+          handleRefs.current.forEach((el, id) => {
+            const node = cy.getElementById(id);
+            if (!el || !node || !node.length) return;
+            const bb = node.renderedBoundingBox();
+            el.style.transform = `translate(${bb.x2 - 6}px, ${bb.y2 - 6}px)`; // 12x12 handle
+          });
+          // label editor follow node
+          if (labelEdit) {
+            const n = cy.getElementById(labelEdit.id);
+            if (n && n.length) {
+              const bb = n.renderedBoundingBox();
+              setLabelEdit(prev => prev ? { ...prev, x: bb.x1, y: bb.y1 - 28, w: Math.max(120, bb.w) } : prev);
+            }
+          }
           scheduleConnections();
         });
       };
-
       cy.on("viewport layoutstop", schedule);
       cy.on("position drag free", "node", schedule);
       window.addEventListener("resize", scheduleConnections);
+
+      // keyboard: Delete/Backspace removes selected adhoc nodes
+      const onKey = (ev: KeyboardEvent) => {
+        const ae = document.activeElement as HTMLElement | null;
+        const tag = (ae?.tagName || "").toLowerCase();
+        const editable = tag === "textarea" || tag === "input";
+        if (editable) return;
+        if (ev.key === "Delete" || ev.key === "Backspace") {
+          const sel = cy.$("node:selected.adhoc");
+          if (sel.length) {
+            sel.remove();
+            setSelectedRects([]);
+            if (labelEdit && !cy.getElementById(labelEdit.id).length) setLabelEdit(null);
+            setPalette(null);
+          }
+        } else if (ev.key === "Escape") {
+          setPalette(null);
+          setLabelEdit(null);
+        }
+      };
+      window.addEventListener("keydown", onKey);
 
       cyRef.current = cy;
 
       return () => {
         window.removeEventListener("resize", scheduleConnections);
+        window.removeEventListener("keydown", onKey);
+        cy.off("tap");
+        cy.off("dbltap");
+        cy.off("cxttap");
         cy.off("viewport", schedule);
         cy.off("layoutstop", schedule);
         cy.off("position", "node", schedule);
@@ -264,16 +383,12 @@ export default function CytoGraph({
         if (raf) cancelAnimationFrame(raf);
       };
     })();
-  }, [onNodeSelect, onHideNode]);
+  }, [onNodeSelect, onHideNode, labelEdit?.id]);
 
-  // ---------------- Rebuild graph only when `elements` change ----------------
+  // rebuild only when elements change
   useEffect(() => {
-    const cy = cyRef.current;
-    if (!cy) return;
-
-    cy.startBatch();
-    cy.elements().remove();
-
+    const cy = cyRef.current; if (!cy) return;
+    cy.startBatch(); cy.elements().remove();
     if (elements?.length) {
       cy.add(elements);
       const layout = cy.layout({ name: "cose", nodeDimensionsIncludeLabels: true, padding: 20 });
@@ -281,65 +396,93 @@ export default function CytoGraph({
       cy.fit(undefined, 80);
     }
     cy.endBatch();
-
-    // Keep popups as-is (don’t clear on reparse so editing UX is nice)
     scheduleConnections();
   }, [elements]);
 
-  // ---------------- Apply hide/show incrementally when `hiddenIds` change ----------------
+  // apply hide/show incrementally
   useEffect(() => {
-    const cy = cyRef.current;
-    if (!cy) return;
-
+    const cy = cyRef.current; if (!cy) return;
     const hideSet = new Set(hiddenIds);
-
     cy.startBatch();
-    cy.nodes().forEach((n: any) => {
-      if (hideSet.has(n.id())) n.hide();
-      else n.show();
-    });
+    cy.nodes().forEach((n: any) => { if (hideSet.has(n.id())) n.hide(); else n.show(); });
     cy.endBatch();
-
-    // Close popups of hidden nodes + exit edit for them
-    setPopups((prev) => prev.filter((p) => !hideSet.has(p.id)));
-    setEditing((prev) => {
-      const next = new Set(prev);
-      hiddenIds.forEach((id) => next.delete(id));
-      return next;
-    });
-    setMutedPopups((prev) => {
-      const next = new Set(prev);
-      hiddenIds.forEach((id) => next.delete(id));
-      return next;
-    });
-
+    setPopups(prev => prev.filter(p => !hideSet.has(p.id)));
+    setEditing(prev => { const next = new Set(prev); hiddenIds.forEach(id => next.delete(id)); return next; });
+    setMutedPopups(prev => { const next = new Set(prev); hiddenIds.forEach(id => next.delete(id)); return next; });
     scheduleConnections();
   }, [hiddenIds]);
 
-  // Recompute lines when popups/files/fns/muted change
+  // recompute lines on changes
   useEffect(() => { scheduleConnections(); }, [popups, files, fnNames, mutedPopups]);
 
   const closePopup = (id: string) => {
-    setPopups((prev) => prev.filter((p) => p.id !== id));
-    setEditing((s) => { const n = new Set(s); n.delete(id); return n; });
-    setMutedPopups((s) => { const n = new Set(s); n.delete(id); return n; });
+    setPopups(prev => prev.filter(p => p.id !== id));
+    setEditing(s => { const n = new Set(s); n.delete(id); return n; });
+    setMutedPopups(s => { const n = new Set(s); n.delete(id); return n; });
     scheduleConnections();
   };
-
   const togglePopupLines = (id: string) => {
-    setMutedPopups((old) => {
-      const next = new Set(old);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+    setMutedPopups(old => { const n = new Set(old); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   };
 
+  // palette add
+  const addAt = (kind: "node" | "rect" | "text") => {
+    const cy = cyRef.current; if (!cy || !palette) return;
+    const id = makeId(kind);
+    const pos = palette.model;
+    const data: any = { id, label: kind === "text" ? "Text" : kind === "rect" ? "Rectangle" : "New node" };
+    const classes = `adhoc${kind === "rect" ? " shape-rect" : kind === "text" ? " shape-text" : ""}`;
+    cy.add({ group: "nodes", data, position: pos, classes });
+    setPalette(null);
+  };
+
+  // start/stop resizing
+  const onHandleMouseDown = (id: string) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const cy = cyRef.current; if (!cy) return;
+    const node = cy.getElementById(id);
+    if (!node || !node.length) return;
+    resizingRef.current = {
+      id,
+      startX: e.clientX,
+      startY: e.clientY,
+      startRW: node.renderedWidth(),
+      startRH: node.renderedHeight(),
+      startZoom: cy.zoom(),
+    };
+    const onMove = (ev: MouseEvent) => {
+      const r = resizingRef.current; if (!r) return;
+      const dx = ev.clientX - r.startX;
+      const dy = ev.clientY - r.startY;
+      const newRW = Math.max(40, r.startRW + dx);
+      const newRH = Math.max(30, r.startRH + dy);
+      // convert rendered px -> style px (divide by zoom)
+      const w = newRW / r.startZoom;
+      const h = newRH / r.startZoom;
+      node.style({ width: w, height: h });
+      // move handle immediately
+      const el = handleRefs.current.get(id);
+      if (el) {
+        const bb = node.renderedBoundingBox();
+        el.style.transform = `translate(${bb.x2 - 6}px, ${bb.y2 - 6}px)`;
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      resizingRef.current = null;
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  // UI
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       {/* Cytoscape canvas */}
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
-      {/* Popups */}
+      {/* Popups (file code) */}
       <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 9 }}>
         {popups.map((p) => {
           const raw = files[p.id] ?? "";
@@ -347,7 +490,6 @@ export default function CytoGraph({
           const draft = buffers[p.id] ?? raw;
           const html = highlightSource(raw, fnNames);
           const muted = mutedPopups.has(p.id);
-
           return (
             <div
               key={p.id}
@@ -376,10 +518,7 @@ export default function CytoGraph({
               } as React.CSSProperties}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {p.label}
-                </strong>
-
+                <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.label}</strong>
                 {!inEdit && (
                   <button
                     onClick={() => togglePopupLines(p.id)}
@@ -397,172 +536,160 @@ export default function CytoGraph({
                     {muted ? "Show lines" : "Hide lines"}
                   </button>
                 )}
-
                 {inEdit && (
                   <>
                     <button
                       onClick={() => saveEdit(p.id)}
                       title="Save (Ctrl/Cmd+S)"
-                      style={{
-                        border: "1px solid #10b981",
-                        background: "#ecfdf5",
-                        color: "#065f46",
-                        borderRadius: 6,
-                        padding: "2px 8px",
-                        lineHeight: 1.2,
-                        fontSize: 11,
-                        cursor: "pointer",
-                      }}
+                      style={{ border: "1px solid #10b981", background: "#ecfdf5", color: "#065f46", borderRadius: 6, padding: "2px 8px", lineHeight: 1.2, fontSize: 11, cursor: "pointer" }}
                     >
                       Save
                     </button>
                     <button
                       onClick={() => cancelEdit(p.id)}
                       title="Cancel (Esc)"
-                      style={{
-                        border: "1px solid #e5e7eb",
-                        background: "#ffffff",
-                        borderRadius: 6,
-                        padding: "2px 8px",
-                        lineHeight: 1.2,
-                        fontSize: 11,
-                        cursor: "pointer",
-                      }}
+                      style={{ border: "1px solid #e5e7eb", background: "#ffffff", borderRadius: 6, padding: "2px 8px", lineHeight: 1.2, fontSize: 11, cursor: "pointer" }}
                     >
                       Cancel
                     </button>
                   </>
                 )}
-
-                <button
-                  onClick={() => closePopup(p.id)}
-                  title="Close"
-                  style={{
-                    marginLeft: "auto",
-                    border: "none",
-                    background: "transparent",
-                    cursor: "pointer",
-                    padding: 0,
-                    lineHeight: 1,
-                    fontSize: 14,
-                  }}
-                >
-                  ×
-                </button>
+                <button onClick={() => closePopup(p.id)} title="Close" style={{ marginLeft: "auto", border: "none", background: "transparent", cursor: "pointer", padding: 0, lineHeight: 1, fontSize: 14 }}>×</button>
               </div>
 
-              {/* Code area */}
               <div
                 className="popup-code"
-                style={{
-                  border: "1px solid #f3f4f6",
-                  borderRadius: 6,
-                  background: inEdit ? "#fff" : "#f9fafb",
-                  overflow: "auto",
-                  flex: 1,
-                  minHeight: 0,
-                  minWidth: 0,
-                  position: "relative",
-                }}
-                onClick={() => {
-                  if (!inEdit) startEdit(p.id, raw); // click-to-edit
-                }}
+                style={{ border: "1px solid #f3f4f6", borderRadius: 6, background: inEdit ? "#ffffff" : "#f9fafb", overflow: "auto", flex: 1, minHeight: 0, minWidth: 0, position: "relative" }}
+                onClick={() => { if (!inEdit) startEdit(p.id, raw); }}
               >
                 {!inEdit ? (
-                  <pre
-                    style={{
-                      margin: 0,
-                      padding: "8px 10px",
-                      fontFamily:
-                        'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace',
-                      fontSize: 11,
-                      lineHeight: 1.45,
-                      whiteSpace: "pre",
-                      cursor: "text",
-                    }}
-                  >
+                  <pre style={{ margin: 0, padding: "8px 10px", fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace', fontSize: 11, lineHeight: 1.45, whiteSpace: "pre", cursor: "text" }}>
                     <code dangerouslySetInnerHTML={{ __html: html }} />
                   </pre>
                 ) : (
-                <textarea
-                  value={draft}
-                  onChange={(e) => setBuffers((prev) => ({ ...prev, [p.id]: e.target.value }))}
-                  onKeyDown={(e) => {
-                    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
-                      e.preventDefault();
-                      saveEdit(p.id);
-                    } else if (e.key === "Escape") {
-                      e.preventDefault();
-                      cancelEdit(p.id);
-                    }
-                  }}
-                  spellCheck={false}
-                  style={{
-                    boxSizing: "border-box",
-                    width: "100%",
-                    height: "100%",
-                    border: "none",
-                    outline: "none",
-                    resize: "none",
-                    fontFamily:
-                      'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace',
-                    fontSize: 11,
-                    lineHeight: 1.45,
-                    padding: "8px 10px",
-                    // ✅ Ensure readable text in edit mode:
-                    background: "#ffffff",       // or "#0b1220" if you prefer dark
-                    color: "#111827",
-                    caretColor: "#111827",
-                    WebkitTextFillColor: "#111827" as any, // fixes some Safari themes
-                  }}
-                />
-
-                )}
-
-                {!inEdit && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      bottom: 6,
-                      right: 8,
-                      fontSize: 10,
-                      color: "#94a3b8",
-                      userSelect: "none",
-                      pointerEvents: "none",
+                  <textarea
+                    value={draft}
+                    onChange={(e) => setBuffers((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                    onKeyDown={(e) => {
+                      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveEdit(p.id); }
+                      else if (e.key === "Escape") { e.preventDefault(); cancelEdit(p.id); }
                     }}
-                  >
-                    Click to edit
-                  </div>
+                    spellCheck={false}
+                    style={{
+                      boxSizing: "border-box", width: "100%", height: "100%", border: "none", outline: "none", resize: "none",
+                      fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace',
+                      fontSize: 11, lineHeight: 1.45, padding: "8px 10px",
+                      background: "#ffffff", color: "#111827", caretColor: "#111827", WebkitTextFillColor: "#111827" as any,
+                    }}
+                  />
                 )}
               </div>
 
-              <div style={{ color: "#6b7280" }}>
-                <code style={{ fontSize: 11 }}>{p.id}</code>
-              </div>
+              <div style={{ color: "#6b7280" }}><code style={{ fontSize: 11 }}>{p.id}</code></div>
             </div>
           );
         })}
       </div>
 
-      {/* Lines on FIRST PLAN (front-most) */}
-      <svg
-        width="100%"
-        height="100%"
-        style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 9999 }}
-      >
-        {connections.map((c, i) => (
-          <line
-            key={i}
-            x1={c.x1}
-            y1={c.y1}
-            x2={c.x2}
-            y2={c.y2}
-            stroke={c.color}
-            strokeWidth={2}
-            strokeOpacity={0.98}
+      {/* Inline label editor for adhoc nodes */}
+      {labelEdit && (
+        <input
+          autoFocus
+          value={labelEdit.value}
+          onChange={(e) => setLabelEdit(le => le ? { ...le, value: e.target.value } : le)}
+          onKeyDown={(e) => {
+            const cy = cyRef.current; if (!cy) return;
+            if (e.key === "Enter") {
+              cy.getElementById(labelEdit.id).data("label", labelEdit.value);
+              setLabelEdit(null);
+            } else if (e.key === "Escape") setLabelEdit(null);
+          }}
+          onBlur={() => {
+            const cy = cyRef.current; if (!cy) return;
+            cy.getElementById(labelEdit.id).data("label", labelEdit.value);
+            setLabelEdit(null);
+          }}
+          style={{
+            position: "absolute",
+            left: labelEdit.x,
+            top: labelEdit.y,
+            width: Math.max(120, labelEdit.w),
+            zIndex: 10001,
+            padding: "6px 8px",
+            border: "1px solid #e5e7eb",
+            borderRadius: 6,
+            background: "#ffffff",
+            fontSize: 12,
+          }}
+        />
+      )}
+
+      {/* Resize handles for selected adhoc rectangles */}
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 10000 }}>
+        {selectedRects.map((id) => (
+          <div
+            key={id}
+            ref={setHandleRef(id)}
+            onMouseDown={onHandleMouseDown(id)}
+            title="Drag to resize"
+            style={{
+              position: "absolute",
+              width: 12,
+              height: 12,
+              background: "#2563eb",
+              borderRadius: 2,
+              boxShadow: "0 0 0 2px #ffffff",
+              cursor: "nwse-resize",
+              pointerEvents: "auto",
+              transform: "translate(-9999px, -9999px)", // repositioned by schedule()
+            }}
           />
+        ))}
+      </div>
+
+      {/* Quick Palette */}
+      {palette && (
+        <div
+          style={{
+            position: "absolute",
+            left: palette.x,
+            top: palette.y,
+            transform: "translate(8px, 8px)",
+            zIndex: 10000,
+            background: "white",
+            border: "1px solid #e5e7eb",
+            borderRadius: 8,
+            boxShadow: "0 8px 20px rgba(0,0,0,0.12)",
+            padding: 8,
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            pointerEvents: "auto",
+          }}
+        >
+          <button onClick={() => addAt("text")} title="Add text" style={btnStyle}>✍️ Text</button>
+          <button onClick={() => addAt("rect")} title="Add rectangle" style={btnStyle}>⬛ Rectangle</button>
+          <button onClick={() => addAt("node")} title="Add node" style={btnStyle}>🔘 Node</button>
+          <button onClick={() => setPalette(null)} title="Close" style={{ ...btnStyle, marginLeft: 4 }}>×</button>
+        </div>
+      )}
+
+      {/* Lines on top (below palette) */}
+      <svg width="100%" height="100%" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 9999 }}>
+        {connections.map((c, i) => (
+          <line key={i} x1={c.x1} y1={c.y1} x2={c.x2} y2={c.y2} stroke={c.color} strokeWidth={2} strokeOpacity={0.98} />
         ))}
       </svg>
     </div>
   );
 }
+
+const btnStyle: React.CSSProperties = {
+  border: "1px solid #e5e7eb",
+  background: "#ffffff",
+  borderRadius: 6,
+  padding: "4px 8px",
+  lineHeight: 1.2,
+  fontSize: 12,
+  cursor: "pointer",
+};

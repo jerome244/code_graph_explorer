@@ -18,15 +18,11 @@ export default function CytoGraph({
   onNodeSelect?: (id: string) => void;
 }) {
   const cyRef = useRef<any>(null);
-
-  // wrapper/overlay so HTML popups sit above the canvas
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // popups & refs (Map keeps latest set independent of React closures)
   const [popups, setPopups] = useState<Popup[]>([]);
   const popupRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // keep hidden set fresh without re-subscribing listeners
   const hiddenSet = useMemo(() => new Set(hiddenIds || []), [hiddenIds]);
 
   // Create Cytoscape once
@@ -60,7 +56,6 @@ export default function CytoGraph({
         ],
       });
 
-      // Open popup on node tap (allow multiple)
       cy.on("tap", "node", (evt: any) => {
         const id = evt.target.id();
         const label = evt.target.data("label") || id;
@@ -68,18 +63,14 @@ export default function CytoGraph({
         onNodeSelect?.(id);
       });
 
-      // rAF-throttled reposition that uses the REFS (no stale state)
+      // rAF-throttled reposition
       let raf = 0;
       const schedule = () => {
         if (raf) return;
         raf = requestAnimationFrame(() => {
           raf = 0;
-          repositionAll();
+          popupRefs.current.forEach((_el, id) => positionPopup(id));
         });
-      };
-
-      const repositionAll = () => {
-        popupRefs.current.forEach((_el, id) => positionPopup(id));
       };
 
       const positionPopup = (id: string) => {
@@ -88,30 +79,19 @@ export default function CytoGraph({
         const node = cy.getElementById(id);
         if (!node || node.length === 0 || !node.isNode()) return;
 
-        // hide popup if node hidden
         if (node.hidden()) {
           el.style.display = "none";
           return;
         }
         el.style.display = "block";
 
-        const pos = node.renderedPosition(); // pixels in the cy container
-        const x = pos.x + 14;
-        const y = pos.y - 14;
-        el.style.transform = `translate(${x}px, ${y}px)`;
+        const pos = node.renderedPosition(); // px in container coords
+        el.style.transform = `translate(${pos.x + 14}px, ${pos.y - 14}px)`;
       };
 
-      // Listen to pan/zoom/layout/node moves
-      cy.on("viewport", schedule);                // pan/zoom
-      cy.on("layoutstop", schedule);              // after layouts
-      cy.on("position", "node", schedule);        // programmatic position changes
-      cy.on("drag", "node", schedule);            // user drag
-      cy.on("free", "node", schedule);            // drag end
-
+      cy.on("viewport layoutstop", schedule);
+      cy.on("position drag free", "node", schedule);
       window.addEventListener("resize", schedule);
-
-      // expose for debugging if needed:
-      // (window as any)._cy = cy;
 
       cyRef.current = cy;
 
@@ -123,13 +103,11 @@ export default function CytoGraph({
         cy.off("drag", "node", schedule);
         cy.off("free", "node", schedule);
         if (raf) cancelAnimationFrame(raf);
-        // keep cy alive across HMR; destroy if you prefer:
-        // cy.destroy(); cyRef.current = null;
       };
     })();
   }, [onNodeSelect]);
 
-  // Rebuild graph ONLY when ELEMENTS change
+  // Rebuild ONLY when elements change
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
@@ -149,54 +127,51 @@ export default function CytoGraph({
     }
     cy.endBatch();
 
-    // show/hide per hiddenSet
+    // Apply hidden state
     cy.nodes().forEach((n: any) => (hiddenSet.has(n.id()) ? n.hide() : n.show()));
 
-    // Optionally clear popups on new dataset
+    // Optional: clear popups on new data
     setPopups([]);
-    // initial placement
+
+    // Initial placement
     requestAnimationFrame(() => {
-      popupRefs.current.forEach((_el, id) => {
+      popupRefs.current.forEach((el, id) => {
         const node = cy.getElementById(id);
         if (node && node.length) {
           const pos = node.renderedPosition();
-          const el = popupRefs.current.get(id);
-          if (el) el.style.transform = `translate(${pos.x + 14}px, ${pos.y - 14}px)`;
+          el.style.transform = `translate(${pos.x + 14}px, ${pos.y - 14}px)`;
         }
       });
     });
-  }, [elements]); // <- do NOT include hiddenSet here
+  }, [elements]); // not watching hiddenSet here
 
-  // Apply hide/show when hiddenIds change (no rebuild)
+  // Toggle visibility when hiddenIds change (no rebuild)
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
     cy.nodes().forEach((n: any) => (hiddenSet.has(n.id()) ? n.hide() : n.show()));
-    // also reflect in popups
-    popupRefs.current.forEach((_el, id) => {
+    // reflect in popups
+    popupRefs.current.forEach((el, id) => {
       const node = cy.getElementById(id);
-      const el = popupRefs.current.get(id);
       if (!node || !el) return;
       el.style.display = node.hidden() ? "none" : "block";
     });
   }, [hiddenSet]);
 
-  // Keep popups placed when the list changes (open/close)
+  // Reposition when popups list or file set changes
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
     requestAnimationFrame(() => {
-      popupRefs.current.forEach((_el, id) => {
+      popupRefs.current.forEach((el, id) => {
         const node = cy.getElementById(id);
         if (!node || node.length === 0) return;
         const pos = node.renderedPosition();
-        const el = popupRefs.current.get(id);
-        if (el) el.style.transform = `translate(${pos.x + 14}px, ${pos.y - 14}px)`;
+        el.style.transform = `translate(${pos.x + 14}px, ${pos.y - 14}px)`;
       });
     });
   }, [popups, files]);
 
-  // ref setter that registers/unregisters in the map and places immediately
   const setPopupRef = (id: string) => (el: HTMLDivElement | null) => {
     if (!el) {
       popupRefs.current.delete(id);
@@ -220,14 +195,8 @@ export default function CytoGraph({
       {/* Cytoscape canvas */}
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
-      {/* Popup overlay */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          pointerEvents: "none", // graph interactions pass through
-        }}
-      >
+      {/* Popup overlay (children handle pointer events) */}
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
         {popups.map((p) => {
           const code = files[p.id] ?? "";
           return (
@@ -244,15 +213,24 @@ export default function CytoGraph({
                 padding: 8,
                 fontSize: 12,
                 color: "#111827",
-                pointerEvents: "auto", // enable click/scroll in popup
-                width: 360,
-                maxWidth: "40vw",
-                maxHeight: "45vh",
-                display: "block",
+                pointerEvents: "auto",
                 zIndex: 5,
-              }}
+
+                // ✅ resizable + scrollable container
+                resize: "both",
+                overflow: "auto",      // allow scrolling of the whole popup if needed
+                minWidth: 260,
+                minHeight: 140,
+                maxWidth: "80vw",
+                maxHeight: "80vh",
+
+                // Flex layout so code pane fills remaining space
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+              } as React.CSSProperties}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {p.label}
                 </strong>
@@ -273,13 +251,16 @@ export default function CytoGraph({
                 </button>
               </div>
 
+              {/* Scrollable code area that flexes with the popup size */}
               <div
                 style={{
                   border: "1px solid #f3f4f6",
                   borderRadius: 6,
-                  overflow: "auto",
-                  maxHeight: "36vh",
                   background: "#f9fafb",
+                  overflow: "auto", // ✅ vertical & horizontal scrollbars inside
+                  flex: 1,          // take the remaining height
+                  minHeight: 0,     // ✅ critical for scrollable flex children
+                  minWidth: 0,      // ✅ allow horizontal scrolling
                 }}
               >
                 <pre
@@ -290,14 +271,14 @@ export default function CytoGraph({
                       'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace',
                     fontSize: 11,
                     lineHeight: 1.45,
-                    whiteSpace: "pre",
+                    whiteSpace: "pre",  // keep long lines; enable horizontal scroll
                   }}
                 >
                   <code>{code}</code>
                 </pre>
               </div>
 
-              <div style={{ color: "#6b7280", marginTop: 6 }}>
+              <div style={{ color: "#6b7280" }}>
                 <code style={{ fontSize: 11 }}>{p.id}</code>
               </div>
             </div>

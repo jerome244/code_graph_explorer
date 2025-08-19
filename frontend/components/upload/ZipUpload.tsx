@@ -3,7 +3,13 @@
 
 import { useCallback } from "react";
 import type { ElementDefinition } from "cytoscape";
-import { buildTree, extOK, isJunk, normalizePath, type TreeNode } from "@/lib/fileTree";
+import {
+  buildTree,
+  extOK,
+  isJunk,
+  normalizePath,
+  type TreeNode,
+} from "@/lib/fileTree";
 import { treeToCy } from "@/lib/cyto";
 
 export default function ZipUpload({
@@ -18,65 +24,85 @@ export default function ZipUpload({
   }) => void;
   setStatus: (s: string) => void;
 }) {
-  const onFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setStatus("Reading zip…");
+  const onFileChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const input = e.target;
+      const f = input.files?.[0];
+      if (!f) return;
+      setStatus("Reading zip…");
 
-    try {
-      const JSZip = (await import("jszip")).default;
-      const zip = await JSZip.loadAsync(f);
+      try {
+        // Lazy-load only in the browser
+        const { default: JSZip } = await import("jszip");
+        const buf = await f.arrayBuffer();
+        const zip = await JSZip.loadAsync(buf);
 
-      const filePaths: string[] = [];
-      const files: Record<string, string> = {};
-      const jobs: Promise<void>[] = [];
+        const filePaths: string[] = [];
+        const files: Record<string, string> = {};
+        const jobs: Promise<void>[] = [];
 
-      zip.forEach((relativePath: string, entry: any) => {
-        if (entry.dir) return;
-        const p = normalizePath(relativePath);
-        if (isJunk(p) || !extOK(p)) return;
-        filePaths.push(p);
-        const file = zip.file(relativePath);
-        if (file) {
-          jobs.push(
-            file.async("string").then((text: string) => {
-              files[p] = text;
-            })
-          );
+        // Iterate files in archive
+        zip.forEach((relativePath: string, entry: any) => {
+          if (entry.dir) return;
+          const p = normalizePath(relativePath);
+          if (isJunk(p) || !extOK(p)) return;
+
+          filePaths.push(p);
+          const file = zip.file(relativePath);
+          if (file) {
+            jobs.push(
+              file.async("string").then((text: string) => {
+                files[p] = text;
+              })
+            );
+          }
+        });
+
+        await Promise.all(jobs);
+
+        if (filePaths.length === 0) {
+          setStatus("No supported files found (.c .py .html .css .js)");
+          onParsed({
+            tree: { name: "root", path: "", kind: "folder", children: [] },
+            elements: [],
+            count: 0,
+            files: {},
+          });
+          // allow re-uploading the same file
+          input.value = "";
+          return;
         }
-      });
 
-      await Promise.all(jobs);
-
-      if (filePaths.length === 0) {
-        setStatus("No supported files found (.c .py .html .css .js)");
+        const tree = buildTree(filePaths);
+        const elements = treeToCy(tree);
+        onParsed({ tree, elements, count: filePaths.length, files });
+        setStatus(`${filePaths.length} files loaded`);
+      } catch (err: any) {
+        console.error(err);
+        setStatus(`Failed to read zip: ${err?.message || err}`);
         onParsed({
           tree: { name: "root", path: "", kind: "folder", children: [] },
           elements: [],
           count: 0,
           files: {},
         });
-        return;
+      } finally {
+        // allow selecting the same file again later
+        input.value = "";
       }
-
-      const tree = buildTree(filePaths);
-      const elements = treeToCy(tree);
-      onParsed({ tree, elements, count: filePaths.length, files });
-      setStatus(`${filePaths.length} files loaded`);
-    } catch (err: any) {
-      console.error(err);
-      setStatus(`Failed to read zip: ${err?.message || err}`);
-      onParsed({
-        tree: { name: "root", path: "", kind: "folder", children: [] },
-        elements: [],
-        count: 0,
-        files: {},
-      });
-    }
-  }, [onParsed, setStatus]);
+    },
+    [onParsed, setStatus]
+  );
 
   return (
-    <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+    <label
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        cursor: "pointer",
+      }}
+    >
       <input
         type="file"
         accept=".zip,application/zip,application/x-zip-compressed"

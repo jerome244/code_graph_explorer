@@ -4,7 +4,13 @@
 import { useCallback, useState } from "react";
 import type { ElementDefinition } from "cytoscape";
 import { parseRepoInput } from "@/lib/github";
-import { buildTree, extOK, isJunk, normalizePath, type TreeNode } from "@/lib/fileTree";
+import {
+  buildTree,
+  extOK,
+  isJunk,
+  normalizePath,
+  type TreeNode,
+} from "@/lib/fileTree";
 import { treeToCy } from "@/lib/cyto";
 
 export default function GitHubImport({
@@ -19,7 +25,7 @@ export default function GitHubImport({
   }) => void;
   setStatus: (s: string) => void;
 }) {
-  const [input, setInput] = useState("");   // accepts "owner/repo@ref" or URL
+  const [input, setInput] = useState(""); // accepts "owner/repo@ref" or URL
   const [busy, setBusy] = useState(false);
 
   const runImport = useCallback(async () => {
@@ -32,7 +38,7 @@ export default function GitHubImport({
     setStatus("Fetching from GitHub…");
 
     try {
-      // Call our server proxy
+      // Call our server proxy (already in your repo at /api/github/zip)
       const resp = await fetch("/api/github/zip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -48,8 +54,8 @@ export default function GitHubImport({
 
       const buf = await resp.arrayBuffer();
 
-      // Parse zip in the browser (same flow as local ZIP)
-      const JSZip = (await import("jszip")).default;
+      // Lazy-load jszip only in the browser
+      const { default: JSZip } = await import("jszip");
       const zip = await JSZip.loadAsync(buf);
 
       const filePaths: string[] = [];
@@ -63,7 +69,11 @@ export default function GitHubImport({
         filePaths.push(p);
         const file = zip.file(relativePath);
         if (file) {
-          jobs.push(file.async("string").then((text: string) => { files[p] = text; }));
+          jobs.push(
+            file.async("string").then((text: string) => {
+              files[p] = text;
+            })
+          );
         }
       });
 
@@ -84,7 +94,12 @@ export default function GitHubImport({
       const tree = buildTree(filePaths);
       const elements = treeToCy(tree);
       onParsed({ tree, elements, count: filePaths.length, files });
-      setStatus(`${filePaths.length} files loaded from ${spec.owner}/${spec.repo}${spec.ref ? `@${spec.ref}` : ""}`);
+
+      setStatus(
+        `${filePaths.length} files loaded from ${spec.owner}/${spec.repo}${
+          spec.ref ? `@${spec.ref}` : ""
+        }`
+      );
     } catch (e: any) {
       console.error(e);
       setStatus(`Import failed: ${e?.message || e}`);

@@ -11,12 +11,25 @@ type Conn = { x1: number; y1: number; x2: number; y2: number; color: string };
 // helper id
 const makeId = (() => { let c = 0; return (p="custom") => `${p}-${Date.now().toString(36)}-${(c++).toString(36)}`; })();
 
+// darken a hex color (0..1)
+function darkenHex(hex: string, amount = 0.35) {
+  let h = hex.trim();
+  if (h.startsWith("#")) h = h.slice(1);
+  if (h.length === 3) h = h.split("").map(c => c + c).join("");
+  if (h.length !== 6) return hex;
+  const n = parseInt(h, 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const q = Math.max(0, Math.min(1, 1 - amount));
+  r = Math.round(r * q); g = Math.round(g * q); b = Math.round(b * q);
+  return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
 export default function CytoGraph({
   elements,
   hiddenIds = [],
   files = {},
   onNodeSelect,
-  onHideNode,     // right-click hide -> parent updates tree/hiddenIds
+  onHideNode,     // right-click hide for non-rect nodes
   onUpdateFile,   // save edits from popup
 }: {
   elements: ElementDefinition[];
@@ -156,6 +169,10 @@ export default function CytoGraph({
   const isRect = (n: any) => n.hasClass("shape-rect");
   const isText = (n: any) => n.hasClass("shape-text");
 
+  // ── NEW: color panel state for rectangles ─────────────────────────────
+  const [colorPanel, setColorPanel] = useState<{ id: string; x: number; y: number; color: string } | null>(null);
+  const presetColors = ["#fde68a", "#fca5a5", "#93c5fd", "#bbf7d0", "#e9d5ff", "#fef08a", "#fecaca", "#a7f3d0", "#c7d2fe"];
+
   // Cytoscape init
   useEffect(() => {
     (async () => {
@@ -202,7 +219,7 @@ export default function CytoGraph({
           // Selected node border
           { selector: "node:selected", style: { "border-width": 2, "border-color": "#2563eb" } },
 
-          // ── Custom shapes (behind) ───────────────────────────────────────────
+          // ── Custom shapes (behind) ─────────────────────────────────────
           {
             selector: "node.adhoc.shape-rect",
             style: {
@@ -211,8 +228,8 @@ export default function CytoGraph({
               shape: "round-rectangle",
               width: 160,
               height: 100,
-              "background-color": "#fde68a",
-              "border-color": "#f59e0b",
+              "background-color": "data(bg)",   // ← from data
+              "border-color": "data(border)",   // ← from data
               "border-width": 1,
               label: "data(label)",
               "font-size": 12,
@@ -253,9 +270,10 @@ export default function CytoGraph({
         if (!n || n.hidden()) return;
 
         setPalette(null);
+        setColorPanel(null);
 
         if (isAdhoc(n)) {
-          // just let selection happen; no file popup for adhoc
+          // just select adhoc nodes; no code popup
           return;
         }
 
@@ -285,14 +303,26 @@ export default function CytoGraph({
         });
       });
 
-      // Right click: hide node
+      // Right click:
       cy.on("cxttap", "node", (evt: any) => {
-        const id = evt.target.id();
+        const n = evt.target;
+        const id = n.id();
+
+        // ── Rectangles: open color panel instead of hide/delete ──
+        if (isAdhoc(n) && isRect(n)) {
+          const rp = evt.renderedPosition;
+          const current = n.data("bg") || n.style("background-color") || "#fde68a";
+          setColorPanel({ id, x: rp.x, y: rp.y, color: current });
+          return; // do not hide
+        }
+
+        // Others keep old behavior (hide)
         onHideNode?.(id);
         setPalette(null);
+        setColorPanel(null);
         setPopups((prev) => prev.filter((p) => p.id !== id));
-        setEditing((s) => { const n = new Set(s); n.delete(id); return n; });
-        setMutedPopups((s) => { const n = new Set(s); n.delete(id); return n; });
+        setEditing((s) => { const S = new Set(s); S.delete(id); return S; });
+        setMutedPopups((s) => { const S = new Set(s); S.delete(id); return S; });
         scheduleConnections();
       });
 
@@ -302,6 +332,7 @@ export default function CytoGraph({
         const rp = evt.renderedPosition; // px in container
         const mp = evt.position;         // model coords
         setPalette({ x: rp.x, y: rp.y, model: { x: mp.x, y: mp.y } });
+        setColorPanel(null);
       });
 
       // selection change -> update selected rects (for resize handle)
@@ -310,7 +341,7 @@ export default function CytoGraph({
         setSelectedRects(sel);
       });
 
-      // rAF-throttled reposition + lines + handles + label editor
+      // rAF-throttled reposition + lines + handles + label editor + color panel follow
       let raf = 0;
       const schedule = () => {
         if (raf) return;
@@ -329,7 +360,7 @@ export default function CytoGraph({
             const node = cy.getElementById(id);
             if (!el || !node || !node.length) return;
             const bb = node.renderedBoundingBox();
-            el.style.transform = `translate(${bb.x2 - 6}px, ${bb.y2 - 6}px)`; // 12x12 handle
+            el.style.transform = `translate(${bb.x2 - 6}px, ${bb.y2 - 6}px)`;
           });
           // label editor follow node
           if (labelEdit) {
@@ -337,6 +368,17 @@ export default function CytoGraph({
             if (n && n.length) {
               const bb = n.renderedBoundingBox();
               setLabelEdit(prev => prev ? { ...prev, x: bb.x1, y: bb.y1 - 28, w: Math.max(120, bb.w) } : prev);
+            }
+          }
+          // color panel follow node (anchor top-right)
+          if (colorPanel) {
+            const n = cy.getElementById(colorPanel.id);
+            if (n && n.length) {
+              const bb = n.renderedBoundingBox();
+              const nx = bb.x2 + 8, ny = bb.y1;
+              if (Math.abs(nx - colorPanel.x) > 0.5 || Math.abs(ny - colorPanel.y) > 0.5) {
+                setColorPanel(prev => (prev ? { ...prev, x: nx, y: ny } : prev));
+              }
             }
           }
           scheduleConnections();
@@ -358,11 +400,13 @@ export default function CytoGraph({
             sel.remove();
             setSelectedRects([]);
             if (labelEdit && !cy.getElementById(labelEdit.id).length) setLabelEdit(null);
+            if (colorPanel && !cy.getElementById(colorPanel.id).length) setColorPanel(null);
             setPalette(null);
           }
         } else if (ev.key === "Escape") {
           setPalette(null);
           setLabelEdit(null);
+          setColorPanel(null);
         }
       };
       window.addEventListener("keydown", onKey);
@@ -383,7 +427,7 @@ export default function CytoGraph({
         if (raf) cancelAnimationFrame(raf);
       };
     })();
-  }, [onNodeSelect, onHideNode, labelEdit?.id]);
+  }, [onNodeSelect, onHideNode, labelEdit?.id, colorPanel?.id]);
 
   // rebuild only when elements change
   useEffect(() => {
@@ -430,8 +474,13 @@ export default function CytoGraph({
     const cy = cyRef.current; if (!cy || !palette) return;
     const id = makeId(kind);
     const pos = palette.model;
-    const data: any = { id, label: kind === "text" ? "Text" : kind === "rect" ? "Rectangle" : "New node" };
-    const classes = `adhoc${kind === "rect" ? " shape-rect" : kind === "text" ? " shape-text" : ""}`;
+    const isRect = kind === "rect";
+    const data: any = {
+      id,
+      label: kind === "text" ? "Text" : isRect ? "Rectangle" : "New node",
+      ...(isRect ? { bg: "#fde68a", border: "#f59e0b" } : {}),
+    };
+    const classes = `adhoc${isRect ? " shape-rect" : kind === "text" ? " shape-text" : ""}`;
     cy.add({ group: "nodes", data, position: pos, classes });
     setPalette(null);
   };
@@ -456,11 +505,9 @@ export default function CytoGraph({
       const dy = ev.clientY - r.startY;
       const newRW = Math.max(40, r.startRW + dx);
       const newRH = Math.max(30, r.startRH + dy);
-      // convert rendered px -> style px (divide by zoom)
       const w = newRW / r.startZoom;
       const h = newRH / r.startZoom;
       node.style({ width: w, height: h });
-      // move handle immediately
       const el = handleRefs.current.get(id);
       if (el) {
         const bb = node.renderedBoundingBox();
@@ -476,7 +523,16 @@ export default function CytoGraph({
     window.addEventListener("mouseup", onUp);
   };
 
-  // UI
+  // update rectangle color
+  const applyRectColor = (id: string, color: string) => {
+    const cy = cyRef.current; if (!cy) return;
+    const n = cy.getElementById(id);
+    if (!n || !n.length) return;
+    n.data("bg", color);
+    n.data("border", darkenHex(color, 0.35));
+    setColorPanel(prev => (prev ? { ...prev, color } : prev));
+  };
+
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       {/* Cytoscape canvas */}
@@ -674,7 +730,52 @@ export default function CytoGraph({
         </div>
       )}
 
-      {/* Lines on top (below palette) */}
+      {/* ── Color Panel for rectangles ── */}
+      {colorPanel && (
+        <div
+          style={{
+            position: "absolute",
+            left: colorPanel.x,
+            top: colorPanel.y,
+            transform: "translate(8px, -8px)",
+            zIndex: 10002,
+            background: "#ffffff",
+            border: "1px solid #e5e7eb",
+            borderRadius: 8,
+            boxShadow: "0 8px 20px rgba(0,0,0,0.12)",
+            padding: 10,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            pointerEvents: "auto",
+          }}
+        >
+          {presetColors.map((c) => (
+            <button
+              key={c}
+              onClick={() => applyRectColor(colorPanel.id, c)}
+              title={c}
+              style={{
+                width: 18,
+                height: 18,
+                borderRadius: 4,
+                border: "1px solid #e5e7eb",
+                background: c,
+                cursor: "pointer",
+              }}
+            />
+          ))}
+          <input
+            type="color"
+            value={colorPanel.color}
+            onChange={(e) => applyRectColor(colorPanel.id, e.target.value)}
+            style={{ width: 28, height: 28, border: "none", padding: 0, background: "transparent", cursor: "pointer" }}
+          />
+          <button onClick={() => setColorPanel(null)} title="Close" style={{ ...btnStyle, padding: "2px 6px" }}>×</button>
+        </div>
+      )}
+
+      {/* Lines on top (below color panel & palette) */}
       <svg width="100%" height="100%" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 9999 }}>
         {connections.map((c, i) => (
           <line key={i} x1={c.x1} y1={c.y1} x2={c.x2} y2={c.y2} stroke={c.color} strokeWidth={2} strokeOpacity={0.98} />

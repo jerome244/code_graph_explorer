@@ -15,9 +15,6 @@ export default function CytoGraph({
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    let cy: any;
-    let disposed = false;
-
     (async () => {
       if (!containerRef.current) return;
 
@@ -41,17 +38,9 @@ export default function CytoGraph({
               },
             },
             {
-              selector: ":parent",
-              style: {
-                "background-opacity": 0.08,
-                "border-color": "#9ca3af",
-                "border-width": 1,
-                "text-valign": "top",
-                "text-halign": "left",
-                padding: 12,
-              },
+              selector: "node:selected",
+              style: { "border-width": 2, "border-color": "#2563eb" },
             },
-            { selector: "node:selected", style: { "border-width": 2, "border-color": "#2563eb" } },
           ],
         });
 
@@ -61,25 +50,21 @@ export default function CytoGraph({
         });
       }
 
-      cy = cyRef.current;
+      const cy = cyRef.current;
+
       // Update elements
       cy.elements().remove();
-      cy.add(elements);
-      const layout = cy.layout({
-        name: "cose",
-        nodeDimensionsIncludeLabels: true,
-        padding: 20,
-      });
-      layout.run();
-
-      // Fit once elements are placed
-      cy.fit(undefined, 30);
+      if (elements?.length) {
+        cy.add(elements);
+        const layout = cy.layout({
+          name: "cose",
+          nodeDimensionsIncludeLabels: true,
+          padding: 20,
+        });
+        layout.run();
+        cy.fit(undefined, 30);
+      }
     })();
-
-    return () => {
-      if (disposed) return;
-      // keep cy instance across renders; do not destroy
-    };
   }, [elements, onNodeSelect]);
 
   return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;

@@ -3,28 +3,31 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ElementDefinition } from "cytoscape";
 import type { TreeNode } from "@/lib/fileTree";
 import TreeView from "@/components/file-tree/TreeView";
 import ZipUpload from "@/components/upload/ZipUpload";
 
-// Dynamically import the heavy Cytoscape renderer (no SSR)
 const CytoGraph = dynamic(() => import("@/components/graph/CytoGraph"), { ssr: false });
 
 export default function GraphPage() {
   const [tree, setTree] = useState<TreeNode>({ name: "root", path: "", kind: "folder", children: [] });
   const [elements, setElements] = useState<ElementDefinition[]>([]);
   const [status, setStatus] = useState<string>("No file loaded");
+  const [hiddenMap, setHiddenMap] = useState<Record<string, boolean>>({});
+
+  const hiddenIds = useMemo(() => Object.keys(hiddenMap).filter((k) => hiddenMap[k]), [hiddenMap]);
 
   const onParsed = useCallback((res: { tree: TreeNode; elements: ElementDefinition[]; count: number }) => {
     setTree(res.tree);
     setElements(res.elements);
+    setHiddenMap({}); // reset hidden state on new upload
+    setStatus(`${res.count} files loaded`);
   }, []);
 
-  const handleNodeSelect = useCallback((id: string) => {
-    // You can sync selection back to the tree here (e.g., scroll to file)
-    // console.log("Selected node:", id);
+  const onToggleFile = useCallback((path: string) => {
+    setHiddenMap((prev) => ({ ...prev, [path]: !prev[path] }));
   }, []);
 
   return (
@@ -38,19 +41,22 @@ export default function GraphPage() {
           </Link>
         </div>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>{status}</div>
-        <TreeView root={tree} />
+        <TreeView root={tree} hiddenMap={hiddenMap} onToggleFile={onToggleFile} />
       </aside>
 
       {/* Main area */}
       <section style={{ display: "grid", gridTemplateRows: "auto 1fr" }}>
-        {/* Top bar with Upload */}
         <div style={{ padding: 12, borderBottom: "1px solid #e5e7eb", display: "flex", gap: 12, alignItems: "center" }}>
           <ZipUpload onParsed={onParsed} setStatus={setStatus} />
           <span style={{ fontSize: 12, color: "#6b7280" }}>.c .py .html .css .js</span>
+          {hiddenIds.length > 0 && (
+            <span style={{ marginLeft: "auto", fontSize: 12, color: "#6b7280" }}>
+              Hidden: {hiddenIds.length}
+            </span>
+          )}
         </div>
 
-        {/* Cytoscape canvas */}
-        <CytoGraph elements={elements} onNodeSelect={handleNodeSelect} />
+        <CytoGraph elements={elements} hiddenIds={hiddenIds} />
       </section>
     </main>
   );

@@ -43,7 +43,7 @@ export default async function HomePage() {
           </Link>
 
           {me ? (
-            <form action="/api/logout" method="post">
+            <form action="/api/users/logout" method="post">
               <button type="submit">Logout</button>
             </form>
           ) : (

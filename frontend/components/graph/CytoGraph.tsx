@@ -32,14 +32,14 @@ export default function CytoGraph({
   onHideNode,     // right-click hide for non-rect nodes
   onUpdateFile,   // save edits from popup
 }: {
-  elements: ElementDefinition[] | { elements: ElementDefinition[] } | any; // ← robust
+  elements: ElementDefinition[] | { elements: ElementDefinition[] } | any; // robust
   hiddenIds?: string[];
   files?: Record<string, string>;
   onNodeSelect?: (id: string) => void;
   onHideNode?: (id: string) => void;
   onUpdateFile?: (path: string, content: string) => void;
 }) {
-  // ✅ normalize to always be an array for the whole component
+  // normalize to always be an array
   const els: ElementDefinition[] = Array.isArray(elements)
     ? elements
     : (elements as any)?.elements ?? [];
@@ -73,13 +73,13 @@ export default function CytoGraph({
   const saveEdit = (id: string) => {
     const content = buffers[id];
     if (typeof content === "string") onUpdateFile?.(id, content);
-    cancelEdit(id);
+    cancelEdit(id); // keep this if you want to exit edit mode on save
   };
 
   // function names for highlight + lines
   const fnNames = useMemo(() => {
     const names = new Set<string>();
-    for (const el of els) {                     // ← use normalized els
+    for (const el of els) {
       if ((el as any).group !== "edges") continue;
       const fn = (el as any).data?.fn;
       if (typeof fn === "string" && fn) names.add(fn);
@@ -178,7 +178,7 @@ export default function CytoGraph({
   const [colorPanel, setColorPanel] = useState<{ id: string; x: number; y: number; color: string } | null>(null);
   const presetColors = ["#fde68a", "#fca5a5", "#93c5fd", "#bbf7d0", "#e9d5ff", "#fef08a", "#fecaca", "#a7f3d0", "#c7d2fe"];
 
-  // Cytoscape init
+  // ── Cytoscape init ─────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       if (!containerRef.current || cyRef.current) return;
@@ -224,12 +224,12 @@ export default function CytoGraph({
           // Selected node border
           { selector: "node:selected", style: { "border-width": 2, "border-color": "#2563eb" } },
 
-          // ── Custom shapes (behind) ─────────────────────────────────────
+          // Custom shapes (behind)
           {
             selector: "node.adhoc.shape-rect",
             style: {
               "z-index-compare": "manual",
-              "z-index": 0, // behind everything else
+              "z-index": 0,
               shape: "round-rectangle",
               width: 160,
               height: 100,
@@ -249,7 +249,7 @@ export default function CytoGraph({
             selector: "node.adhoc.shape-text",
             style: {
               "z-index-compare": "manual",
-              "z-index": 5, // between rects and file nodes
+              "z-index": 5,
               shape: "round-rectangle",
               width: 220,
               height: 44,
@@ -278,8 +278,7 @@ export default function CytoGraph({
         setColorPanel(null);
 
         if (isAdhoc(n)) {
-          // just select adhoc nodes; no code popup
-          return;
+          return; // just select adhoc nodes; no code popup
         }
 
         setPopups((prev) => {
@@ -346,13 +345,12 @@ export default function CytoGraph({
         setSelectedRects(sel);
       });
 
-      // rAF-throttled reposition + lines + handles + label editor + color panel follow
+      // rAF-throttled reposition, handles, editors, panel follow, and lines overlay
       let raf = 0;
       const schedule = () => {
         if (raf) return;
         raf = requestAnimationFrame(() => {
           raf = 0;
-          // popups near nodes
           popupRefs.current.forEach((el, id) => {
             const node = cy.getElementById(id);
             if (el && node && node.length) {
@@ -360,14 +358,12 @@ export default function CytoGraph({
               el.style.transform = `translate(${pos.x + 14}px, ${pos.y - 14}px)`;
             }
           });
-          // resize handles at bottom-right of rects
           handleRefs.current.forEach((el, id) => {
             const node = cy.getElementById(id);
             if (!el || !node || !node.length) return;
             const bb = node.renderedBoundingBox();
             el.style.transform = `translate(${bb.x2 - 6}px, ${bb.y2 - 6}px)`;
           });
-          // label editor follow node
           if (labelEdit) {
             const n = cy.getElementById(labelEdit.id);
             if (n && n.length) {
@@ -375,7 +371,6 @@ export default function CytoGraph({
               setLabelEdit(prev => prev ? { ...prev, x: bb.x1, y: bb.y1 - 28, w: Math.max(120, bb.w) } : prev);
             }
           }
-          // color panel follow node (anchor top-right)
           if (colorPanel) {
             const n = cy.getElementById(colorPanel.id);
             if (n && n.length) {
@@ -434,17 +429,71 @@ export default function CytoGraph({
     })();
   }, [onNodeSelect, onHideNode, labelEdit?.id, colorPanel?.id]);
 
-  // rebuild only when els change (normalized)
+  // ── Preserve positions when els change; keep adhoc nodes; layout only on real change ──
+  const prevNodeIdsRef = useRef<Set<string>>(new Set());
+  const didInitialLayoutRef = useRef(false);
+
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
-    cy.startBatch(); cy.elements().remove();
-    if (els.length) {
-      cy.add(els);
-      const layout = cy.layout({ name: "cose", nodeDimensionsIncludeLabels: true, padding: 20 });
+
+    // Build new node id set from els
+    const newNodeIds = new Set(
+      (els || [])
+        .filter((e: any) => (e.group ?? e?.data?.group ?? "nodes") === "nodes")
+        .map((e: any) => e?.data?.id)
+        .filter(Boolean)
+    );
+    const prevNodeIds = prevNodeIdsRef.current;
+    const hadPrev = prevNodeIds.size > 0;
+    const sameNodeSet =
+      newNodeIds.size === prevNodeIds.size &&
+      Array.from(newNodeIds).every((id) => prevNodeIds.has(id as string));
+
+    // Snapshot positions of existing non-adhoc nodes
+    const pos = new Map<string, { x: number; y: number }>();
+    cy.nodes(":not(.adhoc)").forEach((n: any) => pos.set(n.id(), n.position()));
+
+    // Optionally capture current viewport (pan/zoom) — not strictly required
+    const pan = cy.pan();
+    const zoom = cy.zoom();
+
+    cy.startBatch();
+
+    // Remove only non-adhoc elements, keep user-added shapes
+    cy.elements(":not(.adhoc)").remove();
+
+    // Re-add new elements
+    if (els.length) cy.add(els);
+
+    if (sameNodeSet && hadPrev) {
+      // Restore positions; no layout; keep viewport stable
+      cy.nodes(":not(.adhoc)").forEach((n: any) => {
+        const p = pos.get(n.id());
+        if (p) n.position(p);
+      });
+      cy.pan(pan);
+      cy.zoom(zoom);
+    } else {
+      // First load or node set actually changed → run layout
+      const layout = cy.layout({
+        name: "cose",
+        nodeDimensionsIncludeLabels: true,
+        padding: 20,
+      });
       layout.run();
-      cy.fit(undefined, 80);
+
+      // Only fit on the very first layout
+      if (!didInitialLayoutRef.current) {
+        cy.fit(undefined, 80);
+        didInitialLayoutRef.current = true;
+      }
     }
+
     cy.endBatch();
+
+    // Update previous ids
+    prevNodeIdsRef.current = newNodeIds;
+
     scheduleConnections();
   }, [els]);
 
@@ -548,7 +597,6 @@ export default function CytoGraph({
         {popups.map((p) => {
           const raw = files[p.id] ?? "";
           const inEdit = isEditing(p.id);
-          const draft = buffers[p.id] ?? raw;
           const html = highlightSource(raw, fnNames);
           const muted = mutedPopups.has(p.id);
           return (
@@ -618,31 +666,141 @@ export default function CytoGraph({
                 <button onClick={() => closePopup(p.id)} title="Close" style={{ marginLeft: "auto", border: "none", background: "transparent", cursor: "pointer", padding: 0, lineHeight: 1, fontSize: 14 }}>×</button>
               </div>
 
+              {/* Scrollable code area with a line-number gutter that fills the popup */}
               <div
                 className="popup-code"
-                style={{ border: "1px solid #f3f4f6", borderRadius: 6, background: inEdit ? "#ffffff" : "#f9fafb", overflow: "auto", flex: 1, minHeight: 0, minWidth: 0, position: "relative" }}
-                onClick={() => { if (!inEdit) startEdit(p.id, raw); }}
+                style={{
+                  border: "1px solid #f3f4f6",
+                  borderRadius: 6,
+                  background: inEdit ? "#ffffff" : "#f9fafb",
+                  overflow: "auto",   // single scroll container (gutter + code)
+                  flex: 1,
+                  minHeight: 0,
+                  minWidth: 0,
+                  position: "relative",
+                }}
+                onClick={() => {
+                  if (!inEdit) startEdit(p.id, raw); // click-to-edit
+                }}
               >
-                {!inEdit ? (
-                  <pre style={{ margin: 0, padding: "8px 10px", fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace', fontSize: 11, lineHeight: 1.45, whiteSpace: "pre", cursor: "text" }}>
-                    <code dangerouslySetInnerHTML={{ __html: html }} />
-                  </pre>
-                ) : (
-                  <textarea
-                    value={draft}
-                    onChange={(e) => setBuffers((prev) => ({ ...prev, [p.id]: e.target.value }))}
-                    onKeyDown={(e) => {
-                      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveEdit(p.id); }
-                      else if (e.key === "Escape") { e.preventDefault(); cancelEdit(p.id); }
-                    }}
-                    spellCheck={false}
+                {(() => {
+                  const codeFont =
+                    'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace';
+                  const lineHeight = 1.45;   // keep consistent in both modes
+                  const fontSize = 11;
+                  const gutterWidth = 44;
+                  const content = inEdit ? (buffers[p.id] ?? raw) : raw;
+                  const lineCount = Math.max(1, content.split("\n").length);
+
+                  return (
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: `${gutterWidth}px 1fr`,
+                        alignItems: "stretch",
+                        height: "100%",
+                        fontFamily: codeFont,
+                        fontSize,
+                        lineHeight,
+                      }}
+                    >
+                      {/* Gutter */}
+                      <div
+                        aria-hidden
+                        style={{
+                          background: inEdit ? "#fafafa" : "#f3f4f6",
+                          borderRight: "1px solid #e5e7eb",
+                          color: "#9ca3af",
+                          textAlign: "right",
+                          padding: "8px 6px",
+                          userSelect: "none",
+                          whiteSpace: "pre",
+                          height: "100%",
+                        }}
+                      >
+                        {Array.from({ length: lineCount }, (_, i) => (
+                          <div key={i} style={{ height: `${lineHeight}em`, lineHeight: `${lineHeight}em` }}>
+                            {i + 1}
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Code column */}
+                      <div
+                        style={{
+                          padding: "8px 10px",
+                          minWidth: 0,
+                          height: "100%",
+                          display: "flex",
+                        }}
+                      >
+                        {!inEdit ? (
+                          <pre
+                            style={{
+                              margin: 0,
+                              fontFamily: codeFont,
+                              fontSize,
+                              lineHeight,
+                              whiteSpace: "pre",
+                              minHeight: "100%",
+                              width: "100%",
+                            }}
+                          >
+                            <code dangerouslySetInnerHTML={{ __html: html }} />
+                          </pre>
+                        ) : (
+                          <textarea
+                            value={buffers[p.id] ?? raw}
+                            onChange={(e) => setBuffers((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                            onKeyDown={(e) => {
+                              if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+                                e.preventDefault();
+                                saveEdit(p.id);
+                              } else if (e.key === "Escape") {
+                                e.preventDefault();
+                                cancelEdit(p.id);
+                              }
+                            }}
+                            spellCheck={false}
+                            wrap="off"
+                            style={{
+                              boxSizing: "border-box",
+                              width: "100%",
+                              height: "100%",
+                              border: "none",
+                              outline: "none",
+                              resize: "none",
+                              fontFamily: codeFont,
+                              fontSize,
+                              lineHeight,
+                              whiteSpace: "pre",
+                              overflow: "hidden",   // parent scrolls
+                              background: "#ffffff",
+                              color: "#111827",
+                              caretColor: "#111827",
+                              WebkitTextFillColor: "#111827" as any,
+                            }}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {!inEdit && (
+                  <div
                     style={{
-                      boxSizing: "border-box", width: "100%", height: "100%", border: "none", outline: "none", resize: "none",
-                      fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace',
-                      fontSize: 11, lineHeight: 1.45, padding: "8px 10px",
-                      background: "#ffffff", color: "#111827", caretColor: "#111827", WebkitTextFillColor: "#111827" as any,
+                      position: "absolute",
+                      bottom: 6,
+                      right: 8,
+                      fontSize: 10,
+                      color: "#94a3b8",
+                      userSelect: "none",
+                      pointerEvents: "none",
                     }}
-                  />
+                  >
+                    Click to edit
+                  </div>
                 )}
               </div>
 

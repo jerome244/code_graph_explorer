@@ -267,7 +267,7 @@ export default function CytoGraph({
         ],
       });
 
-      // tap node: code popup only for file-nodes (not adhoc)
+      // tap node: open popup for file nodes and plain adhoc nodes (not for rect/text)
       cy.on("tap", "node", (evt: any) => {
         const n = evt.target;
         const id = n.id();
@@ -277,10 +277,12 @@ export default function CytoGraph({
         setPalette(null);
         setColorPanel(null);
 
-        if (isAdhoc(n)) {
-          return; // just select adhoc nodes; no code popup
+        // 🔸 Keep rectangles and text as selection-only (no popup)
+        if (isAdhoc(n) && (isRect(n) || isText(n))) {
+          return;
         }
 
+        // ✅ File nodes and plain adhoc "node" → toggle popup
         setPopups((prev) => {
           const open = prev.some((p) => p.id === id);
           if (open) {
@@ -292,6 +294,7 @@ export default function CytoGraph({
           return [...prev, { id, label }];
         });
       });
+
 
       // double-click node: inline label editor for adhoc nodes
       cy.on("dbltap", "node", (evt: any) => {

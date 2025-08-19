@@ -245,12 +245,12 @@ export default function GraphWithPopovers({ slug, nodes, edges }: Props) {
   const hasData = nodes.length + edges.length > 0;
 
   return (
-    <div className="relative w-full h-[75vh] border rounded-lg overflow-hidden">
+      <div className="relative w-full h-[75vh] min-h-0 border rounded-lg overflow-hidden">
       {/* cytoscape canvas container */}
       <div
         ref={containerRef}
-        className="absolute inset-0"
-        style={{ minHeight: 320, minWidth: 320 }} // safety: ensure non-zero size
+        className="w-full h-full"
+        style={{ width: "100%", height: "100%" }} // be explicit for Cytoscape
       />
 
       {/* empty-state helper */}

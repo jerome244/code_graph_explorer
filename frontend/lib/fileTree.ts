@@ -6,7 +6,7 @@ export type TreeNode = {
   children?: TreeNode[];
 };
 
-export const ALLOWED = new Set(["c", "py", "html", "css", "js"]);
+export const ALLOWED = new Set(["c", "py", "html", "css", "js", "jsx", "ts", "tsx"]);
 
 export function normalizePath(p: string) {
   // strip leading slashes, convert backslashes to forward slashes

@@ -61,7 +61,7 @@ export default function ZipUpload({
         await Promise.all(jobs);
 
         if (filePaths.length === 0) {
-          setStatus("No supported files found (.c .py .html .css .js)");
+          setStatus("No supported files found (.c .py .html .css .js  — tip: add .ts/.tsx in lib/fileTree.ts)");
           onParsed({
             tree: { name: "root", path: "", kind: "folder", children: [] },
             elements: [],
@@ -74,7 +74,10 @@ export default function ZipUpload({
         }
 
         const tree = buildTree(filePaths);
-        const elements = treeToCy(tree);
+
+        // ⬇️ New: pass file contents so cy builder can parse functions + calls
+        const { elements } = treeToCy(tree, files);
+
         onParsed({ tree, elements, count: filePaths.length, files });
         setStatus(`${filePaths.length} files loaded`);
       } catch (err: any) {

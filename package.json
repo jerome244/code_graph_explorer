@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "cytoscape": "^3.33.1",
-    "jszip": "^3.10.1"
-  }
-}

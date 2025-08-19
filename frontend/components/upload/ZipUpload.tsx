@@ -10,7 +10,12 @@ export default function ZipUpload({
   onParsed,
   setStatus,
 }: {
-  onParsed: (res: { tree: TreeNode; elements: ElementDefinition[]; count: number }) => void;
+  onParsed: (res: {
+    tree: TreeNode;
+    elements: ElementDefinition[];
+    count: number;
+    files: Record<string, string>;
+  }) => void;
   setStatus: (s: string) => void;
 }) {
   const onFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -23,12 +28,25 @@ export default function ZipUpload({
       const zip = await JSZip.loadAsync(f);
 
       const filePaths: string[] = [];
+      const files: Record<string, string> = {};
+      const jobs: Promise<void>[] = [];
+
       zip.forEach((relativePath: string, entry: any) => {
-        if (!entry.dir) {
-          const p = normalizePath(relativePath);
-          if (!isJunk(p) && extOK(p)) filePaths.push(p);
+        if (entry.dir) return;
+        const p = normalizePath(relativePath);
+        if (isJunk(p) || !extOK(p)) return;
+        filePaths.push(p);
+        const file = zip.file(relativePath);
+        if (file) {
+          jobs.push(
+            file.async("string").then((text: string) => {
+              files[p] = text;
+            })
+          );
         }
       });
+
+      await Promise.all(jobs);
 
       if (filePaths.length === 0) {
         setStatus("No supported files found (.c .py .html .css .js)");
@@ -36,17 +54,24 @@ export default function ZipUpload({
           tree: { name: "root", path: "", kind: "folder", children: [] },
           elements: [],
           count: 0,
+          files: {},
         });
         return;
       }
 
       const tree = buildTree(filePaths);
       const elements = treeToCy(tree);
-      onParsed({ tree, elements, count: filePaths.length });
+      onParsed({ tree, elements, count: filePaths.length, files });
       setStatus(`${filePaths.length} files loaded`);
     } catch (err: any) {
       console.error(err);
       setStatus(`Failed to read zip: ${err?.message || err}`);
+      onParsed({
+        tree: { name: "root", path: "", kind: "folder", children: [] },
+        elements: [],
+        count: 0,
+        files: {},
+      });
     }
   }, [onParsed, setStatus]);
 

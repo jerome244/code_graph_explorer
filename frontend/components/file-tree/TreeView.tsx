@@ -1,4 +1,3 @@
-// components/file-tree/TreeView.tsx
 "use client";
 
 import { useState } from "react";
@@ -43,7 +42,7 @@ function TreeItem({
   const isFolder = node.kind === "folder";
   const isHidden = node.kind === "file" && !!hiddenMap[node.path];
 
-  const baseStyle: React.CSSProperties = {
+  const style: React.CSSProperties = {
     cursor: isFolder ? "pointer" : "default",
     padding: "4px 6px",
     borderRadius: 6,
@@ -62,7 +61,7 @@ function TreeItem({
           if (isFolder) setOpen((v) => !v);
           else onToggleFile?.(node.path);
         }}
-        style={baseStyle}
+        style={style}
         title={node.path}
       >
         {icon} {node.name}

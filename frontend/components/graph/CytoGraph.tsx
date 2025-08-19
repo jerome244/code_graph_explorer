@@ -25,16 +25,23 @@ export default function CytoGraph({
   const [popups, setPopups] = useState<Popup[]>([]);
   const popupRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // Popups that should NOT contribute anchors for cross-popup lines
+  // ✅ Per-popup mute state: when a popup is muted, lines involving that popup are hidden.
   const [mutedPopups, setMutedPopups] = useState<Set<string>>(new Set());
   const mutedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     mutedRef.current = mutedPopups;
   }, [mutedPopups]);
 
-  const hiddenSet = useMemo(() => new Set(hiddenIds || []), [hiddenIds]);
+  // Allow hiding nodes via right-click
+  const [hiddenLocal, setHiddenLocal] = useState<Set<string>>(new Set());
+  const hiddenPropSet = useMemo(() => new Set(hiddenIds || []), [hiddenIds]);
+  const hiddenUnion = useMemo(() => {
+    const s = new Set<string>(hiddenPropSet);
+    hiddenLocal.forEach((id) => s.add(id));
+    return s;
+  }, [hiddenPropSet, hiddenLocal]);
 
-  // Function names come from colored edges (matches)
+  // Function names used for code highlighting (derived from edges carrying data.fn)
   const fnNames = useMemo(() => {
     const names = new Set<string>();
     for (const el of elements || []) {
@@ -45,7 +52,7 @@ export default function CytoGraph({
     return Array.from(names);
   }, [elements]);
 
-  // --- Cross-popup connection overlay (front-most) ---
+  // -------- Cross-popup connection overlay (front-most) --------
   const [connections, setConnections] = useState<Conn[]>([]);
   const rafConn = useRef<number>(0);
 
@@ -62,17 +69,16 @@ export default function CytoGraph({
     if (!container) return;
     const crect = container.getBoundingClientRect();
 
+    // Collect the first visible hit per (popup, fn) — but skip muted popups
     type Anchor = { x: number; y: number; color: string; popupId: string; fn: string };
     const perFn: Record<string, Anchor[]> = {};
 
     popupRefs.current.forEach((popupEl, popupId) => {
-      // Skip popups muted for lines
-      if (mutedRef.current.has(popupId)) return;
+      if (mutedRef.current.has(popupId)) return; // ⬅️ skip this popup entirely
 
       const hits = Array.from(popupEl.querySelectorAll<HTMLElement>(".fn-hit[data-fn]"));
       if (!hits.length) return;
 
-      // For each fn, pick the first visible occurrence
       const firstPerFn: Record<string, HTMLElement> = {};
       for (const el of hits) {
         const fn = el.dataset.fn!;
@@ -88,6 +94,7 @@ export default function CytoGraph({
       }
     });
 
+    // Build lines only among *non-muted* popups
     const conns: Conn[] = [];
     Object.values(perFn).forEach((anchors) => {
       if (anchors.length < 2) return;
@@ -131,10 +138,21 @@ export default function CytoGraph({
       ro.disconnect();
     });
 
+    // initial placement
     scheduleConnections();
+
+    // also snap to node if cy exists
+    const cy = cyRef.current;
+    if (cy) {
+      const node = cy.getElementById(id);
+      if (node && node.length) {
+        const pos = node.renderedPosition();
+        el.style.transform = `translate(${pos.x + 14}px, ${pos.y - 14}px)`;
+      }
+    }
   };
 
-  // Cytoscape init
+  // -------- Cytoscape init --------
   useEffect(() => {
     (async () => {
       if (!containerRef.current || cyRef.current) return;
@@ -177,7 +195,7 @@ export default function CytoGraph({
         ],
       });
 
-      // Node tap toggles popup (reclick hides)
+      // Left click toggles popup (open on first click, close on reclick)
       cy.on("tap", "node", (evt: any) => {
         const id = evt.target.id();
         const label = evt.target.data("label") || id;
@@ -185,7 +203,7 @@ export default function CytoGraph({
         setPopups((prev) => {
           const open = prev.some((p) => p.id === id);
           if (open) {
-            // also clear "muted" state and refs will be cleaned on unmount
+            // close + clear its muted state
             setMutedPopups((old) => {
               const next = new Set(old);
               next.delete(id);
@@ -196,6 +214,23 @@ export default function CytoGraph({
           onNodeSelect?.(id);
           return [...prev, { id, label }];
         });
+      });
+
+      // Right click hides node + closes popup (also unmute it)
+      cy.on("cxttap", "node", (evt: any) => {
+        const id = evt.target.id();
+        setHiddenLocal((old) => {
+          const next = new Set(old);
+          next.add(id);
+          return next;
+        });
+        setMutedPopups((old) => {
+          const next = new Set(old);
+          next.delete(id);
+          return next;
+        });
+        setPopups((prev) => prev.filter((p) => p.id !== id));
+        scheduleConnections();
       });
 
       // Update popup positions + lines on moves/zoom/layout
@@ -253,18 +288,23 @@ export default function CytoGraph({
     }
     cy.endBatch();
 
-    cy.nodes().forEach((n: any) => (hiddenSet.has(n.id()) ? n.hide() : n.show()));
+    // Reset local hides & popups on new data
+    setHiddenLocal(new Set());
     setPopups([]);
-    setMutedPopups(new Set()); // reset muted when data changes
-    scheduleConnections();
-  }, [elements]);
+    setMutedPopups(new Set());
 
+    // Apply hidden
+    cy.nodes().forEach((n: any) => (hiddenUnion.has(n.id()) ? n.hide() : n.show()));
+    scheduleConnections();
+  }, [elements]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Apply hidden (prop ∪ local)
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    cy.nodes().forEach((n: any) => (hiddenSet.has(n.id()) ? n.hide() : n.show()));
+    cy.nodes().forEach((n: any) => (hiddenUnion.has(n.id()) ? n.hide() : n.show()));
     scheduleConnections();
-  }, [hiddenSet]);
+  }, [hiddenUnion]);
 
   // Recompute lines whenever popups/files/fns/muted change
   useEffect(() => {
@@ -278,6 +318,7 @@ export default function CytoGraph({
       next.delete(id);
       return next;
     });
+    scheduleConnections();
   };
 
   const togglePopupLines = (id: string) => {
@@ -333,7 +374,7 @@ export default function CytoGraph({
                   {p.label}
                 </strong>
 
-                {/* Toggle lines button */}
+                {/* ⬇️ Per-popup Hide/Show lines (only affects this popup's connections) */}
                 <button
                   onClick={() => togglePopupLines(p.id)}
                   title={muted ? "Show lines from this popup" : "Hide lines from this popup"}
@@ -350,7 +391,7 @@ export default function CytoGraph({
                   {muted ? "Show lines" : "Hide lines"}
                 </button>
 
-                {/* Close button */}
+                {/* Close popup */}
                 <button
                   onClick={() => closePopup(p.id)}
                   title="Close"

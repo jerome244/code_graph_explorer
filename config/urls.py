@@ -27,16 +27,6 @@ urlpatterns = [
     # API (DRF router)
     path("api/", include(router.urls)),
 
-    # JWT
-    path("api/auth/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
-    path("api/auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
-    path("api/auth/token/verify/", TokenVerifyView.as_view(), name="token_verify"),
-
-    # Analyzer endpoints
-    path("api/projects/<slug:slug>/upload/", ProjectUploadAnalyzeView.as_view(), name="project-upload"),
-    path("api/projects/<slug:slug>/analysis/latest/", ProjectLatestAnalysisView.as_view(), name="project-analysis-latest"),
-    path("api/projects/<slug:slug>/import/github/", ProjectImportGithubView.as_view(), name="project-import-github"),
-    path("api/projects/<slug:slug>/file", views.project_file, name="project-file"),
 
 ]
 

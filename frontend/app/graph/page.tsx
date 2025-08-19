@@ -8,6 +8,7 @@ import type { ElementDefinition } from "cytoscape";
 import type { TreeNode } from "@/lib/fileTree";
 import TreeView from "@/components/file-tree/TreeView";
 import ZipUpload from "@/components/upload/ZipUpload";
+import GitHubImport from "@/components/upload/GitHubImport";
 
 const CytoGraph = dynamic(() => import("@/components/graph/CytoGraph"), { ssr: false });
 
@@ -29,7 +30,7 @@ export default function GraphPage() {
     setTree(res.tree);
     setElements(res.elements);
     setFiles(res.files);
-    setHiddenMap({}); // reset hidden toggles on new upload
+    setHiddenMap({}); // reset hidden toggles on new upload/import
     setStatus(`${res.count} files loaded`);
   }, []);
 
@@ -51,9 +52,23 @@ export default function GraphPage() {
 
       {/* Main */}
       <section style={{ display: "grid", gridTemplateRows: "auto 1fr" }}>
-        <div style={{ padding: 12, borderBottom: "1px solid #e5e7eb", display: "flex", gap: 12, alignItems: "center" }}>
+        <div
+          style={{
+            padding: 12,
+            borderBottom: "1px solid #e5e7eb",
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
           <ZipUpload onParsed={onParsed} setStatus={setStatus} />
           <span style={{ fontSize: 12, color: "#6b7280" }}>.c .py .html .css .js</span>
+
+          <div style={{ width: 1, height: 24, background: "#e5e7eb" }} />
+
+          <GitHubImport onParsed={onParsed} setStatus={setStatus} />
+
           {hiddenIds.length > 0 && (
             <span style={{ marginLeft: "auto", fontSize: 12, color: "#6b7280" }}>Hidden: {hiddenIds.length}</span>
           )}

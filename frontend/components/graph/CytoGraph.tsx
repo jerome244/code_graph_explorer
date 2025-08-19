@@ -13,11 +13,13 @@ export default function CytoGraph({
   hiddenIds = [],
   files = {},
   onNodeSelect,
+  onHideNode, // parent should update hiddenIds (tree) when we right-click
 }: {
   elements: ElementDefinition[];
   hiddenIds?: string[];
   files?: Record<string, string>;
   onNodeSelect?: (id: string) => void;
+  onHideNode?: (id: string) => void;
 }) {
   const cyRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -25,21 +27,12 @@ export default function CytoGraph({
   const [popups, setPopups] = useState<Popup[]>([]);
   const popupRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // ✅ Per-popup mute state: when a popup is muted, lines involving that popup are hidden.
+  // Per-popup toggle for cross-popup lines
   const [mutedPopups, setMutedPopups] = useState<Set<string>>(new Set());
   const mutedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     mutedRef.current = mutedPopups;
   }, [mutedPopups]);
-
-  // Allow hiding nodes via right-click
-  const [hiddenLocal, setHiddenLocal] = useState<Set<string>>(new Set());
-  const hiddenPropSet = useMemo(() => new Set(hiddenIds || []), [hiddenIds]);
-  const hiddenUnion = useMemo(() => {
-    const s = new Set<string>(hiddenPropSet);
-    hiddenLocal.forEach((id) => s.add(id));
-    return s;
-  }, [hiddenPropSet, hiddenLocal]);
 
   // Function names used for code highlighting (derived from edges carrying data.fn)
   const fnNames = useMemo(() => {
@@ -52,7 +45,7 @@ export default function CytoGraph({
     return Array.from(names);
   }, [elements]);
 
-  // -------- Cross-popup connection overlay (front-most) --------
+  // ---------------- Cross-popup connection overlay ----------------
   const [connections, setConnections] = useState<Conn[]>([]);
   const rafConn = useRef<number>(0);
 
@@ -69,16 +62,16 @@ export default function CytoGraph({
     if (!container) return;
     const crect = container.getBoundingClientRect();
 
-    // Collect the first visible hit per (popup, fn) — but skip muted popups
     type Anchor = { x: number; y: number; color: string; popupId: string; fn: string };
     const perFn: Record<string, Anchor[]> = {};
 
     popupRefs.current.forEach((popupEl, popupId) => {
-      if (mutedRef.current.has(popupId)) return; // ⬅️ skip this popup entirely
+      if (mutedRef.current.has(popupId)) return;
 
       const hits = Array.from(popupEl.querySelectorAll<HTMLElement>(".fn-hit[data-fn]"));
       if (!hits.length) return;
 
+      // take the first occurrence per fn in each popup
       const firstPerFn: Record<string, HTMLElement> = {};
       for (const el of hits) {
         const fn = el.dataset.fn!;
@@ -94,7 +87,6 @@ export default function CytoGraph({
       }
     });
 
-    // Build lines only among *non-muted* popups
     const conns: Conn[] = [];
     Object.values(perFn).forEach((anchors) => {
       if (anchors.length < 2) return;
@@ -114,8 +106,7 @@ export default function CytoGraph({
   const cleanupRefs = useRef<Map<string, () => void>>(new Map());
   const setPopupRef = (id: string) => (el: HTMLDivElement | null) => {
     if (!el) {
-      const cleanup = cleanupRefs.current.get(id);
-      if (cleanup) cleanup();
+      cleanupRefs.current.get(id)?.();
       cleanupRefs.current.delete(id);
       popupRefs.current.delete(id);
       scheduleConnections();
@@ -134,14 +125,14 @@ export default function CytoGraph({
     ro.observe(el);
 
     cleanupRefs.current.set(id, () => {
-      if (codePane) codePane.removeEventListener("scroll", onScroll);
+      codePane?.removeEventListener("scroll", onScroll);
       ro.disconnect();
     });
 
-    // initial placement
+    // initial placement + lines
     scheduleConnections();
 
-    // also snap to node if cy exists
+    // snap near node if cy exists
     const cy = cyRef.current;
     if (cy) {
       const node = cy.getElementById(id);
@@ -152,7 +143,7 @@ export default function CytoGraph({
     }
   };
 
-  // -------- Cytoscape init --------
+  // ---------------- Cytoscape init (run once; no hiddenIds here) ----------------
   useEffect(() => {
     (async () => {
       if (!containerRef.current || cyRef.current) return;
@@ -195,15 +186,17 @@ export default function CytoGraph({
         ],
       });
 
-      // Left click toggles popup (open on first click, close on reclick)
+      // Left click toggles popup; rely on cy state to know if node is hidden
       cy.on("tap", "node", (evt: any) => {
         const id = evt.target.id();
         const label = evt.target.data("label") || id;
 
+        const node = cy.getElementById(id);
+        if (!node || node.hidden()) return;
+
         setPopups((prev) => {
           const open = prev.some((p) => p.id === id);
           if (open) {
-            // close + clear its muted state
             setMutedPopups((old) => {
               const next = new Set(old);
               next.delete(id);
@@ -216,24 +209,20 @@ export default function CytoGraph({
         });
       });
 
-      // Right click hides node + closes popup (also unmute it)
+      // Right click hides node + closes popup via parent callback
       cy.on("cxttap", "node", (evt: any) => {
         const id = evt.target.id();
-        setHiddenLocal((old) => {
-          const next = new Set(old);
-          next.add(id);
-          return next;
-        });
+        onHideNode?.(id); // parent updates tree + hiddenIds
+        setPopups((prev) => prev.filter((p) => p.id !== id)); // close immediately
         setMutedPopups((old) => {
           const next = new Set(old);
           next.delete(id);
           return next;
         });
-        setPopups((prev) => prev.filter((p) => p.id !== id));
         scheduleConnections();
       });
 
-      // Update popup positions + lines on moves/zoom/layout
+      // rAF-throttled reposition + lines on move/zoom/layout
       let raf = 0;
       const schedule = () => {
         if (raf) return;
@@ -266,9 +255,9 @@ export default function CytoGraph({
         if (raf) cancelAnimationFrame(raf);
       };
     })();
-  }, [onNodeSelect]);
+  }, [onNodeSelect, onHideNode]);
 
-  // Rebuild on elements change
+  // ---------------- Rebuild graph only when `elements` change ----------------
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
@@ -288,25 +277,36 @@ export default function CytoGraph({
     }
     cy.endBatch();
 
-    // Reset local hides & popups on new data
-    setHiddenLocal(new Set());
+    // reset popups/mutes on new data
     setPopups([]);
     setMutedPopups(new Set());
 
-    // Apply hidden
-    cy.nodes().forEach((n: any) => (hiddenUnion.has(n.id()) ? n.hide() : n.show()));
+    // (hide/show will be applied by the next effect)
     scheduleConnections();
-  }, [elements]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [elements]);
 
-  // Apply hidden (prop ∪ local)
+  // ---------------- Apply hide/show incrementally when `hiddenIds` change ----------------
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    cy.nodes().forEach((n: any) => (hiddenUnion.has(n.id()) ? n.hide() : n.show()));
-    scheduleConnections();
-  }, [hiddenUnion]);
 
-  // Recompute lines whenever popups/files/fns/muted change
+    const hideSet = new Set(hiddenIds);
+
+    cy.startBatch();
+    cy.nodes().forEach((n: any) => {
+      if (hideSet.has(n.id())) n.hide();
+      else n.show();
+    });
+    cy.endBatch();
+
+    // Close popups of hidden nodes
+    setPopups((prev) => prev.filter((p) => !hideSet.has(p.id)));
+
+    // Recompute only the cross-popup lines
+    scheduleConnections();
+  }, [hiddenIds]);
+
+  // Recompute lines when popups/files/fns/muted change
   useEffect(() => {
     scheduleConnections();
   }, [popups, files, fnNames, mutedPopups]);
@@ -335,7 +335,7 @@ export default function CytoGraph({
       {/* Cytoscape canvas */}
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
-      {/* Popups (code panes) */}
+      {/* Popups */}
       <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 9 }}>
         {popups.map((p) => {
           const raw = files[p.id] ?? "";
@@ -374,7 +374,7 @@ export default function CytoGraph({
                   {p.label}
                 </strong>
 
-                {/* ⬇️ Per-popup Hide/Show lines (only affects this popup's connections) */}
+                {/* Per-popup Hide/Show lines */}
                 <button
                   onClick={() => togglePopupLines(p.id)}
                   title={muted ? "Show lines from this popup" : "Hide lines from this popup"}

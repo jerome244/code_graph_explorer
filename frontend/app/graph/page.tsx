@@ -34,8 +34,14 @@ export default function GraphPage() {
     setStatus(`${res.count} files loaded`);
   }, []);
 
+  // Tree → Graph: toggle hide/show. CytoGraph will close any popup for hidden nodes.
   const onToggleFile = useCallback((path: string) => {
     setHiddenMap((prev) => ({ ...prev, [path]: !prev[path] }));
+  }, []);
+
+  // Graph → Tree: right-click hide should reflect in tree
+  const onHideNode = useCallback((path: string) => {
+    setHiddenMap((prev) => ({ ...prev, [path]: true }));
   }, []);
 
   return (
@@ -74,7 +80,12 @@ export default function GraphPage() {
           )}
         </div>
 
-        <CytoGraph elements={elements} hiddenIds={hiddenIds} files={files} />
+        <CytoGraph
+          elements={elements}
+          hiddenIds={hiddenIds}
+          files={files}
+          onHideNode={onHideNode}   // ⬅️ wire graph → tree
+        />
       </section>
     </main>
   );

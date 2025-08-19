@@ -1,26 +1,25 @@
-// app/page.tsx — server component
+// app/page.tsx — server component (protected by middleware)
+import Link from "next/link";
 import { apiFetch } from "@/lib/api";
+import type { CSSProperties } from "react";
 
 type Me = {
   id: number;
   username: string;
-  email: string;
-  first_name: string;
-  last_name: string;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
   role: "USER" | "ADMIN";
 };
 
 export default async function HomePage() {
-  // With the middleware in place, this page is protected and should always have a token.
-  // Still, guard with try/catch to avoid hard crashes.
   let me: Me | null = null;
   try {
     me = await apiFetch("/api/users/me/");
   } catch {
-    // If something goes wrong, the middleware should redirect to /login.
+    // middleware should redirect unauthenticated users to /login
   }
 
-  // If admin, prefetch users list on the server.
   let users: Me[] = [];
   if (me?.role === "ADMIN") {
     try {
@@ -42,6 +41,19 @@ export default async function HomePage() {
       >
         <h1 style={{ margin: 0 }}>Code Graph Explorer</h1>
         <nav style={{ display: "flex", gap: 12 }}>
+          <Link
+            href="/graph"
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid #e5e7eb",
+              textDecoration: "none",
+              fontWeight: 600,
+            }}
+          >
+            Go to Graph
+          </Link>
+
           <form action="/api/refresh" method="post">
             <button type="submit">Refresh token</button>
           </form>
@@ -79,14 +91,17 @@ export default async function HomePage() {
             >
               <div style={{ fontWeight: 600 }}>Username</div>
               <div>{me.username}</div>
+
               <div style={{ fontWeight: 600 }}>Email</div>
               <div>{me.email || "—"}</div>
+
               <div style={{ fontWeight: 600 }}>Name</div>
               <div>
                 {me.first_name || me.last_name
                   ? `${me.first_name ?? ""} ${me.last_name ?? ""}`.trim()
                   : "—"}
               </div>
+
               <div style={{ fontWeight: 600 }}>Role</div>
               <div>{me.role}</div>
             </div>
@@ -140,8 +155,8 @@ export default async function HomePage() {
                 </div>
               )}
               <p style={{ marginTop: 12 }}>
-                Role updates can be done via the Django endpoint
-                <code> POST /api/users/&lt;id&gt;/set_role/</code>. If you want, I can add a small admin action UI next.
+                Role updates can be done via the Django endpoint{" "}
+                <code>POST /api/users/&lt;id&gt;/set_role/</code>. Want me to add a quick toggle UI?
               </p>
             </section>
           )}
@@ -151,15 +166,14 @@ export default async function HomePage() {
   );
 }
 
-// simple inline table styles
-const th: React.CSSProperties = {
+const th: CSSProperties = {
   textAlign: "left",
   borderBottom: "1px solid #e5e7eb",
   padding: "8px 6px",
   fontWeight: 600,
 };
 
-const td: React.CSSProperties = {
+const td: CSSProperties = {
   borderBottom: "1px solid #f3f4f6",
   padding: "8px 6px",
 };

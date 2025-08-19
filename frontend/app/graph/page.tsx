@@ -9,6 +9,7 @@ import type { TreeNode } from "@/lib/fileTree";
 import TreeView from "@/components/file-tree/TreeView";
 import ZipUpload from "@/components/upload/ZipUpload";
 import GitHubImport from "@/components/upload/GitHubImport";
+import { treeToCy } from "@/lib/cyto"; // ⬅️ make sure this accepts (tree, files)
 
 const CytoGraph = dynamic(() => import("@/components/graph/CytoGraph"), { ssr: false });
 
@@ -34,15 +35,29 @@ export default function GraphPage() {
     setStatus(`${res.count} files loaded`);
   }, []);
 
-  // Tree → Graph: toggle hide/show. CytoGraph will close any popup for hidden nodes.
   const onToggleFile = useCallback((path: string) => {
     setHiddenMap((prev) => ({ ...prev, [path]: !prev[path] }));
   }, []);
 
-  // Graph → Tree: right-click hide should reflect in tree
+  // Right-click in graph → hide in tree
   const onHideNode = useCallback((path: string) => {
     setHiddenMap((prev) => ({ ...prev, [path]: true }));
   }, []);
+
+  // ⬇️ NEW: when a popup save occurs, update file text and rebuild edges/lines
+  const onUpdateFile = useCallback((path: string, content: string) => {
+    setFiles((prev) => {
+      const nextFiles = { ...prev, [path]: content };
+      try {
+        const res = treeToCy(tree, nextFiles) as any;
+        const newElements: ElementDefinition[] = Array.isArray(res) ? res : res.elements;
+        setElements(newElements);
+      } catch (e) {
+        console.error("Rebuild graph failed:", e);
+      }
+      return nextFiles;
+    });
+  }, [tree]);
 
   return (
     <main style={{ display: "grid", gridTemplateColumns: "280px 1fr", height: "100vh" }}>
@@ -84,7 +99,8 @@ export default function GraphPage() {
           elements={elements}
           hiddenIds={hiddenIds}
           files={files}
-          onHideNode={onHideNode}   // ⬅️ wire graph → tree
+          onHideNode={onHideNode}
+          onUpdateFile={onUpdateFile}  // ⬅️ enable in-popup editing + save
         />
       </section>
     </main>

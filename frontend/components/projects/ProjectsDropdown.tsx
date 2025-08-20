@@ -70,7 +70,13 @@ export default function ProjectsDropdown(props: {
     <div style={{ position: "relative" }}>
       <button
         onClick={() => setOpen((o) => !o)}
-        style={{ padding: "6px 10px", border: "1px solid #e5e7eb", borderRadius: 8, background: "white" }}
+        style={{
+          padding: "6px 10px",
+          border: "1px solid #e5e7eb",
+          borderRadius: 8,
+          background: "white",
+          color: "#111827" // make trigger text visible on white
+        }}
         title="My Projects"
       >
         Load ▾
@@ -79,17 +85,33 @@ export default function ProjectsDropdown(props: {
         <div style={{
           position: "absolute", top: "110%", left: 0, zIndex: 10,
           width: 320, maxHeight: 300, overflow: "auto",
-          background: "white", border: "1px solid #e5e7eb", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,.08)"
+          background: "white", border: "1px solid #e5e7eb", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,.08)",
+          color: "#111827" // default text color inside dropdown
         }}>
           <div style={{ padding: 8, borderBottom: "1px solid #e5e7eb", fontSize: 12, color: "#6b7280" }}>
             {loading ? "Loading…" : err ? err : `${items.length} project(s)`}
           </div>
           <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
             {items.map((p) => (
-              <li key={p.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, padding: 8, borderBottom: "1px solid #f3f4f6" }}>
+              <li
+                key={p.id}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto auto",
+                  gap: 8,
+                  padding: 8,
+                  borderBottom: "1px solid #f3f4f6"
+                }}
+              >
                 <button
                   onClick={() => { onLoad(p); setOpen(false); }}
-                  style={{ textAlign: "left", background: "transparent", border: 0, cursor: "pointer" }}
+                  style={{
+                    textAlign: "left",
+                    background: "transparent",
+                    border: 0,
+                    cursor: "pointer",
+                    color: "#111827" // ensure project name is dark
+                  }}
                   title={new Date(p.updated_at).toLocaleString()}
                 >
                   <div style={{ fontWeight: 600, fontSize: 13 }}>{p.name}</div>
@@ -97,10 +119,16 @@ export default function ProjectsDropdown(props: {
                     Updated {new Date(p.updated_at).toLocaleString()}
                   </div>
                 </button>
-                <button onClick={() => rename(p)} style={{ fontSize: 12, background: "transparent", border: 0, cursor: "pointer" }}>
+                <button
+                  onClick={() => rename(p)}
+                  style={{ fontSize: 12, background: "transparent", border: 0, cursor: "pointer", color: "#111827" }}
+                >
                   Rename
                 </button>
-                <button onClick={() => del(p.id)} style={{ fontSize: 12, color: "#dc2626", background: "transparent", border: 0, cursor: "pointer" }}>
+                <button
+                  onClick={() => del(p.id)}
+                  style={{ fontSize: 12, color: "#dc2626", background: "transparent", border: 0, cursor: "pointer" }}
+                >
                   Delete
                 </button>
               </li>
@@ -110,7 +138,17 @@ export default function ProjectsDropdown(props: {
             )}
           </ul>
           <div style={{ padding: 8 }}>
-            <button onClick={refresh} style={{ fontSize: 12, border: "1px solid #e5e7eb", borderRadius: 6, background: "white", padding: "4px 8px" }}>
+            <button
+              onClick={refresh}
+              style={{
+                fontSize: 12,
+                border: "1px solid #e5e7eb",
+                borderRadius: 6,
+                background: "white",
+                padding: "4px 8px",
+                color: "#111827"
+              }}
+            >
               Refresh
             </button>
           </div>

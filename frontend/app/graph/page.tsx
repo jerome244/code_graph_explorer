@@ -3,7 +3,8 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import type { ElementDefinition } from "cytoscape";
 import type { TreeNode } from "@/lib/fileTree";
 import TreeView from "@/components/file-tree/TreeView";
@@ -18,7 +19,7 @@ type Project = {
   id: string;
   name: string;
   description?: string;
-  graph: unknown;
+  graph: any;
   source_language?: string;
   created_at: string;
   updated_at: string;
@@ -35,10 +36,7 @@ export default function GraphPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [projectName, setProjectName] = useState<string>("My Code Graph");
 
-  const hiddenIds = useMemo(
-    () => Object.keys(hiddenMap).filter((k) => hiddenMap[k]),
-    [hiddenMap]
-  );
+  const hiddenIds = useMemo(() => Object.keys(hiddenMap).filter((k) => hiddenMap[k]), [hiddenMap]);
 
   const onParsed = useCallback((res: {
     tree: TreeNode;
@@ -82,6 +80,40 @@ export default function GraphPage() {
     },
     [tree]
   );
+
+  // --- Load by ?project=<id> ---
+  const searchParams = useSearchParams();
+  const loadedFromQuery = useRef(false);
+
+  useEffect(() => {
+    const pid = searchParams.get("project");
+    if (!pid || loadedFromQuery.current) return;
+    loadedFromQuery.current = true;
+
+    (async () => {
+      try {
+        setStatus("Loading project…");
+        const res = await fetch(`/api/projects/${pid}`, { credentials: "include" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.detail || "Failed to load project");
+
+        setProject(data);
+        setProjectName(data.name);
+
+        const g = data.graph || {};
+        setTree(g.tree || { name: "root", path: "", kind: "folder", children: [] });
+        setElements(g.elements || []);
+        setFiles(g.files || {});
+        const hm = Object.fromEntries((g.hiddenIds || []).map((id: string) => [id, true]));
+        setHiddenMap(hm);
+
+        setStatus(`Loaded "${data.name}"`);
+      } catch (e: any) {
+        console.error(e);
+        setStatus(e.message || "Failed to load project");
+      }
+    })();
+  }, [searchParams]);
 
   return (
     <main style={{ display: "grid", gridTemplateColumns: "280px 1fr", height: "100vh" }}>

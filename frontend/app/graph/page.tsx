@@ -13,6 +13,7 @@ import GitHubImport from "@/components/upload/GitHubImport";
 import { treeToCy } from "@/lib/cyto"; // must accept (tree, files)
 import SaveButton from "@/components/projects/SaveButton";
 import ProjectsDropdown from "@/components/projects/ProjectsDropdown";
+import ShareButton from "@/components/projects/ShareButton";
 
 const CytoGraph = dynamic(() => import("@/components/graph/CytoGraph"), { ssr: false });
 
@@ -173,6 +174,8 @@ export default function GraphPage() {
               }
             }}
           />
+          <ShareButton projectId={project?.id} />
+
           <ProjectsDropdown
             onLoad={(p) => {
               setProject(p);

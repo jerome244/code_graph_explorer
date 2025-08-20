@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 
 type Share = {
   id: string;
@@ -13,8 +13,11 @@ export default function ShareButton({ projectId }: { projectId?: string }) {
   const [shares, setShares] = useState<Share[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [email, setEmail] = useState("");
+
+  // accept email OR @username
+  const [who, setWho] = useState("");
   const [role, setRole] = useState<"view" | "edit">("view");
+  const looksLikeEmail = useMemo(() => /\S+@\S+\.\S+/.test(who.trim()), [who]);
 
   async function refresh() {
     if (!projectId) return;
@@ -32,17 +35,22 @@ export default function ShareButton({ projectId }: { projectId?: string }) {
   useEffect(() => { if (open) refresh(); }, [open, projectId]);
 
   async function addShare() {
-    if (!projectId || !email) return;
+    if (!projectId || !who.trim()) return;
+    const trimmed = who.trim();
+    const payload = looksLikeEmail
+      ? { email: trimmed, role }
+      : { username: trimmed.replace(/^@/, ""), role };
+
     try {
       const r = await fetch(`/api/projects/${projectId}/shares`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email, role }),
+        body: JSON.stringify(payload),
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.email || data?.detail || "Share failed");
-      setEmail("");
+      if (!r.ok) throw new Error(data?.email || data?.username || data?.identifier || data?.detail || "Share failed");
+      setWho("");
       await refresh();
     } catch (e: any) {
       alert(e.message || "Share failed");
@@ -85,7 +93,7 @@ export default function ShareButton({ projectId }: { projectId?: string }) {
           border: "1px solid #e5e7eb",
           borderRadius: 8,
           background: "white",
-          color: "#111827", // visible text
+          color: "#111827",
           cursor: "pointer",
         }}
         title={disabled ? "Save first to enable sharing" : "Share project"}
@@ -99,7 +107,7 @@ export default function ShareButton({ projectId }: { projectId?: string }) {
             position: "absolute",
             top: "110%",
             right: 0,
-            zIndex: 1000, // ensure on top
+            zIndex: 1000,
             width: 380,
             background: "white",
             color: "#111827",
@@ -119,10 +127,10 @@ export default function ShareButton({ projectId }: { projectId?: string }) {
 
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <input
-              type="email"
-              placeholder="user@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              type="text"
+              placeholder="email or @username"
+              value={who}
+              onChange={(e) => setWho(e.target.value)}
               disabled={disabled}
               style={{ flex: 1, border: "1px solid #e5e7eb", borderRadius: 6, padding: "6px 8px" }}
             />
@@ -138,15 +146,15 @@ export default function ShareButton({ projectId }: { projectId?: string }) {
             <button
               type="button"
               onClick={addShare}
-              disabled={disabled || !email}
+              disabled={disabled || !who.trim()}
               style={{
                 border: "1px solid #e5e7eb",
                 borderRadius: 6,
                 padding: "6px 10px",
                 background: "white",
                 color: "#111827",
-                opacity: disabled || !email ? 0.6 : 1,
-                cursor: disabled || !email ? "not-allowed" : "pointer",
+                opacity: disabled || !who.trim() ? 0.6 : 1,
+                cursor: disabled || !who.trim() ? "not-allowed" : "pointer",
               }}
             >
               Add

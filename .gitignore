@@ -1,0 +1,77 @@
+# --- Node / Next.js ---
+node_modules/
+.npm/
+.pnpm-store/
+.next/
+out/
+dist/
+coverage/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+.vercel/
+
+# Next.js env files (keep an example committed)
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+# If you also keep a root .env, ignore it too:
+.env
+.env.*
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.code-workspace
+
+# --- Python / Django ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.tox/
+.coverage
+coverage.xml
+htmlcov/
+pip-wheel-metadata/
+build/
+dist/
+site/
+
+# Virtualenvs
+venv/
+.venv/
+env/
+ENV/
+
+# SQLite DB (don’t commit local DB)
+*.sqlite3
+db.sqlite3
+backend/db.sqlite3
+
+# Django settings/env (keep example)
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Collected static & user uploads
+backend/staticfiles/
+backend/media/
+
+# If you store zips/uploads locally during dev
+uploads/
+*.zip
+
+__pycache__/
+__pycache__
+*.pyc
+*.cpython*

@@ -73,7 +73,7 @@ export default function ProjectsDropdown(props: {
         style={{ padding: "6px 10px", border: "1px solid #e5e7eb", borderRadius: 8, background: "white" }}
         title="My Projects"
       >
-        My Projects ▾
+        Load ▾
       </button>
       {open && (
         <div style={{

@@ -12,6 +12,7 @@ import ZipUpload from "@/components/upload/ZipUpload";
 import GitHubImport from "@/components/upload/GitHubImport";
 import { treeToCy } from "@/lib/cyto"; // must accept (tree, files)
 import SaveButton from "@/components/projects/SaveButton";
+import ProjectsDropdown from "@/components/projects/ProjectsDropdown";
 
 const CytoGraph = dynamic(() => import("@/components/graph/CytoGraph"), { ssr: false });
 
@@ -150,7 +151,7 @@ export default function GraphPage() {
 
           <div style={{ width: 1, height: 24, background: "#e5e7eb" }} />
 
-          {/* Project name + Save */}
+          {/* Project name + Save + Load */}
           <input
             value={projectName}
             onChange={(e) => setProjectName(e.target.value)}
@@ -169,6 +170,38 @@ export default function GraphPage() {
                 setStatus(`Saved at ${t}`);
               } catch {
                 setStatus("Saved");
+              }
+            }}
+          />
+          <ProjectsDropdown
+            onLoad={(p) => {
+              setProject(p);
+              setProjectName(p.name);
+              try {
+                const g = p.graph || {};
+                setTree(g.tree || { name: "root", path: "", kind: "folder", children: [] });
+                setElements(g.elements || []);
+                setFiles(g.files || {});
+                const hm = Object.fromEntries((g.hiddenIds || []).map((id: string) => [id, true]));
+                setHiddenMap(hm);
+                setStatus(`Loaded "${p.name}"`);
+              } catch (e) {
+                console.error("Failed to load project graph", e);
+                setStatus("Failed to load project graph");
+              }
+            }}
+            onDeleted={(id) => {
+              if (project?.id === id) {
+                setProject(null);
+                setProjectName("My Code Graph");
+                setStatus("Project deleted");
+              }
+            }}
+            onRenamed={(p) => {
+              if (project?.id === p.id) {
+                setProjectName(p.name);
+                setProject(p);
+                setStatus(`Renamed to "${p.name}"`);
               }
             }}
           />

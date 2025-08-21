@@ -12,14 +12,7 @@ yarn-debug.log*
 pnpm-debug.log*
 .vercel/
 
-# Next.js env files (keep an example committed)
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-# If you also keep a root .env, ignore it too:
-.env
-.env.*
+# Next.js env files (keep an example committed
 
 # --- OS / editor cruft ---
 .DS_Store
@@ -50,8 +43,6 @@ site/
 # Virtualenvs
 venv/
 .venv/
-env/
-ENV/
 
 # SQLite DB (don’t commit local DB)
 *.sqlite3

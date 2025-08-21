@@ -24,6 +24,27 @@ function darkenHex(hex: string, amount = 0.35) {
   return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
 }
 
+// simple throttle
+function throttle<T extends (...args: any[]) => void>(fn: T, ms = 60): T {
+  let last = 0;
+  let timer: number | null = null;
+  // @ts-ignore
+  return function (...args: any[]) {
+    const now = Date.now();
+    const remaining = ms - (now - last);
+    if (remaining <= 0) {
+      last = now;
+      fn(...args);
+    } else if (!timer) {
+      timer = window.setTimeout(() => {
+        last = Date.now();
+        timer = null;
+        fn(...args);
+      }, remaining);
+    }
+  } as T;
+}
+
 export default function CytoGraph({
   elements,
   hiddenIds = [],
@@ -31,6 +52,7 @@ export default function CytoGraph({
   onNodeSelect,
   onHideNode,     // right-click hide for non-rect nodes
   onUpdateFile,   // save edits from popup
+  onMoveNode,     // 🔹 NEW: emit when a node moves (drag)
 }: {
   elements: ElementDefinition[] | { elements: ElementDefinition[] } | any; // robust
   hiddenIds?: string[];
@@ -38,6 +60,7 @@ export default function CytoGraph({
   onNodeSelect?: (id: string) => void;
   onHideNode?: (id: string) => void;
   onUpdateFile?: (path: string, content: string) => void;
+  onMoveNode?: (id: string, position: { x: number; y: number }) => void;
 }) {
   // normalize to always be an array
   const els: ElementDefinition[] = Array.isArray(elements)
@@ -62,7 +85,7 @@ export default function CytoGraph({
   const isEditing = (id: string) => editing.has(id);
   const startEdit = (id: string, initial: string) => {
     setEditing(s => (s.has(id) ? s : new Set(s).add(id)));
-    setBuffers(b => (id in b ? b : { ...b, [id]: initial }));
+    setBuffers(b => (id in b ? b : { ...b, [id]: initial })); 
     setMutedPopups(m => new Set(m).add(id));
   };
   const cancelEdit = (id: string) => {
@@ -295,7 +318,6 @@ export default function CytoGraph({
         });
       });
 
-
       // double-click node: inline label editor for adhoc nodes
       cy.on("dbltap", "node", (evt: any) => {
         const n = evt.target;
@@ -347,6 +369,20 @@ export default function CytoGraph({
         const sel = cy.$("node.adhoc.shape-rect:selected").map((n: any) => n.id());
         setSelectedRects(sel);
       });
+
+      // 🔹 Emit MOVE_NODE while dragging (throttled)
+      const emitMove = throttle((id: string, pos: { x: number; y: number }) => {
+        onMoveNode?.(id, pos);
+      }, 60);
+
+      const onPos = (e: any) => {
+        const n = e.target;
+        // only while user is dragging, so we don't spam on initial layout
+        if (n.grabbed()) {
+          emitMove(n.id(), n.position());
+        }
+      };
+      cy.on("position", "node", onPos);
 
       // rAF-throttled reposition, handles, editors, panel follow, and lines overlay
       let raf = 0;
@@ -427,10 +463,10 @@ export default function CytoGraph({
         cy.off("position", "node", schedule);
         cy.off("drag", "node", schedule);
         cy.off("free", "node", schedule);
-        if (raf) cancelAnimationFrame(raf);
+        cy.off("position", "node", onPos); // cleanup MOVE_NODE listener
       };
     })();
-  }, [onNodeSelect, onHideNode, labelEdit?.id, colorPanel?.id]);
+  }, [onNodeSelect, onHideNode, onMoveNode, labelEdit?.id, colorPanel?.id]);
 
   // ── Preserve positions when els change; keep adhoc nodes; layout only on real change ──
   const prevNodeIdsRef = useRef<Set<string>>(new Set());
@@ -453,8 +489,19 @@ export default function CytoGraph({
       Array.from(newNodeIds).every((id) => prevNodeIds.has(id as string));
 
     // Snapshot positions of existing non-adhoc nodes
-    const pos = new Map<string, { x: number; y: number }>();
-    cy.nodes(":not(.adhoc)").forEach((n: any) => pos.set(n.id(), n.position()));
+    const currentPos = new Map<string, { x: number; y: number }>();
+    cy.nodes(":not(.adhoc)").forEach((n: any) => currentPos.set(n.id(), n.position()));
+
+    // Gather incoming explicit positions from props (so remote MOVE_NODE can apply)
+    const incomingPos = new Map<string, { x: number; y: number }>();
+    (els || []).forEach((e: any) => {
+      if ((e.group ?? e?.data?.group ?? "nodes") !== "nodes") return;
+      const id = e?.data?.id;
+      if (!id) return;
+      if (e.position && typeof e.position.x === "number" && typeof e.position.y === "number") {
+        incomingPos.set(id, { x: e.position.x, y: e.position.y });
+      }
+    });
 
     // Optionally capture current viewport (pan/zoom) — not strictly required
     const pan = cy.pan();
@@ -469,10 +516,13 @@ export default function CytoGraph({
     if (els.length) cy.add(els);
 
     if (sameNodeSet && hadPrev) {
-      // Restore positions; no layout; keep viewport stable
+      // Prefer explicit incoming positions; otherwise keep existing positions
       cy.nodes(":not(.adhoc)").forEach((n: any) => {
-        const p = pos.get(n.id());
-        if (p) n.position(p);
+        const id = n.id();
+        const pIncoming = incomingPos.get(id);
+        const pExisting = currentPos.get(id);
+        if (pIncoming) n.position(pIncoming);
+        else if (pExisting) n.position(pExisting);
       });
       cy.pan(pan);
       cy.zoom(zoom);
@@ -754,7 +804,7 @@ export default function CytoGraph({
                         ) : (
                           <textarea
                             value={buffers[p.id] ?? raw}
-                            onChange={(e) => setBuffers((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                            onChange={(e) => setBuffers((prev) => ({ ...prev, [p.id]: e.target.value }))} 
                             onKeyDown={(e) => {
                               if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
                                 e.preventDefault();

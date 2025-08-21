@@ -31,6 +31,7 @@ type Project = {
 type RealtimeOp =
   | { type: "UPDATE_FILE"; payload: { path: string; content: string } }
   | { type: "HIDE_NODE"; payload: { path: string; hidden: boolean } }
+  | { type: "MOVE_NODE"; payload: { id: string; position: { x: number; y: number } } } // <-- NEW
   | { type: "SNAPSHOT"; payload: { graph: any } }
   | { type: "PING" }
   | { type: "PONG" };
@@ -39,13 +40,14 @@ type RealtimeMessage = RealtimeOp & { clientId?: string; ts?: number };
 
 const WS_BASE =
   process.env.NEXT_PUBLIC_WS_BASE?.replace(/\/$/, "") ||
-  (typeof window !== "undefined" ? `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}` : "");
+  (typeof window !== "undefined"
+    ? `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`
+    : "");
 
 function uuid(): string {
-  // simple uuid-ish
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0,
-      v = c === "x" ? r : (r & 0x3) | 0x8;
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
 }
@@ -82,43 +84,47 @@ export default function GraphPage() {
     setProjectName("My Code Graph");
   }, []);
 
-  const onToggleFile = useCallback((path: string) => {
-    setHiddenMap((prev) => {
-      const nextHidden = !prev[path];
-      // broadcast realtime if in a project
-      if (project?.id && wsRef.current && wsRef.current.readyState === 1) {
-        const msg: RealtimeMessage = {
-          type: "HIDE_NODE",
-          payload: { path, hidden: nextHidden },
-          clientId: clientIdRef.current,
-          ts: Date.now(),
-        };
-        wsRef.current.send(JSON.stringify(msg));
-      }
-      return { ...prev, [path]: nextHidden };
-    });
-  }, [project?.id]);
+  const onToggleFile = useCallback(
+    (path: string) => {
+      setHiddenMap((prev) => {
+        const nextHidden = !prev[path];
+        if (project?.id && wsRef.current && wsRef.current.readyState === 1) {
+          const msg: RealtimeMessage = {
+            type: "HIDE_NODE",
+            payload: { path, hidden: nextHidden },
+            clientId: clientIdRef.current,
+            ts: Date.now(),
+          };
+          wsRef.current.send(JSON.stringify(msg));
+        }
+        return { ...prev, [path]: nextHidden };
+      });
+    },
+    [project?.id]
+  );
 
   // Right-click in graph → hide in tree
-  const onHideNode = useCallback((path: string) => {
-    setHiddenMap((prev) => {
-      if (project?.id && wsRef.current && wsRef.current.readyState === 1) {
-        const msg: RealtimeMessage = {
-          type: "HIDE_NODE",
-          payload: { path, hidden: true },
-          clientId: clientIdRef.current,
-          ts: Date.now(),
-        };
-        wsRef.current.send(JSON.stringify(msg));
-      }
-      return { ...prev, [path]: true };
-    });
-  }, [project?.id]);
+  const onHideNode = useCallback(
+    (path: string) => {
+      setHiddenMap((prev) => {
+        if (project?.id && wsRef.current && wsRef.current.readyState === 1) {
+          const msg: RealtimeMessage = {
+            type: "HIDE_NODE",
+            payload: { path, hidden: true },
+            clientId: clientIdRef.current,
+            ts: Date.now(),
+          };
+          wsRef.current.send(JSON.stringify(msg));
+        }
+        return { ...prev, [path]: true };
+      });
+    },
+    [project?.id]
+  );
 
   // When a popup edit occurs, update file text and rebuild edges/lines
   const onUpdateFile = useCallback(
     (path: string, content: string) => {
-      // broadcast first for optimistic UI
       if (project?.id && wsRef.current && wsRef.current.readyState === 1) {
         const msg: RealtimeMessage = {
           type: "UPDATE_FILE",
@@ -144,7 +150,34 @@ export default function GraphPage() {
     [tree, project?.id]
   );
 
-  // ---- Load by ?project=<id> ----
+  // --- NEW: Move node handler (dragging)
+  const onMoveNode = useCallback(
+    (id: string, position: { x: number; y: number }) => {
+      // broadcast
+      if (project?.id && wsRef.current && wsRef.current.readyState === 1) {
+        const msg: RealtimeMessage = {
+          type: "MOVE_NODE",
+          payload: { id, position },
+          clientId: clientIdRef.current,
+          ts: Date.now(),
+        };
+        wsRef.current.send(JSON.stringify(msg));
+      }
+      // optimistic local update
+      setElements((prev) =>
+        prev.map((el) => {
+          const data: any = (el as any).data;
+          if (data?.id === id) {
+            return { ...el, position };
+          }
+          return el;
+        })
+      );
+    },
+    [project?.id]
+  );
+
+  // --- Load by ?project=<id> ---
   const searchParams = useSearchParams();
   const loadedFromQuery = useRef(false);
 
@@ -206,7 +239,6 @@ export default function GraphPage() {
             if (ws.readyState !== 1) return;
             const ping: RealtimeMessage = { type: "PING", clientId: clientIdRef.current, ts: Date.now() };
             ws.send(JSON.stringify(ping));
-            // if no pong for 30s, force reconnect
             if (Date.now() - lastPongRef.current > 30000) {
               ws.close();
             }
@@ -216,8 +248,6 @@ export default function GraphPage() {
         ws.onmessage = (e) => {
           try {
             const msg: RealtimeMessage = JSON.parse(e.data);
-
-            // echo suppression
             if (msg.clientId && msg.clientId === clientIdRef.current) return;
 
             switch (msg.type) {
@@ -231,17 +261,17 @@ export default function GraphPage() {
                 setFiles(g.files || {});
                 const hm = Object.fromEntries((g.hiddenIds || []).map((id: string) => [id, true]));
                 setHiddenMap(hm);
-                setStatus((s) => s.includes("• Live") ? s : `${s} • Live`);
+                setStatus((s) => (s.includes("• Live") ? s : `${s} • Live`));
                 break;
               }
               case "UPDATE_FILE": {
-                const { path, content } = msg.payload;
+                const { path, content } = msg.payload as any;
                 setFiles((prev) => {
                   const next = { ...prev, [path]: content };
                   try {
                     const res = treeToCy(tree, next) as any;
-                    const newElements: ElementDefinition[] = Array.isArray(res) ? res : res.elements;
-                    setElements(newElements);
+                    const newEls: ElementDefinition[] = Array.isArray(res) ? res : res.elements;
+                    setElements(newEls);
                   } catch (err) {
                     console.error("Rebuild graph failed:", err);
                   }
@@ -250,12 +280,24 @@ export default function GraphPage() {
                 break;
               }
               case "HIDE_NODE": {
-                const { path, hidden } = msg.payload;
+                const { path, hidden } = msg.payload as any;
                 setHiddenMap((prev) => ({ ...prev, [path]: hidden }));
                 break;
               }
+              case "MOVE_NODE": {
+                const { id, position } = msg.payload as any;
+                setElements((prev) =>
+                  prev.map((el) => {
+                    const data: any = (el as any).data;
+                    if (data?.id === id) {
+                      return { ...el, position };
+                    }
+                    return el;
+                  })
+                );
+                break;
+              }
               default:
-                // ignore unknown op types
                 break;
             }
           } catch (err) {
@@ -268,7 +310,6 @@ export default function GraphPage() {
             window.clearInterval(wsHeartbeatRef.current);
             wsHeartbeatRef.current = null;
           }
-          // schedule reconnect
           if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
           reconnectTimerRef.current = window.setTimeout(() => {
             if (project?.id) connectSocket(project.id);
@@ -276,7 +317,7 @@ export default function GraphPage() {
         };
 
         ws.onerror = () => {
-          // Let onclose handle reconnect
+          /* let onclose handle reconnect */
         };
       } catch (err) {
         console.error("WebSocket connect error:", err);
@@ -288,7 +329,6 @@ export default function GraphPage() {
   // Manage lifecycle for realtime
   useEffect(() => {
     if (!project?.id) {
-      // close if leaving a project
       if (wsRef.current && wsRef.current.readyState === 1) wsRef.current.close();
       return;
     }
@@ -303,7 +343,9 @@ export default function GraphPage() {
         reconnectTimerRef.current = null;
       }
       if (wsRef.current) {
-        try { wsRef.current.close(); } catch {}
+        try {
+          wsRef.current.close();
+        } catch {}
       }
     };
   }, [project?.id, connectSocket]);
@@ -363,7 +405,6 @@ export default function GraphPage() {
               } catch {
                 setStatus("Saved • Live");
               }
-              // Broadcast fresh snapshot after save
               if (p?.id && wsRef.current && wsRef.current.readyState === 1) {
                 const snapshot: RealtimeMessage = {
                   type: "SNAPSHOT",
@@ -424,6 +465,7 @@ export default function GraphPage() {
           files={files}
           onHideNode={onHideNode}
           onUpdateFile={onUpdateFile}
+          onMoveNode={onMoveNode} // <-- NEW
         />
       </section>
     </main>

@@ -1,4 +1,5 @@
 // components/graph/CytoGraph.tsx
+// (updated from your original) :contentReference[oaicite:1]{index=1}
 "use client";
 
 import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
@@ -9,6 +10,11 @@ export type CytoGraphHandle = {
   applyLiveMove: (id: string, pos: { x: number; y: number }, opts?: { animate?: boolean }) => void;
   /** Export current elements with the *live* positions from Cytoscape baked into node.position */
   exportElementsWithPositions: () => ElementDefinition[];
+  /** Open/close popups programmatically (used for realtime sync) */
+  openPopup: (id: string, label?: string) => void;
+  closePopup: (id: string) => void;
+  /** List of currently open popups for snapshots */
+  getOpenPopups: () => { id: string; label: string }[];
 };
 
 type Popup = { id: string; label: string };
@@ -60,6 +66,9 @@ type Props = {
   onUpdateFile?: (path: string, content: string) => void;
   onMoveNode?: (id: string, position: { x: number; y: number }) => void;      // during drag (throttled)
   onMoveCommit?: (id: string, position: { x: number; y: number }) => void;    // once on drag end
+  /** Notify parent when a popup is opened/closed locally so it can broadcast */
+  onPopupOpened?: (id: string, label: string) => void;
+  onPopupClosed?: (id: string) => void;
 };
 
 const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
@@ -72,6 +81,8 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
     onUpdateFile,
     onMoveNode,
     onMoveCommit,
+    onPopupOpened,
+    onPopupClosed,
   },
   ref
 ) {
@@ -352,7 +363,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         ],
       });
 
-      // tap node: open popup for file nodes and plain adhoc nodes (not for rect/text)
+      // tap node: open/close popup for file nodes and plain adhoc nodes (not for rect/text)
       cy.on("tap", "node", (evt: any) => {
         const n = evt.target;
         const id = n.id();
@@ -370,11 +381,15 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         setPopups((prev) => {
           const open = prev.some((p) => p.id === id);
           if (open) {
+            // closing
             setEditing((s) => { const nn = new Set(s); nn.delete(id); return nn; });
             setMutedPopups((s) => { const nn = new Set(s); nn.delete(id); return nn; });
+            onPopupClosed?.(id);
             return prev.filter((p) => p.id !== id);
           }
+          // opening
           onNodeSelect?.(id);
+          onPopupOpened?.(id, label);
           return [...prev, { id, label }];
         });
       });
@@ -407,12 +422,14 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         }
 
         // others: hide
+        const existed = !!popups.find((p) => p.id === id);
         onHideNode?.(id);
         setPalette(null);
         setColorPanel(null);
         setPopups((prev) => prev.filter((p) => p.id !== id));
         setEditing((s) => { const S = new Set(s); S.delete(id); return S; });
         setMutedPopups((s) => { const S = new Set(s); S.delete(id); return S; });
+        if (existed) onPopupClosed?.(id);
         scheduleConnections();
       });
 
@@ -534,7 +551,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         cy.off("free", "node", onFreeCommit);
       };
     })();
-  }, [onNodeSelect, onHideNode, onMoveNode, onMoveCommit, labelEdit?.id, colorPanel?.id]);
+  }, [onNodeSelect, onHideNode, onMoveNode, onMoveCommit, labelEdit?.id, colorPanel?.id, onPopupOpened, onPopupClosed, popups]);
 
   // ── Preserve positions on updates; layout only when node set changes ──
   const prevNodeIdsRef = useRef<Set<string>>(new Set());
@@ -633,6 +650,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
     setPopups(prev => prev.filter(p => p.id !== id));
     setEditing(s => { const n = new Set(s); n.delete(id); return n; });
     setMutedPopups(s => { const n = new Set(s); n.delete(id); return n; });
+    onPopupClosed?.(id);
     scheduleConnections();
   };
   const togglePopupLines = (id: string) => {
@@ -732,7 +750,25 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         return { ...el, position: pos[id] };
       });
     },
-  }), [els]);
+    openPopup(id, label) {
+      setPopups((prev) => {
+        if (prev.some((p) => p.id === id)) return prev;
+        const cy = cyRef.current;
+        const lbl = label ?? (cy?.getElementById(id)?.data("label") || id);
+        return [...prev, { id, label: lbl }];
+      });
+      scheduleConnections();
+    },
+    closePopup(id) {
+      setPopups((prev) => prev.filter((p) => p.id !== id));
+      setEditing((s) => { const n = new Set(s); n.delete(id); return n; });
+      setMutedPopups((s) => { const n = new Set(s); n.delete(id); return n; });
+      scheduleConnections();
+    },
+    getOpenPopups() {
+      return popups;
+    },
+  }), [els, popups]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>

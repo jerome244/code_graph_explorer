@@ -1,4 +1,5 @@
 // app/graph/page.tsx
+// (updated from your original) :contentReference[oaicite:0]{index=0}
 "use client";
 
 import Link from "next/link";
@@ -35,6 +36,8 @@ type RealtimeOp =
   | { type: "MOVE_NODE"; payload: { id: string; position: { x: number; y: number } } }
   | { type: "SNAPSHOT"; payload: { graph: any; targetClientId?: string } }
   | { type: "REQUEST_SNAPSHOT"; payload: { requesterId: string } }
+  | { type: "OPEN_POPUP"; payload: { id: string; label?: string } }
+  | { type: "CLOSE_POPUP"; payload: { id: string } }
   | { type: "PING" }
   | { type: "PONG" };
 
@@ -177,7 +180,6 @@ export default function GraphPage() {
     [sendRT]
   );
 
-
   // --- Commit once on drag end (update state for persistence + broadcast)
   const onMoveCommit = useCallback(
     (id: string, position: { x: number; y: number }) => {
@@ -191,12 +193,35 @@ export default function GraphPage() {
     [sendRT]
   );
 
+  // 🔹 Broadcast popup open/close so all collaborators sync
+  const onPopupOpened = useCallback(
+    (id: string, label: string) => {
+      sendRT({
+        type: "OPEN_POPUP",
+        payload: { id, label },
+        clientId: clientIdRef.current,
+        ts: Date.now(),
+      });
+    },
+    [sendRT]
+  );
+
+  const onPopupClosed = useCallback(
+    (id: string) => {
+      sendRT({
+        type: "CLOSE_POPUP",
+        payload: { id },
+        clientId: clientIdRef.current,
+        ts: Date.now(),
+      });
+    },
+    [sendRT]
+  );
 
   // --- Load by ?project=<id> ---
   const searchParams = useSearchParams();
   const loadedFromQuery = useRef(false);
 
-  
   useEffect(() => {
     const pid = searchParams.get("project");
     if (!pid || loadedFromQuery.current) return;
@@ -220,6 +245,14 @@ export default function GraphPage() {
         setHiddenMap(hm);
 
         setStatus(`Loaded "${data.name}"`);
+
+        // If project stored open popups, open them locally
+        const openList = Array.isArray(g.openPopups) ? g.openPopups : [];
+        if (openList.length) {
+          setTimeout(() => {
+            openList.forEach((pp: any) => graphRef.current?.openPopup?.(pp.id, pp.label));
+          }, 0);
+        }
       } catch (e: any) {
         console.error(e);
         setStatus(e.message || "Failed to load project");
@@ -255,6 +288,7 @@ export default function GraphPage() {
               elements: graphRef.current?.exportElementsWithPositions?.() ?? elements,
               files,
               hiddenIds,
+              openPopups: graphRef.current?.getOpenPopups?.() ?? [],
             };
             sendRT({
               type: "SNAPSHOT",
@@ -300,6 +334,7 @@ export default function GraphPage() {
                     elements: graphRef.current?.exportElementsWithPositions?.() ?? elements,
                     files,
                     hiddenIds,
+                    openPopups: graphRef.current?.getOpenPopups?.() ?? [],
                   };
                   sendRT({
                     type: "SNAPSHOT",
@@ -325,6 +360,14 @@ export default function GraphPage() {
                 const hm = Object.fromEntries((g.hiddenIds || []).map((id: string) => [id, true]));
                 setHiddenMap(hm);
                 setStatus((s) => (s.includes("• Live") ? s : `${s} • Live`));
+
+                // Open any shared popups from the snapshot
+                const openList = Array.isArray(g.openPopups) ? g.openPopups : [];
+                if (openList.length) {
+                  setTimeout(() => {
+                    openList.forEach((pp: any) => graphRef.current?.openPopup?.(pp.id, pp.label));
+                  }, 0);
+                }
 
                 // Got a good snapshot → cancel our pending fallback
                 if (pendingSelfSnapshotTimer.current) {
@@ -362,6 +405,20 @@ export default function GraphPage() {
                 if (!id || !position) break;
                 // smooth, light-weight: update Cytoscape directly (no full state churn)
                 graphRef.current?.applyLiveMove(id, position, { animate: true });
+                break;
+              }
+
+              case "OPEN_POPUP": {
+                const { id, label } = msg.payload || {};
+                if (!id) break;
+                graphRef.current?.openPopup?.(id, label);
+                break;
+              }
+
+              case "CLOSE_POPUP": {
+                const payload = msg.payload || {};
+                if (!payload.id) break;
+                graphRef.current?.closePopup?.(payload.id);
                 break;
               }
 
@@ -467,7 +524,8 @@ export default function GraphPage() {
               tree,
               elements: graphRef.current?.exportElementsWithPositions?.() ?? elements,
               files,
-              hiddenIds
+              hiddenIds,
+              openPopups: graphRef.current?.getOpenPopups?.() ?? [],
             }}
             onSaved={(p) => {
               setProject(p);
@@ -486,7 +544,8 @@ export default function GraphPage() {
                       tree,
                       elements: graphRef.current?.exportElementsWithPositions?.() ?? elements,
                       files,
-                      hiddenIds
+                      hiddenIds,
+                      openPopups: graphRef.current?.getOpenPopups?.() ?? [],
                     }
                   },
                   clientId: clientIdRef.current,
@@ -510,6 +569,13 @@ export default function GraphPage() {
                 const hm = Object.fromEntries((g.hiddenIds || []).map((id: string) => [id, true]));
                 setHiddenMap(hm);
                 setStatus(`Loaded "${p.name}"`);
+                // If stored, open shared popups
+                const openList = Array.isArray(g.openPopups) ? g.openPopups : [];
+                if (openList.length) {
+                  setTimeout(() => {
+                    openList.forEach((pp: any) => graphRef.current?.openPopup?.(pp.id, pp.label));
+                  }, 0);
+                }
               } catch (e) {
                 console.error("Failed to load project graph", e);
                 setStatus("Failed to load project graph");
@@ -546,8 +612,10 @@ export default function GraphPage() {
           files={files}
           onHideNode={onHideNode}
           onUpdateFile={onUpdateFile}
-          onMoveNode={onMoveNode}       // throttled while dragging (12 fps)
+          onMoveNode={onMoveNode}       // throttled while dragging (12-20 fps)
           onMoveCommit={onMoveCommit}   // single precise commit on release
+          onPopupOpened={onPopupOpened} // 🔴 broadcast open
+          onPopupClosed={onPopupClosed} // 🔴 broadcast close
         />
       </section>
     </main>

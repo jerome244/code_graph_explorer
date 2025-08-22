@@ -41,6 +41,18 @@ export default async function HomePage() {
           >
             Go to Graph
           </Link>
+          <Link
+            href="/pong"
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid #e5e7eb",
+              textDecoration: "none",
+              fontWeight: 600,
+            }}
+          >
+            Play Pong (realtime)
+          </Link>
 
           {me ? (
             <form action="/api/users/logout" method="post">

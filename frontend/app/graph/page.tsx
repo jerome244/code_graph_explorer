@@ -1,4 +1,4 @@
-// app/graph/page.tsx
+// frontend/app/graph/page.tsx
 "use client";
 
 import Link from "next/link";
@@ -10,10 +10,11 @@ import type { TreeNode } from "@/lib/fileTree";
 import TreeView from "@/components/file-tree/TreeView";
 import ZipUpload from "@/components/upload/ZipUpload";
 import GitHubImport from "@/components/upload/GitHubImport";
-import { treeToCy } from "@/lib/cyto"; // must accept (tree, files)
+import { treeToCy } from "@/lib/cyto";
 import SaveButton from "@/components/projects/SaveButton";
 import ProjectsDropdown from "@/components/projects/ProjectsDropdown";
 import ShareButton from "@/components/projects/ShareButton";
+import { useProjectSocket } from "@/lib/useProjectSocket";
 
 const CytoGraph = dynamic(() => import("@/components/graph/CytoGraph"), { ssr: false });
 
@@ -27,31 +28,6 @@ type Project = {
   updated_at: string;
 };
 
-// ---- Realtime types/helpers ----
-type RealtimeOp =
-  | { type: "UPDATE_FILE"; payload: { path: string; content: string } }
-  | { type: "HIDE_NODE"; payload: { path: string; hidden: boolean } }
-  | { type: "MOVE_NODE"; payload: { id: string; position: { x: number; y: number } } } // <-- NEW
-  | { type: "SNAPSHOT"; payload: { graph: any } }
-  | { type: "PING" }
-  | { type: "PONG" };
-
-type RealtimeMessage = RealtimeOp & { clientId?: string; ts?: number };
-
-const WS_BASE =
-  process.env.NEXT_PUBLIC_WS_BASE?.replace(/\/$/, "") ||
-  (typeof window !== "undefined"
-    ? `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`
-    : "");
-
-function uuid(): string {
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
-
 export default function GraphPage() {
   const [tree, setTree] = useState<TreeNode>({ name: "root", path: "", kind: "folder", children: [] });
   const [elements, setElements] = useState<ElementDefinition[]>([]);
@@ -63,78 +39,90 @@ export default function GraphPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [projectName, setProjectName] = useState<string>("My Code Graph");
 
-  // Realtime
-  const clientIdRef = useRef<string>(uuid());
-  const wsRef = useRef<WebSocket | null>(null);
-  const wsHeartbeatRef = useRef<number | null>(null);
-  const reconnectTimerRef = useRef<number | null>(null);
-  const lastPongRef = useRef<number>(0);
-
   const hiddenIds = useMemo(() => Object.keys(hiddenMap).filter((k) => hiddenMap[k]), [hiddenMap]);
 
+  // --- Hook up realtime (only activates when project?.id is set) ---
+  const { send, status: wsStatus, peers } = useProjectSocket(project?.id ?? "", {
+    onSnapshot: ({ graph }) => {
+      const g = graph || {};
+      setTree(g.tree || { name: "root", path: "", kind: "folder", children: [] });
+      setElements(g.elements || []);
+      setFiles(g.files || {});
+      const hm = Object.fromEntries((g.hiddenIds || []).map((id: string) => [id, true]));
+      setHiddenMap(hm);
+    },
+    onUpdateFile: (path, content) => {
+      setFiles((prev) => {
+        const next = { ...prev, [path]: content };
+        try {
+          const res = treeToCy(tree, next) as any;
+          const newEls: ElementDefinition[] = Array.isArray(res) ? res : res.elements;
+          setElements(newEls);
+        } catch (e) {
+          console.error("Rebuild graph failed:", e);
+        }
+        return next;
+      });
+    },
+    onHideNode: (path, hidden) => setHiddenMap((prev) => ({ ...prev, [path]: hidden })),
+    onMoveNode: (id, position) => {
+      setElements((prev) =>
+        prev.map((el) => {
+          const data: any = (el as any).data;
+          return data?.id === id ? { ...el, position } : el;
+        })
+      );
+    },
+    onStatusChange: (st) => {
+      if (st === "open") setStatus((s) => (s.includes("• Live") ? s : `${s} • Live`));
+    },
+  });
+
   // ---- Parsing callbacks ----
-  const onParsed = useCallback((res: { tree: TreeNode; elements: ElementDefinition[]; count: number; files: Record<string, string> }) => {
-    setTree(res.tree);
-    setElements(res.elements);
-    setFiles(res.files);
-    setHiddenMap({}); // reset hidden toggles on new upload/import
-    setStatus(`${res.count} files loaded`);
-    // Reset current project context on new dataset
-    setProject(null);
-    setProjectName("My Code Graph");
-  }, []);
+  const onParsed = useCallback(
+    (res: { tree: TreeNode; elements: ElementDefinition[]; count: number; files: Record<string, string> }) => {
+      setTree(res.tree);
+      setElements(res.elements);
+      setFiles(res.files);
+      setHiddenMap({}); // reset
+      setStatus(`${res.count} files loaded`);
+      // Reset current project context on new dataset
+      setProject(null);
+      setProjectName("My Code Graph");
+    },
+    []
+  );
 
   const onToggleFile = useCallback(
     (path: string) => {
       setHiddenMap((prev) => {
         const nextHidden = !prev[path];
-        if (project?.id && wsRef.current && wsRef.current.readyState === 1) {
-          const msg: RealtimeMessage = {
-            type: "HIDE_NODE",
-            payload: { path, hidden: nextHidden },
-            clientId: clientIdRef.current,
-            ts: Date.now(),
-          };
-          wsRef.current.send(JSON.stringify(msg));
+        if (project?.id) {
+          send({ type: "HIDE_NODE", payload: { path, hidden: nextHidden } });
         }
         return { ...prev, [path]: nextHidden };
       });
     },
-    [project?.id]
+    [project?.id, send]
   );
 
-  // Right-click in graph → hide in tree
   const onHideNode = useCallback(
     (path: string) => {
       setHiddenMap((prev) => {
-        if (project?.id && wsRef.current && wsRef.current.readyState === 1) {
-          const msg: RealtimeMessage = {
-            type: "HIDE_NODE",
-            payload: { path, hidden: true },
-            clientId: clientIdRef.current,
-            ts: Date.now(),
-          };
-          wsRef.current.send(JSON.stringify(msg));
+        if (project?.id) {
+          send({ type: "HIDE_NODE", payload: { path, hidden: true } });
         }
         return { ...prev, [path]: true };
       });
     },
-    [project?.id]
+    [project?.id, send]
   );
 
-  // When a popup edit occurs, update file text and rebuild edges/lines
   const onUpdateFile = useCallback(
     (path: string, content: string) => {
-      if (project?.id && wsRef.current && wsRef.current.readyState === 1) {
-        const msg: RealtimeMessage = {
-          type: "UPDATE_FILE",
-          payload: { path, content },
-          clientId: clientIdRef.current,
-          ts: Date.now(),
-        };
-        wsRef.current.send(JSON.stringify(msg));
+      if (project?.id) {
+        send({ type: "UPDATE_FILE", payload: { path, content } });
       }
-
       setFiles((prev) => {
         const nextFiles = { ...prev, [path]: content };
         try {
@@ -147,34 +135,23 @@ export default function GraphPage() {
         return nextFiles;
       });
     },
-    [tree, project?.id]
+    [tree, project?.id, send]
   );
 
-  // --- NEW: Move node handler (dragging)
   const onMoveNode = useCallback(
     (id: string, position: { x: number; y: number }) => {
-      // broadcast
-      if (project?.id && wsRef.current && wsRef.current.readyState === 1) {
-        const msg: RealtimeMessage = {
-          type: "MOVE_NODE",
-          payload: { id, position },
-          clientId: clientIdRef.current,
-          ts: Date.now(),
-        };
-        wsRef.current.send(JSON.stringify(msg));
+      if (project?.id) {
+        send({ type: "MOVE_NODE", payload: { id, position } });
       }
-      // optimistic local update
+      // Optimistic local update
       setElements((prev) =>
         prev.map((el) => {
           const data: any = (el as any).data;
-          if (data?.id === id) {
-            return { ...el, position };
-          }
-          return el;
+          return data?.id === id ? { ...el, position } : el;
         })
       );
     },
-    [project?.id]
+    [project?.id, send]
   );
 
   // --- Load by ?project=<id> ---
@@ -211,144 +188,12 @@ export default function GraphPage() {
     })();
   }, [searchParams]);
 
-  // ---- Realtime: connect when a project is present ----
-  const connectSocket = useCallback(
-    (projectId: string) => {
-      if (!WS_BASE) return;
-
-      const url = `${WS_BASE}/ws/projects/${encodeURIComponent(projectId)}/`;
-      try {
-        const ws = new WebSocket(url);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          setStatus((s) => (s.includes("• Live") ? s : `${s} • Live`));
-          // send an initial snapshot so latecomers can sync quickly (optional)
-          const snapshot: RealtimeMessage = {
-            type: "SNAPSHOT",
-            payload: { graph: { tree, elements, files, hiddenIds } },
-            clientId: clientIdRef.current,
-            ts: Date.now(),
-          };
-          ws.send(JSON.stringify(snapshot));
-
-          // Heartbeat
-          lastPongRef.current = Date.now();
-          if (wsHeartbeatRef.current) window.clearInterval(wsHeartbeatRef.current);
-          wsHeartbeatRef.current = window.setInterval(() => {
-            if (ws.readyState !== 1) return;
-            const ping: RealtimeMessage = { type: "PING", clientId: clientIdRef.current, ts: Date.now() };
-            ws.send(JSON.stringify(ping));
-            if (Date.now() - lastPongRef.current > 30000) {
-              ws.close();
-            }
-          }, 10000) as unknown as number;
-        };
-
-        ws.onmessage = (e) => {
-          try {
-            const msg: RealtimeMessage = JSON.parse(e.data);
-            if (msg.clientId && msg.clientId === clientIdRef.current) return;
-
-            switch (msg.type) {
-              case "PONG":
-                lastPongRef.current = Date.now();
-                break;
-              case "SNAPSHOT": {
-                const g = msg.payload.graph || {};
-                setTree(g.tree || { name: "root", path: "", kind: "folder", children: [] });
-                setElements(g.elements || []);
-                setFiles(g.files || {});
-                const hm = Object.fromEntries((g.hiddenIds || []).map((id: string) => [id, true]));
-                setHiddenMap(hm);
-                setStatus((s) => (s.includes("• Live") ? s : `${s} • Live`));
-                break;
-              }
-              case "UPDATE_FILE": {
-                const { path, content } = msg.payload as any;
-                setFiles((prev) => {
-                  const next = { ...prev, [path]: content };
-                  try {
-                    const res = treeToCy(tree, next) as any;
-                    const newEls: ElementDefinition[] = Array.isArray(res) ? res : res.elements;
-                    setElements(newEls);
-                  } catch (err) {
-                    console.error("Rebuild graph failed:", err);
-                  }
-                  return next;
-                });
-                break;
-              }
-              case "HIDE_NODE": {
-                const { path, hidden } = msg.payload as any;
-                setHiddenMap((prev) => ({ ...prev, [path]: hidden }));
-                break;
-              }
-              case "MOVE_NODE": {
-                const { id, position } = msg.payload as any;
-                setElements((prev) =>
-                  prev.map((el) => {
-                    const data: any = (el as any).data;
-                    if (data?.id === id) {
-                      return { ...el, position };
-                    }
-                    return el;
-                  })
-                );
-                break;
-              }
-              default:
-                break;
-            }
-          } catch (err) {
-            console.error("WS message parse/apply error:", err);
-          }
-        };
-
-        ws.onclose = () => {
-          if (wsHeartbeatRef.current) {
-            window.clearInterval(wsHeartbeatRef.current);
-            wsHeartbeatRef.current = null;
-          }
-          if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
-          reconnectTimerRef.current = window.setTimeout(() => {
-            if (project?.id) connectSocket(project.id);
-          }, 2000) as unknown as number;
-        };
-
-        ws.onerror = () => {
-          /* let onclose handle reconnect */
-        };
-      } catch (err) {
-        console.error("WebSocket connect error:", err);
-      }
-    },
-    [hiddenIds, files, elements, tree, project?.id]
-  );
-
-  // Manage lifecycle for realtime
+  // Send a snapshot when the socket opens (optional)
   useEffect(() => {
-    if (!project?.id) {
-      if (wsRef.current && wsRef.current.readyState === 1) wsRef.current.close();
-      return;
+    if (wsStatus === "open" && project?.id) {
+      send({ type: "SNAPSHOT", payload: { graph: { tree, elements, files, hiddenIds } } });
     }
-    connectSocket(project.id);
-    return () => {
-      if (wsHeartbeatRef.current) {
-        window.clearInterval(wsHeartbeatRef.current);
-        wsHeartbeatRef.current = null;
-      }
-      if (reconnectTimerRef.current) {
-        window.clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
-      if (wsRef.current) {
-        try {
-          wsRef.current.close();
-        } catch {}
-      }
-    };
-  }, [project?.id, connectSocket]);
+  }, [wsStatus, project?.id, tree, elements, files, hiddenIds, send]);
 
   return (
     <main style={{ display: "grid", gridTemplateColumns: "280px 1fr", height: "100vh" }}>
@@ -360,7 +205,12 @@ export default function GraphPage() {
             Home
           </Link>
         </div>
-        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>{status}</div>
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+          {status}
+          {project?.id ? (
+            <span> • Socket: {wsStatus}{peers ? ` • Peers: ${peers}` : ""}</span>
+          ) : null}
+        </div>
         <TreeView root={tree} hiddenMap={hiddenMap} onToggleFile={onToggleFile} />
       </aside>
 
@@ -405,14 +255,8 @@ export default function GraphPage() {
               } catch {
                 setStatus((s) => (s.includes("• Live") ? "Saved • Live" : "Saved • Live"));
               }
-              if (p?.id && wsRef.current && wsRef.current.readyState === 1) {
-                const snapshot: RealtimeMessage = {
-                  type: "SNAPSHOT",
-                  payload: { graph: { tree, elements, files, hiddenIds } },
-                  clientId: clientIdRef.current,
-                  ts: Date.now(),
-                };
-                wsRef.current.send(JSON.stringify(snapshot));
+              if (p?.id) {
+                send({ type: "SNAPSHOT", payload: { graph: { tree, elements, files, hiddenIds } } });
               }
             }}
           />
@@ -440,7 +284,6 @@ export default function GraphPage() {
                 setProject(null);
                 setProjectName("My Code Graph");
                 setStatus("Project deleted");
-                if (wsRef.current && wsRef.current.readyState === 1) wsRef.current.close();
               }
             }}
             onRenamed={(p) => {
@@ -465,7 +308,7 @@ export default function GraphPage() {
           files={files}
           onHideNode={onHideNode}
           onUpdateFile={onUpdateFile}
-          onMoveNode={onMoveNode} // <-- NEW
+          onMoveNode={onMoveNode}
         />
       </section>
     </main>

@@ -110,11 +110,6 @@ CSRF_TRUSTED_ORIGINS = os.getenv(
     "CSRF_TRUSTED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
 ).split(",")
 
-# settings.py
-ASGI_APPLICATION = "config.asgi.application"
-CHANNEL_LAYERS = {
-  "default": {"BACKEND": "channels_redis.core.RedisChannelLayer", "CONFIG": {"hosts": ["redis://localhost:6379"]}}
-}
 
 ASGI_APPLICATION = "config.asgi.application"
 

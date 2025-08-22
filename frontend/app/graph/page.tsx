@@ -1,5 +1,4 @@
 // app/graph/page.tsx
-// (updated from your original) :contentReference[oaicite:0]{index=0}
 "use client";
 
 import Link from "next/link";
@@ -39,7 +38,11 @@ type RealtimeOp =
   | { type: "OPEN_POPUP"; payload: { id: string; label?: string } }
   | { type: "CLOSE_POPUP"; payload: { id: string } }
   | { type: "PING" }
-  | { type: "PONG" };
+  | { type: "PONG" }
+  // presence & cursors
+  | { type: "USER_JOIN"; payload: { name?: string } }
+  | { type: "USER_LEAVE"; payload: {} }
+  | { type: "CURSOR_MOVE"; payload: { position: { x: number; y: number }; name?: string } };
 
 type RealtimeMessage = RealtimeOp & { clientId?: string; ts?: number };
 
@@ -55,6 +58,12 @@ function uuid(): string {
     const v = c === "x" ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
+}
+
+function colorForClient(id: string) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 360;
+  return `hsl(${h}, 90%, 55%)`;
 }
 
 export default function GraphPage() {
@@ -80,6 +89,27 @@ export default function GraphPage() {
   const graphRef = useRef<CytoGraphHandle | null>(null);
 
   const hiddenIds = useMemo(() => Object.keys(hiddenMap).filter((k) => hiddenMap[k]), [hiddenMap]);
+
+  // 🆕 Keep latest graph bits in refs so the WS connector can stay stable
+  const treeRef = useRef(tree);
+  const elementsRef = useRef(elements);
+  const filesRef = useRef(files);
+  const hiddenIdsRef = useRef(hiddenIds);
+  useEffect(() => { treeRef.current = tree; }, [tree]);
+  useEffect(() => { elementsRef.current = elements; }, [elements]);
+  useEffect(() => { filesRef.current = files; }, [files]);
+  useEffect(() => { hiddenIdsRef.current = hiddenIds; }, [hiddenIds]);
+
+  // 🆕 Deduped presence: who we've seen in the room
+  const peersRef = useRef<Map<string, { name?: string; lastSeen: number }>>(new Map());
+
+  // ---- tiny toasts ----
+  const [toasts, setToasts] = useState<{ id: string; text: string }[]>([]);
+  const pushToast = (text: string) => {
+    const id = uuid();
+    setToasts((t) => [...t, { id, text }]);
+    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3500);
+  };
 
   // ---- Parsing callbacks ----
   const onParsed = useCallback((res: { tree: TreeNode; elements: ElementDefinition[]; count: number; files: Record<string, string> }) => {
@@ -273,6 +303,16 @@ export default function GraphPage() {
         ws.onopen = () => {
           setStatus((s) => (s.includes("• Live") ? s : `${s} • Live`));
 
+          // announce presence
+          sendRT({
+            type: "USER_JOIN",
+            payload: { name: `Guest-${clientIdRef.current.slice(0, 4)}` },
+            clientId: clientIdRef.current,
+            ts: Date.now(),
+          });
+          // 🆕 record self to avoid any accidental duplicate toasts
+          peersRef.current.set(clientIdRef.current, { name: `Guest-${clientIdRef.current.slice(0, 4)}`, lastSeen: Date.now() });
+
           // Ask collaborators for the latest state (late joiner pull)
           sendRT({
             type: "REQUEST_SNAPSHOT",
@@ -284,10 +324,10 @@ export default function GraphPage() {
           // Fallback: if no one answers quickly, broadcast our own snapshot
           pendingSelfSnapshotTimer.current = window.setTimeout(() => {
             const graph = {
-              tree,
-              elements: graphRef.current?.exportElementsWithPositions?.() ?? elements,
-              files,
-              hiddenIds,
+              tree: treeRef.current,
+              elements: graphRef.current?.exportElementsWithPositions?.() ?? elementsRef.current,
+              files: filesRef.current,
+              hiddenIds: hiddenIdsRef.current,
               openPopups: graphRef.current?.getOpenPopups?.() ?? [],
             };
             sendRT({
@@ -298,17 +338,23 @@ export default function GraphPage() {
             });
           }, 600) as unknown as number;
 
-          // Heartbeat
+          // Heartbeat (🆕 no forced close if no PONG)
           lastPongRef.current = Date.now();
           if (wsHeartbeatRef.current) window.clearInterval(wsHeartbeatRef.current);
           wsHeartbeatRef.current = window.setInterval(() => {
             if (ws.readyState !== 1) return;
             const ping: RealtimeMessage = { type: "PING", clientId: clientIdRef.current, ts: Date.now() };
-            ws.send(JSON.stringify(ping));
-            if (Date.now() - lastPongRef.current > 30000) {
-              ws.close();
-            }
+            try { ws.send(JSON.stringify(ping)); } catch {}
           }, 10000) as unknown as number;
+
+          // best-effort leave notice
+          const onLeave = () => {
+            try {
+              ws.send(JSON.stringify({ type: "USER_LEAVE", payload: {}, clientId: clientIdRef.current, ts: Date.now() }));
+            } catch {}
+          };
+          window.addEventListener("beforeunload", onLeave);
+          window.addEventListener("pagehide", onLeave);
         };
 
         ws.onmessage = (e) => {
@@ -323,6 +369,37 @@ export default function GraphPage() {
                 lastPongRef.current = Date.now();
                 break;
 
+              // presence + cursors
+              case "USER_JOIN": {
+                const id = msg.clientId || "";
+                const name = msg.payload?.name || `Guest-${id.slice(0, 4)}`;
+                const now = Date.now();
+                const last = peersRef.current.get(id)?.lastSeen ?? 0;
+                // 🆕 toast only if brand new or stale (>60s)
+                if (!last || now - last > 60_000) {
+                  pushToast(`${name} joined`);
+                }
+                peersRef.current.set(id, { name, lastSeen: now });
+                break;
+              }
+              case "USER_LEAVE": {
+                const id = msg.clientId || "";
+                const name = peersRef.current.get(id)?.name || `Guest-${id.slice(0, 4)}`;
+                pushToast(`${name} left`);
+                peersRef.current.delete(id);
+                if (id) graphRef.current?.removeRemoteCursor?.(id);
+                break;
+              }
+              case "CURSOR_MOVE": {
+                const { position, name } = msg.payload || {};
+                if (!position || !msg.clientId) break;
+                graphRef.current?.updateRemoteCursor?.(msg.clientId, position, {
+                  name: name || `Guest-${msg.clientId.slice(0, 4)}`,
+                  color: colorForClient(msg.clientId),
+                });
+                break;
+              }
+
               case "REQUEST_SNAPSHOT": {
                 const requesterId = msg.payload?.requesterId;
                 if (!requesterId) break;
@@ -330,10 +407,10 @@ export default function GraphPage() {
                 const jitter = 80 + Math.floor(Math.random() * 120);
                 setTimeout(() => {
                   const graph = {
-                    tree,
-                    elements: graphRef.current?.exportElementsWithPositions?.() ?? elements,
-                    files,
-                    hiddenIds,
+                    tree: treeRef.current,
+                    elements: graphRef.current?.exportElementsWithPositions?.() ?? elementsRef.current,
+                    files: filesRef.current,
+                    hiddenIds: hiddenIdsRef.current,
                     openPopups: graphRef.current?.getOpenPopups?.() ?? [],
                   };
                   sendRT({
@@ -383,7 +460,7 @@ export default function GraphPage() {
                 setFiles((prev) => {
                   const next = { ...prev, [path]: content };
                   try {
-                    const res = treeToCy(tree, next) as any;
+                    const res = treeToCy(treeRef.current, next) as any;
                     const newEls: ElementDefinition[] = Array.isArray(res) ? res : res.elements;
                     setElements(newEls);
                   } catch (err) {
@@ -448,7 +525,7 @@ export default function GraphPage() {
         console.error("WebSocket connect error:", err);
       }
     },
-    [hiddenIds, files, elements, tree, project?.id, sendRT]
+    [] // 🆕 stable: no deps; uses *_Ref for the latest data
   );
 
   // Manage lifecycle for realtime
@@ -473,7 +550,7 @@ export default function GraphPage() {
         } catch {}
       }
     };
-  }, [project?.id, connectSocket]);
+  }, [project?.id]); // 🆕 no connectSocket dep to avoid churn
 
   return (
     <main style={{ display: "grid", gridTemplateColumns: "280px 1fr", height: "100vh" }}>
@@ -614,10 +691,39 @@ export default function GraphPage() {
           onUpdateFile={onUpdateFile}
           onMoveNode={onMoveNode}       // throttled while dragging (12-20 fps)
           onMoveCommit={onMoveCommit}   // single precise commit on release
-          onPopupOpened={onPopupOpened} // 🔴 broadcast open
-          onPopupClosed={onPopupClosed} // 🔴 broadcast close
+          onPopupOpened={onPopupOpened} // broadcast open
+          onPopupClosed={onPopupClosed} // broadcast close
+          // stream local cursor to peers
+          onCursorMove={(position) => {
+            sendRT({
+              type: "CURSOR_MOVE",
+              payload: { position, name: `Guest-${clientIdRef.current.slice(0, 4)}` },
+              clientId: clientIdRef.current,
+              ts: Date.now(),
+            });
+          }}
         />
       </section>
+
+      {/* Presence toasts */}
+      <div style={{ position: "fixed", top: 12, right: 12, display: "grid", gap: 8, zIndex: 99999 }}>
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            style={{
+              background: "#ffffff",
+              border: "1px solid #e5e7eb",
+              borderRadius: 8,
+              padding: "8px 10px",
+              fontSize: 12,
+              boxShadow: "0 6px 16px rgba(0,0,0,0.12)",
+              minWidth: 140,
+            }}
+          >
+            {t.text}
+          </div>
+        ))}
+      </div>
     </main>
   );
 }

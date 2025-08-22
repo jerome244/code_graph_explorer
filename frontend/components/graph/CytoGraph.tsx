@@ -1,5 +1,4 @@
 // components/graph/CytoGraph.tsx
-// (updated from your original) :contentReference[oaicite:1]{index=1}
 "use client";
 
 import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
@@ -15,6 +14,9 @@ export type CytoGraphHandle = {
   closePopup: (id: string) => void;
   /** List of currently open popups for snapshots */
   getOpenPopups: () => { id: string; label: string }[];
+  /** 🆕 collaborator cursors */
+  updateRemoteCursor: (clientId: string, pos: { x: number; y: number }, meta?: { name?: string; color?: string }) => void;
+  removeRemoteCursor: (clientId: string) => void;
 };
 
 type Popup = { id: string; label: string };
@@ -57,6 +59,13 @@ function throttle<T extends (...args: any[]) => void>(fn: T, ms = 60): T {
   } as T;
 }
 
+// 🆕 deterministic color (fallback if not provided by caller)
+function colorFromId(id: string) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 360;
+  return `hsl(${h}, 90%, 55%)`;
+}
+
 type Props = {
   elements: ElementDefinition[] | { elements: ElementDefinition[] } | any;
   hiddenIds?: string[];
@@ -69,6 +78,8 @@ type Props = {
   /** Notify parent when a popup is opened/closed locally so it can broadcast */
   onPopupOpened?: (id: string, label: string) => void;
   onPopupClosed?: (id: string) => void;
+  /** 🆕 stream local mouse model-coordinates to the parent for WS broadcast */
+  onCursorMove?: (pos: { x: number; y: number }) => void;
 };
 
 const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
@@ -83,6 +94,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
     onMoveCommit,
     onPopupOpened,
     onPopupClosed,
+    onCursorMove,
   },
   ref
 ) {
@@ -272,6 +284,31 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
   // color panel state for rectangles
   const [colorPanel, setColorPanel] = useState<{ id: string; x: number; y: number; color: string } | null>(null);
   const presetColors = ["#fde68a", "#fca5a5", "#93c5fd", "#bbf7d0", "#e9d5ff", "#fef08a", "#fecaca", "#a7f3d0", "#c7d2fe"];
+
+  // 🆕 remote cursor state
+  type RemoteCursor = { id: string; name?: string; color: string; pos: { x: number; y: number }; last: number };
+  const cursorsRef = useRef<Map<string, RemoteCursor>>(new Map());
+  const [cursorTick, setCursorTick] = useState(0);
+  const touchCursor = (id: string, pos: { x: number; y: number }, meta?: { name?: string; color?: string }) => {
+    const m = new Map(cursorsRef.current);
+    const prev = m.get(id);
+    m.set(id, {
+      id,
+      pos,
+      name: meta?.name ?? prev?.name,
+      color: meta?.color ?? prev?.color ?? colorFromId(id),
+      last: Date.now(),
+    });
+    cursorsRef.current = m;
+    setCursorTick(t => t + 1);
+  };
+  const dropCursor = (id: string) => {
+    if (!cursorsRef.current.has(id)) return;
+    const m = new Map(cursorsRef.current);
+    m.delete(id);
+    cursorsRef.current = m;
+    setCursorTick(t => t + 1);
+  };
 
   // ── Cytoscape init ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -468,7 +505,14 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
       };
       cy.on("free", "node", onFreeCommit);
 
-      // rAF-throttled follow-ups for overlays
+      // 🆕 Local mouse move → broadcast model coords (20 fps)
+      const onMouseMove = throttle((evt: any) => {
+        if (!evt || !evt.position) return;
+        onCursorMove?.(evt.position);
+      }, Math.round(1000 / 20));
+      cy.on("mousemove", onMouseMove as any);
+
+      // rAF-throttled follow-ups for overlays (popups, handles, labels, color panel)
       let raf = 0;
       const schedule = () => {
         if (raf) return;
@@ -504,6 +548,8 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
               }
             }
           }
+          // 🆕 also bump cursor overlay projection on pan/zoom/position/render changes
+          setCursorTick(t => t + 1);
           scheduleConnections();
         });
       };
@@ -549,9 +595,10 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         cy.off("free", "node", schedule);
         cy.off("drag", "node", onDrag);
         cy.off("free", "node", onFreeCommit);
+        cy.off("mousemove", onMouseMove as any);
       };
     })();
-  }, [onNodeSelect, onHideNode, onMoveNode, onMoveCommit, labelEdit?.id, colorPanel?.id, onPopupOpened, onPopupClosed, popups]);
+  }, [onNodeSelect, onHideNode, onMoveNode, onMoveCommit, labelEdit?.id, colorPanel?.id, onPopupOpened, onPopupClosed, popups, onCursorMove]);
 
   // ── Preserve positions on updates; layout only when node set changes ──
   const prevNodeIdsRef = useRef<Set<string>>(new Set());
@@ -768,7 +815,71 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
     getOpenPopups() {
       return popups;
     },
+    // 🆕 cursor API
+    updateRemoteCursor(clientId, pos, meta) {
+      touchCursor(clientId, pos, meta);
+    },
+    removeRemoteCursor(clientId) {
+      dropCursor(clientId);
+    },
   }), [els, popups]);
+
+  // 🆕 Remote cursor overlay projection
+  const cursorOverlay = useMemo(() => {
+    const cy = cyRef.current;
+    if (!cy) return null;
+    const { x: panX, y: panY } = cy.pan();
+    const zoom = cy.zoom();
+    const now = Date.now();
+    const cursors = Array.from(cursorsRef.current.values());
+    return cursors.map((c) => {
+      const age = now - c.last;
+      if (age > 4000) return null; // fadeout after 4s idle
+      const rx = c.pos.x * zoom + panX;
+      const ry = c.pos.y * zoom + panY;
+      const alpha = age > 3000 ? 1 - (age - 3000) / 1000 : 1;
+      return (
+        <div key={c.id} style={{ position: "absolute", transform: `translate(${rx}px, ${ry}px)`, opacity: alpha }}>
+          <div
+            style={{
+              transform: "translate(8px, -4px)",
+              padding: "2px 6px",
+              borderRadius: 6,
+              fontSize: 11,
+              background: "white",
+              border: "1px solid #e5e7eb",
+              boxShadow: "0 2px 6px rgba(0,0,0,0.08)",
+              color: "#111827",
+              pointerEvents: "none",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <span
+              style={{
+                display: "inline-block",
+                width: 8,
+                height: 8,
+                borderRadius: 999,
+                marginRight: 6,
+                background: c.color,
+              }}
+            />
+            {c.name ?? "Guest"}
+          </div>
+          <div
+            style={{
+              width: 0,
+              height: 0,
+              borderLeft: "6px solid transparent",
+              borderRight: "6px solid transparent",
+              borderTop: `10px solid ${c.color}`,
+              transform: "translate(0px, -2px)",
+            }}
+          />
+        </div>
+      );
+    });
+  }, [cursorTick]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
@@ -1120,6 +1231,11 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
           <button onClick={() => setColorPanel(null)} title="Close" style={{ ...btnStyle, padding: "2px 6px" }}>×</button>
         </div>
       )}
+
+      {/* 🆕 Remote cursor overlay, above lines */}
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 10001 }}>
+        {cursorOverlay}
+      </div>
 
       {/* Lines on top */}
       <svg width="100%" height="100%" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 9999 }}>

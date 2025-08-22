@@ -1,9 +1,13 @@
 // components/graph/CytoGraph.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { ElementDefinition } from "cytoscape";
 import { highlightSource } from "@/lib/analyze";
+
+export type CytoGraphHandle = {
+  applyLiveMove: (id: string, pos: { x: number; y: number }, opts?: { animate?: boolean }) => void;
+};
 
 type Popup = { id: string; label: string };
 type Conn = { x1: number; y1: number; x2: number; y2: number; color: string };
@@ -45,23 +49,30 @@ function throttle<T extends (...args: any[]) => void>(fn: T, ms = 60): T {
   } as T;
 }
 
-export default function CytoGraph({
-  elements,
-  hiddenIds = [],
-  files = {},
-  onNodeSelect,
-  onHideNode,     // right-click hide for non-rect nodes
-  onUpdateFile,   // save edits from popup
-  onMoveNode,     // 🔹 NEW: emit when a node moves (drag)
-}: {
-  elements: ElementDefinition[] | { elements: ElementDefinition[] } | any; // robust
+type Props = {
+  elements: ElementDefinition[] | { elements: ElementDefinition[] } | any;
   hiddenIds?: string[];
   files?: Record<string, string>;
   onNodeSelect?: (id: string) => void;
   onHideNode?: (id: string) => void;
   onUpdateFile?: (path: string, content: string) => void;
-  onMoveNode?: (id: string, position: { x: number; y: number }) => void;
-}) {
+  onMoveNode?: (id: string, position: { x: number; y: number }) => void;      // during drag (throttled)
+  onMoveCommit?: (id: string, position: { x: number; y: number }) => void;    // once on drag end
+};
+
+const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
+  {
+    elements,
+    hiddenIds = [],
+    files = {},
+    onNodeSelect,
+    onHideNode,
+    onUpdateFile,
+    onMoveNode,
+    onMoveCommit,
+  },
+  ref
+) {
   // normalize to always be an array
   const els: ElementDefinition[] = Array.isArray(elements)
     ? elements
@@ -96,7 +107,7 @@ export default function CytoGraph({
   const saveEdit = (id: string) => {
     const content = buffers[id];
     if (typeof content === "string") onUpdateFile?.(id, content);
-    cancelEdit(id); // keep this if you want to exit edit mode on save
+    cancelEdit(id);
   };
 
   // function names for highlight + lines
@@ -210,6 +221,7 @@ export default function CytoGraph({
         container: containerRef.current,
         elements: [],
         wheelSensitivity: 0.2,
+        layout: { name: "preset" }, // keep manual positions stable
         style: [
           // Base nodes (file nodes)
           {
@@ -300,12 +312,11 @@ export default function CytoGraph({
         setPalette(null);
         setColorPanel(null);
 
-        // 🔸 Keep rectangles and text as selection-only (no popup)
+        // rectangles & text: selection-only
         if (isAdhoc(n) && (isRect(n) || isText(n))) {
           return;
         }
 
-        // ✅ File nodes and plain adhoc "node" → toggle popup
         setPopups((prev) => {
           const open = prev.some((p) => p.id === id);
           if (open) {
@@ -332,12 +343,12 @@ export default function CytoGraph({
         });
       });
 
-      // Right click:
+      // Right click
       cy.on("cxttap", "node", (evt: any) => {
         const n = evt.target;
         const id = n.id();
 
-        // Rectangles: open color panel instead of hide/delete
+        // rectangles: open color panel
         if (isAdhoc(n) && isRect(n)) {
           const rp = evt.renderedPosition;
           const current = n.data("bg") || n.style("background-color") || "#fde68a";
@@ -345,7 +356,7 @@ export default function CytoGraph({
           return;
         }
 
-        // Others keep old behavior (hide)
+        // others: hide
         onHideNode?.(id);
         setPalette(null);
         setColorPanel(null);
@@ -355,11 +366,11 @@ export default function CytoGraph({
         scheduleConnections();
       });
 
-      // Double-click on empty background → open palette
+      // Double-click background → palette
       cy.on("dbltap", (evt: any) => {
-        if (evt.target !== cy) return; // background only
-        const rp = evt.renderedPosition; // px in container
-        const mp = evt.position;         // model coords
+        if (evt.target !== cy) return;
+        const rp = evt.renderedPosition;
+        const mp = evt.position;
         setPalette({ x: rp.x, y: rp.y, model: { x: mp.x, y: mp.y } });
         setColorPanel(null);
       });
@@ -377,14 +388,20 @@ export default function CytoGraph({
 
       const onPos = (e: any) => {
         const n = e.target;
-        // only while user is dragging, so we don't spam on initial layout
         if (n.grabbed()) {
           emitMove(n.id(), n.position());
         }
       };
       cy.on("position", "node", onPos);
 
-      // rAF-throttled reposition, handles, editors, panel follow, and lines overlay
+      // 🔹 Commit once on drag end
+      cy.on("dragfree", "node", (e: any) => {
+        const n = e.target;
+        const p = n.position();
+        onMoveCommit?.(n.id(), { x: p.x, y: p.y });
+      });
+
+      // rAF-throttled follow-ups for overlays
       let raf = 0;
       const schedule = () => {
         if (raf) return;
@@ -427,7 +444,7 @@ export default function CytoGraph({
       cy.on("position drag free", "node", schedule);
       window.addEventListener("resize", scheduleConnections);
 
-      // keyboard: Delete/Backspace removes selected adhoc nodes
+      // keyboard
       const onKey = (ev: KeyboardEvent) => {
         const ae = document.activeElement as HTMLElement | null;
         const tag = (ae?.tagName || "").toLowerCase();
@@ -463,19 +480,19 @@ export default function CytoGraph({
         cy.off("position", "node", schedule);
         cy.off("drag", "node", schedule);
         cy.off("free", "node", schedule);
-        cy.off("position", "node", onPos); // cleanup MOVE_NODE listener
+        cy.off("position", "node", onPos);
+        cy.off("dragfree", "node");
       };
     })();
-  }, [onNodeSelect, onHideNode, onMoveNode, labelEdit?.id, colorPanel?.id]);
+  }, [onNodeSelect, onHideNode, onMoveNode, onMoveCommit, labelEdit?.id, colorPanel?.id]);
 
-  // ── Preserve positions when els change; keep adhoc nodes; layout only on real change ──
+  // ── Preserve positions on updates; layout only when node set changes ──
   const prevNodeIdsRef = useRef<Set<string>>(new Set());
   const didInitialLayoutRef = useRef(false);
 
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
 
-    // Build new node id set from els
     const newNodeIds = new Set(
       (els || [])
         .filter((e: any) => (e.group ?? e?.data?.group ?? "nodes") === "nodes")
@@ -488,11 +505,11 @@ export default function CytoGraph({
       newNodeIds.size === prevNodeIds.size &&
       Array.from(newNodeIds).every((id) => prevNodeIds.has(id as string));
 
-    // Snapshot positions of existing non-adhoc nodes
+    // Snapshot current positions of existing non-adhoc nodes
     const currentPos = new Map<string, { x: number; y: number }>();
     cy.nodes(":not(.adhoc)").forEach((n: any) => currentPos.set(n.id(), n.position()));
 
-    // Gather incoming explicit positions from props (so remote MOVE_NODE can apply)
+    // Incoming explicit positions
     const incomingPos = new Map<string, { x: number; y: number }>();
     (els || []).forEach((e: any) => {
       if ((e.group ?? e?.data?.group ?? "nodes") !== "nodes") return;
@@ -503,20 +520,19 @@ export default function CytoGraph({
       }
     });
 
-    // Optionally capture current viewport (pan/zoom) — not strictly required
     const pan = cy.pan();
     const zoom = cy.zoom();
 
     cy.startBatch();
 
-    // Remove only non-adhoc elements, keep user-added shapes
+    // Remove only non-adhoc; preserve user shapes
     cy.elements(":not(.adhoc)").remove();
 
     // Re-add new elements
     if (els.length) cy.add(els);
 
     if (sameNodeSet && hadPrev) {
-      // Prefer explicit incoming positions; otherwise keep existing positions
+      // Prefer explicit incoming positions; else keep existing
       cy.nodes(":not(.adhoc)").forEach((n: any) => {
         const id = n.id();
         const pIncoming = incomingPos.get(id);
@@ -527,15 +543,13 @@ export default function CytoGraph({
       cy.pan(pan);
       cy.zoom(zoom);
     } else {
-      // First load or node set actually changed → run layout
+      // First load or changed node set → run layout once
       const layout = cy.layout({
         name: "cose",
         nodeDimensionsIncludeLabels: true,
         padding: 20,
       });
       layout.run();
-
-      // Only fit on the very first layout
       if (!didInitialLayoutRef.current) {
         cy.fit(undefined, 80);
         didInitialLayoutRef.current = true;
@@ -544,7 +558,6 @@ export default function CytoGraph({
 
     cy.endBatch();
 
-    // Update previous ids
     prevNodeIdsRef.current = newNodeIds;
 
     scheduleConnections();
@@ -557,7 +570,7 @@ export default function CytoGraph({
     cy.startBatch();
     cy.nodes().forEach((n: any) => { if (hideSet.has(n.id())) n.hide(); else n.show(); });
     cy.endBatch();
-    setPopups(prev => prev.filter(p => !hideSet.has(p.id)));
+    setPopups(prev => prev.filter(p => hideSet.has(p.id) ? false : true));
     setEditing(prev => { const next = new Set(prev); hiddenIds.forEach(id => next.delete(id)); return next; });
     setMutedPopups(prev => { const next = new Set(prev); hiddenIds.forEach(id => next.delete(id)); return next; });
     scheduleConnections();
@@ -640,6 +653,23 @@ export default function CytoGraph({
     setColorPanel(prev => (prev ? { ...prev, color } : prev));
   };
 
+  useImperativeHandle(ref, () => ({
+    applyLiveMove(id, pos, opts) {
+      const cy = cyRef.current;
+      if (!cy) return;
+      const n = cy.getElementById(id);
+      if (!n || !n.length) return;
+      // don't override while the local user is holding this node
+      if (n.grabbed && n.grabbed()) return;
+      if (opts?.animate) {
+        n.stop(true, false);
+        n.animate({ position: pos }, { duration: 80, easing: "linear" });
+      } else {
+        n.position(pos);
+      }
+    },
+  }), []);
+
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       {/* Cytoscape canvas */}
@@ -719,27 +749,27 @@ export default function CytoGraph({
                 <button onClick={() => closePopup(p.id)} title="Close" style={{ marginLeft: "auto", border: "none", background: "transparent", cursor: "pointer", padding: 0, lineHeight: 1, fontSize: 14 }}>×</button>
               </div>
 
-              {/* Scrollable code area with a line-number gutter that fills the popup */}
+              {/* Scrollable code area */}
               <div
                 className="popup-code"
                 style={{
                   border: "1px solid #f3f4f6",
                   borderRadius: 6,
                   background: inEdit ? "#ffffff" : "#f9fafb",
-                  overflow: "auto",   // single scroll container (gutter + code)
+                  overflow: "auto",
                   flex: 1,
                   minHeight: 0,
                   minWidth: 0,
                   position: "relative",
                 }}
                 onClick={() => {
-                  if (!inEdit) startEdit(p.id, raw); // click-to-edit
+                  if (!inEdit) startEdit(p.id, raw);
                 }}
               >
                 {(() => {
                   const codeFont =
                     'ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace';
-                  const lineHeight = 1.45;   // keep consistent in both modes
+                  const lineHeight = 1.45;
                   const fontSize = 11;
                   const gutterWidth = 44;
                   const content = inEdit ? (buffers[p.id] ?? raw) : raw;
@@ -804,8 +834,7 @@ export default function CytoGraph({
                         ) : (
                           <textarea
                             value={buffers[p.id] ?? raw}
-                            onChange={(e) => setBuffers((prev) => ({ ...prev, [p.id]: e.target.value }))} 
-                            onKeyDown={(e) => {
+                            onChange={(e) => setBuffers((prev) => ({ ...prev, [p.id]: e.target.value }))}                            onKeyDown={(e) => {
                               if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
                                 e.preventDefault();
                                 saveEdit(p.id);
@@ -827,7 +856,7 @@ export default function CytoGraph({
                               fontSize,
                               lineHeight,
                               whiteSpace: "pre",
-                              overflow: "hidden",   // parent scrolls
+                              overflow: "hidden",
                               background: "#ffffff",
                               color: "#111827",
                               caretColor: "#111827",
@@ -913,7 +942,7 @@ export default function CytoGraph({
               boxShadow: "0 0 0 2px #ffffff",
               cursor: "nwse-resize",
               pointerEvents: "auto",
-              transform: "translate(-9999px, -9999px)", // repositioned by schedule()
+              transform: "translate(-9999px, -9999px)",
             }}
           />
         ))}
@@ -991,7 +1020,7 @@ export default function CytoGraph({
         </div>
       )}
 
-      {/* Lines on top (below color panel & palette) */}
+      {/* Lines on top */}
       <svg width="100%" height="100%" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 9999 }}>
         {connections.map((c, i) => (
           <line key={i} x1={c.x1} y1={c.y1} x2={c.x2} y2={c.y2} stroke={c.color} strokeWidth={2} strokeOpacity={0.98} />
@@ -999,7 +1028,9 @@ export default function CytoGraph({
       </svg>
     </div>
   );
-}
+});
+
+export default CytoGraph;
 
 const btnStyle: React.CSSProperties = {
   border: "1px solid #e5e7eb",

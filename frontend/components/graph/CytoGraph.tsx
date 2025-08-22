@@ -7,6 +7,8 @@ import { highlightSource } from "@/lib/analyze";
 
 export type CytoGraphHandle = {
   applyLiveMove: (id: string, pos: { x: number; y: number }, opts?: { animate?: boolean }) => void;
+  /** Export current elements with the *live* positions from Cytoscape baked into node.position */
+  exportElementsWithPositions: () => ElementDefinition[];
 };
 
 type Popup = { id: string; label: string };
@@ -668,7 +670,28 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         n.position(pos);
       }
     },
-  }), []);
+    exportElementsWithPositions() {
+      const cy = cyRef.current;
+      const base: ElementDefinition[] = Array.isArray(els) ? els : (els as any)?.elements ?? [];
+      if (!cy) return base;
+
+      // Collect live positions from the rendered graph
+      const pos: Record<string, { x: number; y: number }> = {};
+      cy.nodes(':not(.adhoc)').forEach((n: any) => {
+        const p = n.position();
+        pos[n.id()] = { x: p.x, y: p.y };
+      });
+
+      // Merge into node elements; leave edges as-is
+      return base.map((el: any) => {
+        const isNode = (el.group ?? el?.data?.group ?? "nodes") === "nodes";
+        if (!isNode) return el;
+        const id = el?.data?.id;
+        if (!id || !pos[id]) return el;
+        return { ...el, position: pos[id] };
+      });
+    },
+  }), [els]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>

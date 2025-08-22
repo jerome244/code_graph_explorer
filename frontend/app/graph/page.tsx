@@ -33,7 +33,8 @@ type RealtimeOp =
   | { type: "UPDATE_FILE"; payload: { path: string; content: string } }
   | { type: "HIDE_NODE"; payload: { path: string; hidden: boolean } }
   | { type: "MOVE_NODE"; payload: { id: string; position: { x: number; y: number } } }
-  | { type: "SNAPSHOT"; payload: { graph: any } }
+  | { type: "SNAPSHOT"; payload: { graph: any; targetClientId?: string } }
+  | { type: "REQUEST_SNAPSHOT"; payload: { requesterId: string } }
   | { type: "PING" }
   | { type: "PONG" };
 
@@ -70,6 +71,8 @@ export default function GraphPage() {
   const wsHeartbeatRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const lastPongRef = useRef<number>(0);
+  const lastSnapshotTsRef = useRef<number>(0);
+  const pendingSelfSnapshotTimer = useRef<number | null>(null);
 
   const graphRef = useRef<CytoGraphHandle | null>(null);
 
@@ -157,8 +160,7 @@ export default function GraphPage() {
   const sendRT = useCallback((msg: RealtimeMessage) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== ws.OPEN) return;
-    // Skip if the socket is congested to avoid frame pileup
-    if (ws.bufferedAmount > 256 * 1024) return;
+    if (ws.bufferedAmount > 256 * 1024) return; // avoid piling frames
     ws.send(JSON.stringify(msg));
   }, []);
 
@@ -245,14 +247,30 @@ export default function GraphPage() {
 
         ws.onopen = () => {
           setStatus((s) => (s.includes("• Live") ? s : `${s} • Live`));
-          // optional: initial snapshot
-          const snapshot: RealtimeMessage = {
-            type: "SNAPSHOT",
-            payload: { graph: { tree, elements, files, hiddenIds } },
+
+          // Ask collaborators for the latest state (late joiner pull)
+          sendRT({
+            type: "REQUEST_SNAPSHOT",
+            payload: { requesterId: clientIdRef.current },
             clientId: clientIdRef.current,
             ts: Date.now(),
-          };
-          ws.send(JSON.stringify(snapshot));
+          });
+
+          // Fallback: if no one answers quickly, broadcast our own snapshot
+          pendingSelfSnapshotTimer.current = window.setTimeout(() => {
+            const graph = {
+              tree,
+              elements: graphRef.current?.exportElementsWithPositions?.() ?? elements,
+              files,
+              hiddenIds,
+            };
+            sendRT({
+              type: "SNAPSHOT",
+              payload: { graph },
+              clientId: clientIdRef.current,
+              ts: Date.now(),
+            });
+          }, 600) as unknown as number;
 
           // Heartbeat
           lastPongRef.current = Date.now();
@@ -269,25 +287,63 @@ export default function GraphPage() {
 
         ws.onmessage = (e) => {
           try {
-            const msg: RealtimeMessage = JSON.parse(e.data);
+            const msg: RealtimeMessage & { payload?: any } = JSON.parse(e.data);
+
+            // Ignore self-echoes
             if (msg.clientId && msg.clientId === clientIdRef.current) return;
 
             switch (msg.type) {
               case "PONG":
                 lastPongRef.current = Date.now();
                 break;
+
+              case "REQUEST_SNAPSHOT": {
+                const requesterId = msg.payload?.requesterId;
+                if (!requesterId) break;
+                // Small jitter so not everyone replies at the same time
+                const jitter = 80 + Math.floor(Math.random() * 120);
+                setTimeout(() => {
+                  const graph = {
+                    tree,
+                    elements: graphRef.current?.exportElementsWithPositions?.() ?? elements,
+                    files,
+                    hiddenIds,
+                  };
+                  sendRT({
+                    type: "SNAPSHOT",
+                    payload: { graph, targetClientId: requesterId },
+                    clientId: clientIdRef.current,
+                    ts: Date.now(),
+                  });
+                }, jitter);
+                break;
+              }
+
               case "SNAPSHOT": {
-                const g = (msg as any).payload?.graph || {};
+                // Only apply if for me (or broadcast) and newer
+                const target = msg.payload?.targetClientId;
+                if (target && target !== clientIdRef.current) break;
+                if ((msg.ts ?? 0) <= lastSnapshotTsRef.current) break;
+                lastSnapshotTsRef.current = msg.ts ?? Date.now();
+
+                const g = msg.payload?.graph || {};
                 setTree(g.tree || { name: "root", path: "", kind: "folder", children: [] });
                 setElements(g.elements || []);
                 setFiles(g.files || {});
                 const hm = Object.fromEntries((g.hiddenIds || []).map((id: string) => [id, true]));
                 setHiddenMap(hm);
                 setStatus((s) => (s.includes("• Live") ? s : `${s} • Live`));
+
+                // Got a good snapshot → cancel our pending fallback
+                if (pendingSelfSnapshotTimer.current) {
+                  clearTimeout(pendingSelfSnapshotTimer.current);
+                  pendingSelfSnapshotTimer.current = null;
+                }
                 break;
               }
+
               case "UPDATE_FILE": {
-                const { path, content } = (msg as any).payload || {};
+                const { path, content } = msg.payload || {};
                 if (!path) break;
                 setFiles((prev) => {
                   const next = { ...prev, [path]: content };
@@ -302,18 +358,21 @@ export default function GraphPage() {
                 });
                 break;
               }
+
               case "HIDE_NODE": {
-                const { path, hidden } = (msg as any).payload || {};
+                const { path, hidden } = msg.payload || {};
                 if (typeof path === "string") setHiddenMap((prev) => ({ ...prev, [path]: hidden }));
                 break;
               }
+
               case "MOVE_NODE": {
-                const { id, position } = (msg as any).payload || {};
+                const { id, position } = msg.payload || {};
                 if (!id || !position) break;
                 // smooth, light-weight: update Cytoscape directly (no full state churn)
                 graphRef.current?.applyLiveMove(id, position, { animate: true });
                 break;
               }
+
               default:
                 break;
             }
@@ -340,7 +399,7 @@ export default function GraphPage() {
         console.error("WebSocket connect error:", err);
       }
     },
-    [hiddenIds, files, elements, tree, project?.id]
+    [hiddenIds, files, elements, tree, project?.id, sendRT]
   );
 
   // Manage lifecycle for realtime
@@ -412,7 +471,12 @@ export default function GraphPage() {
           <SaveButton
             project={project}
             name={projectName}
-            graph={{ tree, elements, files, hiddenIds }}
+            graph={{
+              tree,
+              elements: graphRef.current?.exportElementsWithPositions?.() ?? elements,
+              files,
+              hiddenIds
+            }}
             onSaved={(p) => {
               setProject(p);
               setProjectName(p.name);
@@ -425,7 +489,14 @@ export default function GraphPage() {
               if (p?.id && wsRef.current && wsRef.current.readyState === 1) {
                 const snapshot: RealtimeMessage = {
                   type: "SNAPSHOT",
-                  payload: { graph: { tree, elements, files, hiddenIds } },
+                  payload: {
+                    graph: {
+                      tree,
+                      elements: graphRef.current?.exportElementsWithPositions?.() ?? elements,
+                      files,
+                      hiddenIds
+                    }
+                  },
                   clientId: clientIdRef.current,
                   ts: Date.now(),
                 };

@@ -167,7 +167,6 @@ export default function GraphPage() {
   // --- Move node handler (drag streaming) — broadcast only; Cytoscape already shows local drag
   const onMoveNode = useCallback(
     (id: string, position: { x: number; y: number }) => {
-      if (!project?.id) return;
       sendRT({
         type: "MOVE_NODE",
         payload: { id, position },
@@ -175,36 +174,29 @@ export default function GraphPage() {
         ts: Date.now(),
       });
     },
-    [project?.id, sendRT]
+    [sendRT]
   );
+
 
   // --- Commit once on drag end (update state for persistence + broadcast)
   const onMoveCommit = useCallback(
     (id: string, position: { x: number; y: number }) => {
-      if (project?.id) {
-        sendRT({
-          type: "MOVE_NODE",
-          payload: { id, position },
-          clientId: clientIdRef.current,
-          ts: Date.now(),
-        });
-      }
-      // update elements once so saves/snapshots include latest coords
-      setElements((prev) =>
-        prev.map((el) => {
-          const data: any = (el as any).data;
-          if (data?.id === id) return { ...el, position };
-          return el;
-        })
-      );
+      sendRT({
+        type: "MOVE_NODE",
+        payload: { id, position },
+        clientId: clientIdRef.current,
+        ts: Date.now(),
+      });
     },
-    [project?.id, sendRT]
+    [sendRT]
   );
+
 
   // --- Load by ?project=<id> ---
   const searchParams = useSearchParams();
   const loadedFromQuery = useRef(false);
 
+  
   useEffect(() => {
     const pid = searchParams.get("project");
     if (!pid || loadedFromQuery.current) return;

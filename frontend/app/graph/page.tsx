@@ -222,7 +222,7 @@ export default function GraphPage() {
         wsRef.current = ws;
 
         ws.onopen = () => {
-          setStatus((s) => `${s} • Live`);
+          setStatus((s) => (s.includes("• Live") ? s : `${s} • Live`));
           // send an initial snapshot so latecomers can sync quickly (optional)
           const snapshot: RealtimeMessage = {
             type: "SNAPSHOT",
@@ -403,7 +403,7 @@ export default function GraphPage() {
                 const t = new Date(p.updated_at).toLocaleTimeString();
                 setStatus(`Saved at ${t} • Live`);
               } catch {
-                setStatus("Saved • Live");
+                setStatus((s) => (s.includes("• Live") ? "Saved • Live" : "Saved • Live"));
               }
               if (p?.id && wsRef.current && wsRef.current.readyState === 1) {
                 const snapshot: RealtimeMessage = {

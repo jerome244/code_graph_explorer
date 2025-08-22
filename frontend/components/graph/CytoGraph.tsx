@@ -28,7 +28,7 @@ function darkenHex(hex: string, amount = 0.35) {
   return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
 }
 
-// simple throttle
+// simple throttle (leading + trailing)
 function throttle<T extends (...args: any[]) => void>(fn: T, ms = 60): T {
   let last = 0;
   let timer: number | null = null;
@@ -381,25 +381,25 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         setSelectedRects(sel);
       });
 
-      // 🔹 Emit MOVE_NODE while dragging (throttled)
+      // 🔹 Stream MOVE_NODE while dragging (throttled @ 12 fps) using "drag"
+      const FPS = 12;
       const emitMove = throttle((id: string, pos: { x: number; y: number }) => {
         onMoveNode?.(id, pos);
-      }, 60);
+      }, Math.round(1000 / FPS));
 
-      const onPos = (e: any) => {
+      const onDrag = (e: any) => {
         const n = e.target;
-        if (n.grabbed()) {
-          emitMove(n.id(), n.position());
-        }
+        emitMove(n.id(), n.position());
       };
-      cy.on("position", "node", onPos);
+      cy.on("drag", "node", onDrag);
 
-      // 🔹 Commit once on drag end
-      cy.on("dragfree", "node", (e: any) => {
+      // 🔹 Precise final update on release
+      const onFreeCommit = (e: any) => {
         const n = e.target;
         const p = n.position();
         onMoveCommit?.(n.id(), { x: p.x, y: p.y });
-      });
+      };
+      cy.on("free", "node", onFreeCommit);
 
       // rAF-throttled follow-ups for overlays
       let raf = 0;
@@ -480,8 +480,8 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         cy.off("position", "node", schedule);
         cy.off("drag", "node", schedule);
         cy.off("free", "node", schedule);
-        cy.off("position", "node", onPos);
-        cy.off("dragfree", "node");
+        cy.off("drag", "node", onDrag);
+        cy.off("free", "node", onFreeCommit);
       };
     })();
   }, [onNodeSelect, onHideNode, onMoveNode, onMoveCommit, labelEdit?.id, colorPanel?.id]);
@@ -663,7 +663,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
       if (n.grabbed && n.grabbed()) return;
       if (opts?.animate) {
         n.stop(true, false);
-        n.animate({ position: pos }, { duration: 80, easing: "linear" });
+        n.animate({ position: pos }, { duration: 50, easing: "linear" });
       } else {
         n.position(pos);
       }
@@ -834,7 +834,8 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
                         ) : (
                           <textarea
                             value={buffers[p.id] ?? raw}
-                            onChange={(e) => setBuffers((prev) => ({ ...prev, [p.id]: e.target.value }))}                            onKeyDown={(e) => {
+                            onChange={(e) => setBuffers((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                            onKeyDown={(e) => {
                               if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
                                 e.preventDefault();
                                 saveEdit(p.id);

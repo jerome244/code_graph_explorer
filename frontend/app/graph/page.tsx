@@ -153,47 +153,50 @@ export default function GraphPage() {
     [tree, project?.id]
   );
 
-  // --- NEW: Move node handler (dragging - throttled, no state churn)
+  // --- WS backpressure-aware sender ---
+  const sendRT = useCallback((msg: RealtimeMessage) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== ws.OPEN) return;
+    // Skip if the socket is congested to avoid frame pileup
+    if (ws.bufferedAmount > 256 * 1024) return;
+    ws.send(JSON.stringify(msg));
+  }, []);
+
+  // --- Move node handler (drag streaming) — broadcast only; Cytoscape already shows local drag
   const onMoveNode = useCallback(
     (id: string, position: { x: number; y: number }) => {
-      // broadcast only; local Cytoscape already shows the drag in real-time
-      if (project?.id && wsRef.current && wsRef.current.readyState === 1) {
-        const msg: RealtimeMessage = {
-          type: "MOVE_NODE",
-          payload: { id, position },
-          clientId: clientIdRef.current,
-          ts: Date.now(),
-        };
-        wsRef.current.send(JSON.stringify(msg));
-      }
+      if (!project?.id) return;
+      sendRT({
+        type: "MOVE_NODE",
+        payload: { id, position },
+        clientId: clientIdRef.current,
+        ts: Date.now(),
+      });
     },
-    [project?.id]
+    [project?.id, sendRT]
   );
 
-  // --- Commit once on drag end (update state for persistence)
+  // --- Commit once on drag end (update state for persistence + broadcast)
   const onMoveCommit = useCallback(
     (id: string, position: { x: number; y: number }) => {
-      if (project?.id && wsRef.current && wsRef.current.readyState === 1) {
-        const msg: RealtimeMessage = {
+      if (project?.id) {
+        sendRT({
           type: "MOVE_NODE",
           payload: { id, position },
           clientId: clientIdRef.current,
           ts: Date.now(),
-        };
-        wsRef.current.send(JSON.stringify(msg));
+        });
       }
-      // update elements once (cheap) so saves/snapshots have the new position
+      // update elements once so saves/snapshots include latest coords
       setElements((prev) =>
         prev.map((el) => {
           const data: any = (el as any).data;
-          if (data?.id === id) {
-            return { ...el, position };
-          }
+          if (data?.id === id) return { ...el, position };
           return el;
         })
       );
     },
-    [project?.id]
+    [project?.id, sendRT]
   );
 
   // --- Load by ?project=<id> ---
@@ -274,7 +277,7 @@ export default function GraphPage() {
                 lastPongRef.current = Date.now();
                 break;
               case "SNAPSHOT": {
-                const g = msg.payload.graph || {};
+                const g = (msg as any).payload?.graph || {};
                 setTree(g.tree || { name: "root", path: "", kind: "folder", children: [] });
                 setElements(g.elements || []);
                 setFiles(g.files || {});
@@ -284,7 +287,8 @@ export default function GraphPage() {
                 break;
               }
               case "UPDATE_FILE": {
-                const { path, content } = msg.payload as any;
+                const { path, content } = (msg as any).payload || {};
+                if (!path) break;
                 setFiles((prev) => {
                   const next = { ...prev, [path]: content };
                   try {
@@ -299,12 +303,13 @@ export default function GraphPage() {
                 break;
               }
               case "HIDE_NODE": {
-                const { path, hidden } = msg.payload as any;
-                setHiddenMap((prev) => ({ ...prev, [path]: hidden }));
+                const { path, hidden } = (msg as any).payload || {};
+                if (typeof path === "string") setHiddenMap((prev) => ({ ...prev, [path]: hidden }));
                 break;
               }
               case "MOVE_NODE": {
-                const { id, position } = msg.payload as any;
+                const { id, position } = (msg as any).payload || {};
+                if (!id || !position) break;
                 // smooth, light-weight: update Cytoscape directly (no full state churn)
                 graphRef.current?.applyLiveMove(id, position, { animate: true });
                 break;
@@ -478,7 +483,7 @@ export default function GraphPage() {
           files={files}
           onHideNode={onHideNode}
           onUpdateFile={onUpdateFile}
-          onMoveNode={onMoveNode}       // throttled while dragging
+          onMoveNode={onMoveNode}       // throttled while dragging (12 fps)
           onMoveCommit={onMoveCommit}   // single precise commit on release
         />
       </section>

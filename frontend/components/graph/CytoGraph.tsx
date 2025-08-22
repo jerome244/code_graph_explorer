@@ -83,6 +83,54 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
   const cyRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
+  // 🔹 Remote-move smoothing (lerp toward latest target)
+  const lerpTargetsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const lerpRafRef = useRef<number>(0);
+
+  const tickLerp = () => {
+    const cy = cyRef.current;
+    if (!cy) { lerpTargetsRef.current.clear(); lerpRafRef.current = 0; return; }
+
+    let anyActive = false;
+
+    lerpTargetsRef.current.forEach((target, id) => {
+      const n = cy.getElementById(id);
+      if (!n || !n.length) { lerpTargetsRef.current.delete(id); return; }
+
+      // Don't fight the local user while they drag
+      if (n.grabbed && n.grabbed()) { lerpTargetsRef.current.delete(id); return; }
+
+      const p = n.position();
+      const dx = target.x - p.x;
+      const dy = target.y - p.y;
+      const dist2 = dx * dx + dy * dy;
+
+      if (dist2 < 0.25) { // ~0.5px snap
+        n.position(target);
+        lerpTargetsRef.current.delete(id);
+        return;
+      }
+
+      const alpha = 0.35; // 0..1 (higher = faster)
+      n.position({ x: p.x + dx * alpha, y: p.y + dy * alpha });
+      anyActive = true;
+    });
+
+    if (anyActive) {
+      lerpRafRef.current = requestAnimationFrame(tickLerp);
+    } else {
+      lerpRafRef.current = 0;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (lerpRafRef.current) cancelAnimationFrame(lerpRafRef.current);
+      lerpRafRef.current = 0;
+      lerpTargetsRef.current.clear();
+    };
+  }, []);
+
   // popups for file nodes
   const [popups, setPopups] = useState<Popup[]>([]);
   const popupRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -383,8 +431,8 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         setSelectedRects(sel);
       });
 
-      // 🔹 Stream MOVE_NODE while dragging (throttled @ 12 fps) using "drag"
-      const FPS = 12;
+      // 🔹 Stream MOVE_NODE while dragging (throttled) using "drag"
+      const FPS = 20; // smoother remote updates vs 12
       const emitMove = throttle((id: string, pos: { x: number; y: number }) => {
         onMoveNode?.(id, pos);
       }, Math.round(1000 / FPS));
@@ -656,18 +704,11 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
   };
 
   useImperativeHandle(ref, () => ({
-    applyLiveMove(id, pos, opts) {
-      const cy = cyRef.current;
-      if (!cy) return;
-      const n = cy.getElementById(id);
-      if (!n || !n.length) return;
-      // don't override while the local user is holding this node
-      if (n.grabbed && n.grabbed()) return;
-      if (opts?.animate) {
-        n.stop(true, false);
-        n.animate({ position: pos }, { duration: 50, easing: "linear" });
-      } else {
-        n.position(pos);
+    applyLiveMove(id, pos, _opts) {
+      // Smoothly interpolate toward the latest remote position
+      lerpTargetsRef.current.set(id, { x: pos.x, y: pos.y });
+      if (!lerpRafRef.current) {
+        lerpRafRef.current = requestAnimationFrame(tickLerp);
       }
     },
     exportElementsWithPositions() {

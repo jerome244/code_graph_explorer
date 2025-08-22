@@ -42,7 +42,19 @@ type RealtimeOp =
   // presence & cursors
   | { type: "USER_JOIN"; payload: { name?: string } }
   | { type: "USER_LEAVE"; payload: {} }
-  | { type: "CURSOR_MOVE"; payload: { position: { x: number; y: number }; name?: string } };
+  | { type: "CURSOR_MOVE"; payload: { position: { x: number; y: number }; name?: string } }
+  // shapes & labels
+  | { type: "CREATE_SHAPE"; payload: {
+      id: string;
+      kind: "rect" | "text" | "node";
+      position: { x: number; y: number };
+      data?: Record<string, any>;
+      classes?: string;
+    } }
+  | { type: "SET_RECT_COLOR"; payload: { id: string; bg: string; border: string } }
+  | { type: "SET_LABEL"; payload: { id: string; label: string } }
+  // ✨ rectangle resize
+  | { type: "SET_RECT_SIZE"; payload: { id: string; width: number; height: number } };
 
 type RealtimeMessage = RealtimeOp & { clientId?: string; ts?: number };
 
@@ -79,6 +91,7 @@ export default function GraphPage() {
 
   // Realtime
   const clientIdRef = useRef<string>(uuid());
+  const projectIdRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const wsHeartbeatRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -90,7 +103,7 @@ export default function GraphPage() {
 
   const hiddenIds = useMemo(() => Object.keys(hiddenMap).filter((k) => hiddenMap[k]), [hiddenMap]);
 
-  // 🆕 Keep latest graph bits in refs so the WS connector can stay stable
+  // Keep latest graph bits in refs so the WS connector can stay stable
   const treeRef = useRef(tree);
   const elementsRef = useRef(elements);
   const filesRef = useRef(files);
@@ -99,8 +112,9 @@ export default function GraphPage() {
   useEffect(() => { elementsRef.current = elements; }, [elements]);
   useEffect(() => { filesRef.current = files; }, [files]);
   useEffect(() => { hiddenIdsRef.current = hiddenIds; }, [hiddenIds]);
+  useEffect(() => { projectIdRef.current = project?.id ?? null; }, [project?.id]);
 
-  // 🆕 Deduped presence: who we've seen in the room
+  // Deduped presence: who we've seen in the room
   const peersRef = useRef<Map<string, { name?: string; lastSeen: number }>>(new Map());
 
   // ---- tiny toasts ----
@@ -223,7 +237,7 @@ export default function GraphPage() {
     [sendRT]
   );
 
-  // 🔹 Broadcast popup open/close so all collaborators sync
+  // Broadcast popup open/close so all collaborators sync
   const onPopupOpened = useCallback(
     (id: string, label: string) => {
       sendRT({
@@ -310,7 +324,7 @@ export default function GraphPage() {
             clientId: clientIdRef.current,
             ts: Date.now(),
           });
-          // 🆕 record self to avoid any accidental duplicate toasts
+          // record self (avoid duplicate toasts)
           peersRef.current.set(clientIdRef.current, { name: `Guest-${clientIdRef.current.slice(0, 4)}`, lastSeen: Date.now() });
 
           // Ask collaborators for the latest state (late joiner pull)
@@ -338,7 +352,7 @@ export default function GraphPage() {
             });
           }, 600) as unknown as number;
 
-          // Heartbeat (🆕 no forced close if no PONG)
+          // Heartbeat (no forced close if no PONG)
           lastPongRef.current = Date.now();
           if (wsHeartbeatRef.current) window.clearInterval(wsHeartbeatRef.current);
           wsHeartbeatRef.current = window.setInterval(() => {
@@ -375,7 +389,6 @@ export default function GraphPage() {
                 const name = msg.payload?.name || `Guest-${id.slice(0, 4)}`;
                 const now = Date.now();
                 const last = peersRef.current.get(id)?.lastSeen ?? 0;
-                // 🆕 toast only if brand new or stale (>60s)
                 if (!last || now - last > 60_000) {
                   pushToast(`${name} joined`);
                 }
@@ -499,6 +512,34 @@ export default function GraphPage() {
                 break;
               }
 
+              // SHAPES + LABELS
+              case "CREATE_SHAPE": {
+                const p = (msg as any).payload;
+                if (!p || !p.id) break;
+                graphRef.current?.addAdhoc?.(p);
+                break;
+              }
+              case "SET_RECT_COLOR": {
+                const { id, bg, border } = (msg as any).payload || {};
+                if (!id || !bg || !border) break;
+                graphRef.current?.setRectColor?.(id, bg, border);
+                break;
+              }
+              case "SET_LABEL": {
+                const { id, label } = (msg as any).payload || {};
+                if (!id || typeof label !== "string") break;
+                graphRef.current?.setLabel?.(id, label);
+                break;
+              }
+
+              // ✨ RECTANGLE RESIZE
+              case "SET_RECT_SIZE": {
+                const { id, width, height } = (msg as any).payload || {};
+                if (!id || typeof width !== "number" || typeof height !== "number") break;
+                graphRef.current?.setRectSize?.(id, width, height);
+                break;
+              }
+
               default:
                 break;
             }
@@ -514,7 +555,8 @@ export default function GraphPage() {
           }
           if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
           reconnectTimerRef.current = window.setTimeout(() => {
-            if (project?.id) connectSocket(project.id);
+            const pid = projectIdRef.current;
+            if (pid) connectSocket(pid);
           }, 2000) as unknown as number;
         };
 
@@ -525,7 +567,7 @@ export default function GraphPage() {
         console.error("WebSocket connect error:", err);
       }
     },
-    [] // 🆕 stable: no deps; uses *_Ref for the latest data
+    [] // stable: uses *_Ref for latest data
   );
 
   // Manage lifecycle for realtime
@@ -550,7 +592,7 @@ export default function GraphPage() {
         } catch {}
       }
     };
-  }, [project?.id]); // 🆕 no connectSocket dep to avoid churn
+  }, [project?.id]);
 
   return (
     <main style={{ display: "grid", gridTemplateColumns: "280px 1fr", height: "100vh" }}>
@@ -693,6 +735,47 @@ export default function GraphPage() {
           onMoveCommit={onMoveCommit}   // single precise commit on release
           onPopupOpened={onPopupOpened} // broadcast open
           onPopupClosed={onPopupClosed} // broadcast close
+
+          // broadcast local shape creations
+          onCreateAdhoc={(payload) => {
+            sendRT({
+              type: "CREATE_SHAPE",
+              payload,
+              clientId: clientIdRef.current,
+              ts: Date.now(),
+            });
+          }}
+
+          // broadcast local rectangle color changes
+          onRectColorChange={(id, bg, border) => {
+            sendRT({
+              type: "SET_RECT_COLOR",
+              payload: { id, bg, border },
+              clientId: clientIdRef.current,
+              ts: Date.now(),
+            });
+          }}
+
+          // broadcast local label changes (rectangles, text nodes, regular nodes)
+          onLabelChange={(id, label) => {
+            sendRT({
+              type: "SET_LABEL",
+              payload: { id, label },
+              clientId: clientIdRef.current,
+              ts: Date.now(),
+            });
+          }}
+
+          // ✨ NEW: broadcast rectangle resize (width/height are model units)
+          onRectResize={(id, width, height) => {
+            sendRT({
+              type: "SET_RECT_SIZE",
+              payload: { id, width, height },
+              clientId: clientIdRef.current,
+              ts: Date.now(),
+            });
+          }}
+
           // stream local cursor to peers
           onCursorMove={(position) => {
             sendRT({

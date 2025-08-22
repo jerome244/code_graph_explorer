@@ -5,40 +5,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, use
 import type { ElementDefinition } from "cytoscape";
 import { highlightSource } from "@/lib/analyze";
 
-export type CytoGraphHandle = {
-  applyLiveMove: (id: string, pos: { x: number; y: number }, opts?: { animate?: boolean }) => void;
-  /** Export current elements with the *live* positions from Cytoscape baked into node.position */
-  exportElementsWithPositions: () => ElementDefinition[];
-  /** Open/close popups programmatically (used for realtime sync) */
-  openPopup: (id: string, label?: string) => void;
-  closePopup: (id: string) => void;
-  /** List of currently open popups for snapshots */
-  getOpenPopups: () => { id: string; label: string }[];
-  /** 🆕 collaborator cursors */
-  updateRemoteCursor: (clientId: string, pos: { x: number; y: number }, meta?: { name?: string; color?: string }) => void;
-  removeRemoteCursor: (clientId: string) => void;
-};
-
-type Popup = { id: string; label: string };
-type Conn = { x1: number; y1: number; x2: number; y2: number; color: string };
-
-// helper id
-const makeId = (() => { let c = 0; return (p="custom") => `${p}-${Date.now().toString(36)}-${(c++).toString(36)}`; })();
-
-// darken a hex color (0..1)
-function darkenHex(hex: string, amount = 0.35) {
-  let h = hex.trim();
-  if (h.startsWith("#")) h = h.slice(1);
-  if (h.length === 3) h = h.split("").map(c => c + c).join("");
-  if (h.length !== 6) return hex;
-  const n = parseInt(h, 16);
-  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-  const q = Math.max(0, Math.min(1, 1 - amount));
-  r = Math.round(r * q); g = Math.round(g * q); b = Math.round(b * q);
-  return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
-}
-
-// simple throttle (leading + trailing)
+/** Throttle helper (leading+trailing) */
 function throttle<T extends (...args: any[]) => void>(fn: T, ms = 60): T {
   let last = 0;
   let timer: number | null = null;
@@ -59,12 +26,47 @@ function throttle<T extends (...args: any[]) => void>(fn: T, ms = 60): T {
   } as T;
 }
 
-// 🆕 deterministic color (fallback if not provided by caller)
+// deterministic color for cursors
 function colorFromId(id: string) {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 360;
   return `hsl(${h}, 90%, 55%)`;
 }
+
+// darken a hex color (0..1)
+function darkenHex(hex: string, amount = 0.35) {
+  let h = hex.trim();
+  if (h.startsWith("#")) h = h.slice(1);
+  if (h.length === 3) h = h.split("").map(c => c + c).join("");
+  if (h.length !== 6) return hex;
+  const n = parseInt(h, 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const q = Math.max(0, Math.min(1, 1 - amount));
+  r = Math.round(r * q); g = Math.round(g * q); b = Math.round(b * q);
+  return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
+export type CytoGraphHandle = {
+  applyLiveMove: (id: string, pos: { x: number; y: number }, opts?: { animate?: boolean }) => void;
+  exportElementsWithPositions: () => ElementDefinition[];
+  openPopup: (id: string, label?: string) => void;
+  closePopup: (id: string) => void;
+  getOpenPopups: () => { id: string; label: string }[];
+  updateRemoteCursor: (clientId: string, pos: { x: number; y: number }, meta?: { name?: string; color?: string }) => void;
+  removeRemoteCursor: (clientId: string) => void;
+
+  /** apply remote creation/color/label/size ops */
+  addAdhoc: (payload: {
+    id: string;
+    kind: "rect" | "text" | "node";
+    position: { x: number; y: number };
+    data?: Record<string, any>;
+    classes?: string;
+  }) => void;
+  setRectColor: (id: string, bg: string, border: string) => void;
+  setLabel: (id: string, label: string) => void;
+  setRectSize: (id: string, width: number, height: number) => void;
+};
 
 type Props = {
   elements: ElementDefinition[] | { elements: ElementDefinition[] } | any;
@@ -73,13 +75,24 @@ type Props = {
   onNodeSelect?: (id: string) => void;
   onHideNode?: (id: string) => void;
   onUpdateFile?: (path: string, content: string) => void;
-  onMoveNode?: (id: string, position: { x: number; y: number }) => void;      // during drag (throttled)
-  onMoveCommit?: (id: string, position: { x: number; y: number }) => void;    // once on drag end
-  /** Notify parent when a popup is opened/closed locally so it can broadcast */
+  onMoveNode?: (id: string, position: { x: number; y: number }) => void;
+  onMoveCommit?: (id: string, position: { x: number; y: number }) => void;
   onPopupOpened?: (id: string, label: string) => void;
   onPopupClosed?: (id: string) => void;
-  /** 🆕 stream local mouse model-coordinates to the parent for WS broadcast */
   onCursorMove?: (pos: { x: number; y: number }) => void;
+
+  /** emit local changes */
+  onCreateAdhoc?: (payload: {
+    id: string;
+    kind: "rect" | "text" | "node";
+    position: { x: number; y: number };
+    data?: Record<string, any>;
+    classes?: string;
+  }) => void;
+  onRectColorChange?: (id: string, bg: string, border: string) => void;
+  onLabelChange?: (id: string, label: string) => void;
+  /** ✨ new: emit rectangle resize */
+  onRectResize?: (id: string, width: number, height: number) => void;
 };
 
 const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
@@ -95,6 +108,10 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
     onPopupOpened,
     onPopupClosed,
     onCursorMove,
+    onCreateAdhoc,
+    onRectColorChange,
+    onLabelChange,
+    onRectResize,
   },
   ref
 ) {
@@ -106,7 +123,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
   const cyRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // 🔹 Remote-move smoothing (lerp toward latest target)
+  // Remote-move smoothing
   const lerpTargetsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const lerpRafRef = useRef<number>(0);
 
@@ -119,8 +136,6 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
     lerpTargetsRef.current.forEach((target, id) => {
       const n = cy.getElementById(id);
       if (!n || !n.length) { lerpTargetsRef.current.delete(id); return; }
-
-      // Don't fight the local user while they drag
       if (n.grabbed && n.grabbed()) { lerpTargetsRef.current.delete(id); return; }
 
       const p = n.position();
@@ -128,13 +143,13 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
       const dy = target.y - p.y;
       const dist2 = dx * dx + dy * dy;
 
-      if (dist2 < 0.25) { // ~0.5px snap
+      if (dist2 < 0.25) {
         n.position(target);
         lerpTargetsRef.current.delete(id);
         return;
       }
 
-      const alpha = 0.35; // 0..1 (higher = faster)
+      const alpha = 0.35;
       n.position({ x: p.x + dx * alpha, y: p.y + dy * alpha });
       anyActive = true;
     });
@@ -155,7 +170,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
   }, []);
 
   // popups for file nodes
-  const [popups, setPopups] = useState<Popup[]>([]);
+  const [popups, setPopups] = useState<{ id: string; label: string }[]>([]);
   const popupRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // per-popup line mute
@@ -195,6 +210,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
   }, [els]);
 
   // lines overlay
+  type Conn = { x1: number; y1: number; x2: number; y2: number; color: string };
   const [connections, setConnections] = useState<Conn[]>([]);
   const rafConn = useRef<number>(0);
   const scheduleConnections = () => {
@@ -285,7 +301,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
   const [colorPanel, setColorPanel] = useState<{ id: string; x: number; y: number; color: string } | null>(null);
   const presetColors = ["#fde68a", "#fca5a5", "#93c5fd", "#bbf7d0", "#e9d5ff", "#fef08a", "#fecaca", "#a7f3d0", "#c7d2fe"];
 
-  // 🆕 remote cursor state
+  // remote cursor state
   type RemoteCursor = { id: string; name?: string; color: string; pos: { x: number; y: number }; last: number };
   const cursorsRef = useRef<Map<string, RemoteCursor>>(new Map());
   const [cursorTick, setCursorTick] = useState(0);
@@ -418,13 +434,11 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         setPopups((prev) => {
           const open = prev.some((p) => p.id === id);
           if (open) {
-            // closing
             setEditing((s) => { const nn = new Set(s); nn.delete(id); return nn; });
             setMutedPopups((s) => { const nn = new Set(s); nn.delete(id); return nn; });
             onPopupClosed?.(id);
             return prev.filter((p) => p.id !== id);
           }
-          // opening
           onNodeSelect?.(id);
           onPopupOpened?.(id, label);
           return [...prev, { id, label }];
@@ -434,7 +448,6 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
       // double-click node: inline label editor for adhoc nodes
       cy.on("dbltap", "node", (evt: any) => {
         const n = evt.target;
-        if (!isAdhoc(n)) return;
         const bb = n.renderedBoundingBox();
         setLabelEdit({
           id: n.id(),
@@ -459,14 +472,12 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         }
 
         // others: hide
-        const existed = !!popups.find((p) => p.id === id);
         onHideNode?.(id);
         setPalette(null);
         setColorPanel(null);
         setPopups((prev) => prev.filter((p) => p.id !== id));
         setEditing((s) => { const S = new Set(s); S.delete(id); return S; });
         setMutedPopups((s) => { const S = new Set(s); S.delete(id); return S; });
-        if (existed) onPopupClosed?.(id);
         scheduleConnections();
       });
 
@@ -485,8 +496,8 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         setSelectedRects(sel);
       });
 
-      // 🔹 Stream MOVE_NODE while dragging (throttled) using "drag"
-      const FPS = 20; // smoother remote updates vs 12
+      // Stream MOVE_NODE while dragging (throttled)
+      const FPS = 20;
       const emitMove = throttle((id: string, pos: { x: number; y: number }) => {
         onMoveNode?.(id, pos);
       }, Math.round(1000 / FPS));
@@ -497,7 +508,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
       };
       cy.on("drag", "node", onDrag);
 
-      // 🔹 Precise final update on release
+      // Precise final update on release
       const onFreeCommit = (e: any) => {
         const n = e.target;
         const p = n.position();
@@ -505,14 +516,14 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
       };
       cy.on("free", "node", onFreeCommit);
 
-      // 🆕 Local mouse move → broadcast model coords (20 fps)
+      // Local mouse move → broadcast model coords (20 fps)
       const onMouseMove = throttle((evt: any) => {
         if (!evt || !evt.position) return;
         onCursorMove?.(evt.position);
       }, Math.round(1000 / 20));
       cy.on("mousemove", onMouseMove as any);
 
-      // rAF-throttled follow-ups for overlays (popups, handles, labels, color panel)
+      // rAF-throttled follow-ups for overlays
       let raf = 0;
       const schedule = () => {
         if (raf) return;
@@ -548,7 +559,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
               }
             }
           }
-          // 🆕 also bump cursor overlay projection on pan/zoom/position/render changes
+          // bump cursor overlay projection
           setCursorTick(t => t + 1);
           scheduleConnections();
         });
@@ -598,7 +609,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         cy.off("mousemove", onMouseMove as any);
       };
     })();
-  }, [onNodeSelect, onHideNode, onMoveNode, onMoveCommit, labelEdit?.id, colorPanel?.id, onPopupOpened, onPopupClosed, popups, onCursorMove]);
+  }, [onNodeSelect, onHideNode, onMoveNode, onMoveCommit, labelEdit?.id, colorPanel?.id, onPopupOpened, onPopupClosed, onCursorMove]);
 
   // ── Preserve positions on updates; layout only when node set changes ──
   const prevNodeIdsRef = useRef<Set<string>>(new Set());
@@ -646,7 +657,6 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
     if (els.length) cy.add(els);
 
     if (sameNodeSet && hadPrev) {
-      // Prefer explicit incoming positions; else keep existing
       cy.nodes(":not(.adhoc)").forEach((n: any) => {
         const id = n.id();
         const pIncoming = incomingPos.get(id);
@@ -657,7 +667,6 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
       cy.pan(pan);
       cy.zoom(zoom);
     } else {
-      // First load or changed node set → run layout once
       const layout = cy.layout({
         name: "cose",
         nodeDimensionsIncludeLabels: true,
@@ -704,7 +713,8 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
     setMutedPopups(old => { const n = new Set(old); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   };
 
-  // palette add
+  // palette add (rect/text/node) — also emits onCreateAdhoc
+  const makeId = (() => { let c = 0; return (p="custom") => `${p}-${Date.now().toString(36)}-${(c++).toString(36)}`; })();
   const addAt = (kind: "node" | "rect" | "text") => {
     const cy = cyRef.current; if (!cy || !palette) return;
     const id = makeId(kind);
@@ -717,16 +727,22 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
     };
     const classes = `adhoc${isRectK ? " shape-rect" : kind === "text" ? " shape-text" : ""}`;
     cy.add({ group: "nodes", data, position: pos, classes });
+    onCreateAdhoc?.({ id, kind, position: pos, data, classes });
     setPalette(null);
   };
 
-  // start/stop resizing
+  // start/stop resizing — ✨ emits onRectResize (throttled)
+  const emitRectResize = useRef(throttle((id: string, width: number, height: number) => {
+    onRectResize?.(id, width, height);
+  }, 50));
+
   const onHandleMouseDown = (id: string) => (e: React.MouseEvent) => {
     e.stopPropagation();
     const cy = cyRef.current; if (!cy) return;
     const node = cy.getElementById(id);
     if (!node || !node.length) return;
-    resizingRef.current = {
+    const resizingRefLocal = resizingRef;
+    resizingRefLocal.current = {
       id,
       startX: e.clientX,
       startY: e.clientY,
@@ -735,11 +751,12 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
       startZoom: cy.zoom(),
     };
     const onMove = (ev: MouseEvent) => {
-      const r = resizingRef.current; if (!r) return;
+      const r = resizingRefLocal.current; if (!r) return;
       const dx = ev.clientX - r.startX;
       const dy = ev.clientY - r.startY;
       const newRW = Math.max(40, r.startRW + dx);
       const newRH = Math.max(30, r.startRH + dy);
+      // convert rendered px to model units using the zoom at drag start
       const w = newRW / r.startZoom;
       const h = newRH / r.startZoom;
       node.style({ width: w, height: h });
@@ -748,29 +765,33 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         const bb = node.renderedBoundingBox();
         el.style.transform = `translate(${bb.x2 - 6}px, ${bb.y2 - 6}px)`;
       }
+      emitRectResize.current(id, w, h); // ✨ broadcast throttled
     };
     const onUp = () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      resizingRef.current = null;
+      resizingRefLocal.current = null;
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
 
-  // update rectangle color
+  // update rectangle color — also emits onRectColorChange
   const applyRectColor = (id: string, color: string) => {
     const cy = cyRef.current; if (!cy) return;
     const n = cy.getElementById(id);
     if (!n || !n.length) return;
-    n.data("bg", color);
-    n.data("border", darkenHex(color, 0.35));
-    setColorPanel(prev => (prev ? { ...prev, color } : prev));
+    const bg = color;
+    const border = darkenHex(color, 0.35);
+    n.data("bg", bg);
+    n.data("border", border);
+    setColorPanel(prev => (prev ? { ...prev, color: bg } : prev));
+    onRectColorChange?.(id, bg, border);
+    scheduleConnections();
   };
 
   useImperativeHandle(ref, () => ({
     applyLiveMove(id, pos, _opts) {
-      // Smoothly interpolate toward the latest remote position
       lerpTargetsRef.current.set(id, { x: pos.x, y: pos.y });
       if (!lerpRafRef.current) {
         lerpRafRef.current = requestAnimationFrame(tickLerp);
@@ -781,14 +802,12 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
       const base: ElementDefinition[] = Array.isArray(els) ? els : (els as any)?.elements ?? [];
       if (!cy) return base;
 
-      // Collect live positions from the rendered graph
       const pos: Record<string, { x: number; y: number }> = {};
       cy.nodes(':not(.adhoc)').forEach((n: any) => {
         const p = n.position();
         pos[n.id()] = { x: p.x, y: p.y };
       });
 
-      // Merge into node elements; leave edges as-is
       return base.map((el: any) => {
         const isNode = (el.group ?? el?.data?.group ?? "nodes") === "nodes";
         if (!isNode) return el;
@@ -815,16 +834,61 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
     getOpenPopups() {
       return popups;
     },
-    // 🆕 cursor API
     updateRemoteCursor(clientId, pos, meta) {
       touchCursor(clientId, pos, meta);
     },
     removeRemoteCursor(clientId) {
       dropCursor(clientId);
     },
+
+    // remote apply methods
+    addAdhoc(payload) {
+      const cy = cyRef.current; if (!cy) return;
+      const { id, kind, position, data = {}, classes } = payload;
+      const cls =
+        classes ??
+        (kind === "rect" ? "adhoc shape-rect" : kind === "text" ? "adhoc shape-text" : "adhoc");
+      if (cy.getElementById(id).length) return;
+      cy.add({
+        group: "nodes",
+        data: { id, label: data.label ?? (kind === "text" ? "Text" : kind === "rect" ? "Rectangle" : "New node"), ...data },
+        position,
+        classes: cls,
+      });
+      scheduleConnections();
+    },
+    setRectColor(id, bg, border) {
+      const cy = cyRef.current; if (!cy) return;
+      const n = cy.getElementById(id);
+      if (!n || !n.length) return;
+      n.data("bg", bg);
+      n.data("border", border);
+      scheduleConnections();
+    },
+    setLabel(id, label) {
+      const cy = cyRef.current; if (!cy) return;
+      const n = cy.getElementById(id);
+      if (!n || !n.length) return;
+      n.data("label", label);
+      scheduleConnections();
+    },
+    // ✨ apply remote rectangle size
+    setRectSize(id, width, height) {
+      const cy = cyRef.current; if (!cy) return;
+      const n = cy.getElementById(id);
+      if (!n || !n.length) return;
+      n.style({ width, height });
+      // keep resize handle aligned if visible
+      const el = handleRefs.current.get(id);
+      if (el) {
+        const bb = n.renderedBoundingBox();
+        el.style.transform = `translate(${bb.x2 - 6}px, ${bb.y2 - 6}px)`;
+      }
+      scheduleConnections();
+    },
   }), [els, popups]);
 
-  // 🆕 Remote cursor overlay projection
+  // Remote cursor overlay projection
   const cursorOverlay = useMemo(() => {
     const cy = cyRef.current;
     if (!cy) return null;
@@ -880,6 +944,14 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
       );
     });
   }, [cursorTick]);
+
+  // Label editor: commit hooks emit onLabelChange
+  const commitLabel = (id: string, value: string) => {
+    const cy = cyRef.current; if (!cy) return;
+    cy.getElementById(id).data("label", value);
+    onLabelChange?.(id, value);
+    scheduleConnections();
+  };
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
@@ -1040,7 +1112,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
                               width: "100%",
                             }}
                           >
-                            <code dangerouslySetInnerHTML={{ __html: html }} />
+                            <code dangerouslySetInnerHTML={{ __html: highlightSource(raw, fnNames) }} />
                           </pre>
                         ) : (
                           <textarea
@@ -1111,15 +1183,13 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
           value={labelEdit.value}
           onChange={(e) => setLabelEdit(le => le ? { ...le, value: e.target.value } : le)}
           onKeyDown={(e) => {
-            const cy = cyRef.current; if (!cy) return;
             if (e.key === "Enter") {
-              cy.getElementById(labelEdit.id).data("label", labelEdit.value);
+              commitLabel(labelEdit.id, labelEdit.value);
               setLabelEdit(null);
             } else if (e.key === "Escape") setLabelEdit(null);
           }}
           onBlur={() => {
-            const cy = cyRef.current; if (!cy) return;
-            cy.getElementById(labelEdit.id).data("label", labelEdit.value);
+            commitLabel(labelEdit.id, labelEdit.value);
             setLabelEdit(null);
           }}
           style={{
@@ -1232,7 +1302,7 @@ const CytoGraph = forwardRef<CytoGraphHandle, Props>(function CytoGraph(
         </div>
       )}
 
-      {/* 🆕 Remote cursor overlay, above lines */}
+      {/* Remote cursor overlay */}
       <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 10001 }}>
         {cursorOverlay}
       </div>

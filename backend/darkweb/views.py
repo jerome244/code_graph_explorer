@@ -3,16 +3,14 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.generics import RetrieveAPIView
 from django.db import models
+from django.db.models import Count, Prefetch
 
-from .models import Page
-from .serializers import PageSerializer
+from .models import Page, Entity, Mention
+from .serializers import PageSerializer, EntitySerializer
 from .utils import fetch_via_tor, extract_text_and_title, hash_text, domain_from_url
+from .ioc import extract_iocs
 
 class CrawlView(APIView):
-    """
-    POST /api/darkweb/crawl
-    -> fetch via Tor, extract full text, upsert Page, return full record
-    """
     authentication_classes = []
     permission_classes = []
 
@@ -32,6 +30,15 @@ class CrawlView(APIView):
                 url=url,
                 defaults={"domain": dom, "title": title, "text": text, "sha256": sha},
             )
+
+            # --- IOC extraction & linking ---
+            iocs = extract_iocs(text)
+            for kind, values in iocs.items():
+                for v in values:
+                    ent, _ = Entity.objects.get_or_create(kind=kind, value=v)
+                    # update last_seen automatically on save(); ensure Mention exists
+                    Mention.objects.get_or_create(page=page, entity=ent)
+
             return Response(PageSerializer(page).data, status=201)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
@@ -39,15 +46,16 @@ class CrawlView(APIView):
 class SearchView(APIView):
     """
     GET /api/darkweb/search?q=term&limit=20
-    -> returns a small payload with a short snippet
+    Optional filters:
+      - entity_kind=email&entity_value=value
     """
     authentication_classes = []
     permission_classes = []
 
     def get(self, request):
         q = (request.query_params.get("q") or "").strip()
-        if not q:
-            return Response([], status=200)
+        entity_kind = (request.query_params.get("entity_kind") or "").strip().lower()
+        entity_value = (request.query_params.get("entity_value") or "").strip()
 
         try:
             limit = int(request.query_params.get("limit", "20"))
@@ -55,36 +63,81 @@ class SearchView(APIView):
             limit = 20
         limit = max(1, min(limit, 50))
 
-        qs = (
-            Page.objects
-            .filter(
+        qs = Page.objects.all()
+        if q:
+            qs = qs.filter(
                 models.Q(title__icontains=q) |
                 models.Q(text__icontains=q) |
                 models.Q(domain__icontains=q) |
                 models.Q(url__icontains=q)
             )
-            .order_by("-fetched_at")[:limit]
+
+        if entity_kind and entity_value:
+            qs = qs.filter(
+                mentions__entity__kind=entity_kind,
+                mentions__entity__value__iexact=entity_value
+            )
+
+        qs = qs.order_by("-fetched_at")[:limit]
+
+        # prefetch mentions → entities to build chips
+        qs = qs.prefetch_related(
+            Prefetch(
+                "mentions",
+                queryset=Mention.objects.select_related("entity")
+            )
         )
 
-        data = [
-            {
+        data = []
+        for p in qs:
+            chips = {"email": [], "ip": [], "btc": [], "xmr": []}
+            # take up to 3 per kind for display
+            for m in p.mentions.all():
+                k = m.entity.kind
+                if k in chips and len(chips[k]) < 3:
+                    chips[k].append(m.entity.value)
+
+            data.append({
                 "id": p.id,
                 "url": p.url,
                 "domain": p.domain,
                 "title": p.title or p.domain,
                 "snippet": (p.text or "")[:300],
                 "fetched_at": p.fetched_at,
-            }
-            for p in qs
-        ]
+                "entities": chips,
+            })
         return Response(data, status=200)
 
 class PageDetailView(RetrieveAPIView):
-    """
-    GET /api/darkweb/pages/<id>
-    -> returns the full Page (including full text)
-    """
+    """GET /api/darkweb/pages/<id> → full text"""
     authentication_classes = []
     permission_classes = []
     queryset = Page.objects.all()
     serializer_class = PageSerializer
+
+class EntitiesView(APIView):
+    """
+    GET /api/darkweb/entities?kind=email&prefix=alice&limit=50
+    Returns distinct entities with number of pages mentioning them.
+    """
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request):
+        kind = (request.query_params.get("kind") or "").lower()
+        prefix = (request.query_params.get("prefix") or "")
+        try:
+            limit = int(request.query_params.get("limit", "50"))
+        except ValueError:
+            limit = 50
+        limit = max(1, min(limit, 200))
+
+        qs = Entity.objects.all()
+        if kind:
+            qs = qs.filter(kind=kind)
+        if prefix:
+            qs = qs.filter(value__istartswith=prefix)
+
+        qs = qs.annotate(pages=Count("mentions__page", distinct=True)).order_by("-pages", "value")[:limit]
+        data = EntitySerializer(qs, many=True).data
+        return Response(data, status=200)

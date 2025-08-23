@@ -10,6 +10,7 @@ type SearchResult = {
   domain?: string;
   snippet?: string;
   fetched_at?: string;
+  entities?: { email?: string[]; ip?: string[]; btc?: string[]; xmr?: string[] };
 };
 
 // Full page (from /pages/:id)
@@ -120,6 +121,25 @@ export default function DarkWebSearch() {
     }
   }
 
+  async function searchByEntity(kind: string, value: string) {
+    setBusy(true);
+    setMsg(`Filtering by ${kind}…`);
+    setResults(null);
+    try {
+      const data = await getJSON(
+        `/api/darkweb/search?entity_kind=${encodeURIComponent(kind)}&entity_value=${encodeURIComponent(value)}`
+      );
+      const arr: SearchResult[] = Array.isArray(data) ? data : [];
+      setResults(arr);
+      setQ(value);
+      setMsg(`Found ${arr.length} result(s).`);
+    } catch (e: any) {
+      setMsg(e.message || "Search failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function openDoc(id: number) {
     setExpandedId(id);
     setExpandedDoc(null);
@@ -135,7 +155,9 @@ export default function DarkWebSearch() {
   }
 
   function copy(text: string) {
-    try { navigator.clipboard.writeText(text); } catch {}
+    try {
+      navigator.clipboard.writeText(text);
+    } catch {}
   }
 
   return (
@@ -155,7 +177,7 @@ export default function DarkWebSearch() {
             placeholder="http://… .onion/"
             style={inputStyle}
           />
-          <button onClick={crawl} style={btn}>Crawl</button>
+        <button onClick={crawl} style={btn}>Crawl</button>
         </div>
         <div style={small}>Fetched through Django using your Tor proxy (SOCKS).</div>
 
@@ -171,10 +193,15 @@ export default function DarkWebSearch() {
             <div style={{ marginTop: 6, fontSize: 13, color: "#334155", maxHeight: 160, overflow: "auto", whiteSpace: "pre-wrap" }}>
               {(lastCrawl.text || "").slice(0, 2000) || "(empty)"}{(lastCrawl.text || "").length > 2000 ? "…" : ""}
             </div>
-            <div style={{ marginTop: 6 }}>
+            <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button onClick={() => copy(lastCrawl.text || "")} style={{ ...btn, padding: "4px 8px" }}>
                 Copy text
               </button>
+              {typeof (lastCrawl as any).id === "number" && (
+                <button onClick={() => openDoc((lastCrawl as any).id)} style={{ ...btn, padding: "4px 8px" }}>
+                  Read more
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -204,8 +231,36 @@ export default function DarkWebSearch() {
                     {p.title || "(no title)"} <span style={{ color: "#64748b" }}>• {p.url}</span>
                   </div>
                   <div style={{ ...small, marginTop: 4 }}>
-                    {p.domain ? <span style={chip}>{p.domain}</span> : null} {p.fetched_at ? ` · ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(p.fetched_at))}` : ""}
+                    {p.domain ? <span style={chip}>{p.domain}</span> : null}{" "}
+                    {p.fetched_at ? ` · ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(p.fetched_at))}` : ""}
                   </div>
+
+                  {/* entity chips */}
+                  {p.entities && (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                      {(p.entities.email || []).map((v, i) => (
+                        <button key={`e:${v}:${i}`} onClick={() => searchByEntity("email", v)} style={{ ...chip, cursor: "pointer" }}>
+                          📧 {v}
+                        </button>
+                      ))}
+                      {(p.entities.ip || []).map((v, i) => (
+                        <button key={`ip:${v}:${i}`} onClick={() => searchByEntity("ip", v)} style={{ ...chip, cursor: "pointer" }}>
+                          🧭 {v}
+                        </button>
+                      ))}
+                      {(p.entities.btc || []).map((v, i) => (
+                        <button key={`btc:${v}:${i}`} onClick={() => searchByEntity("btc", v)} style={{ ...chip, cursor: "pointer" }}>
+                          ₿ {v.slice(0, 10)}…
+                        </button>
+                      ))}
+                      {(p.entities.xmr || []).map((v, i) => (
+                        <button key={`xmr:${v}:${i}`} onClick={() => searchByEntity("xmr", v)} style={{ ...chip, cursor: "pointer" }}>
+                          ɱ {v.slice(0, 10)}…
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
                   <div style={{ marginTop: 6, fontSize: 13, color: "#334155", maxHeight: 120, overflow: "auto", whiteSpace: "pre-wrap" }}>
                     {(p.snippet || "").slice(0, 800) || "(empty)"}{(p.snippet || "").length > 800 ? "…" : ""}
                   </div>

@@ -65,3 +65,15 @@ user@DESKTOP-T6R9LL5:/mnt/c$ ipconfig.exe | grep -i "ipv4"
 https://the-odds-api.com/sports-odds-data/sports-apis.html?utm_source=chatgpt.com
 
 
+
+
+docker ps --filter "publish=6379" \
+  --format 'TABLE {{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}'
+
+
+
+docker stop a93526c3d741
+docker rm a93526c3d741      # optional but tidy
+
+# now run the one you want
+docker run --rm --name redis7 -p 6379:6379 redis:7

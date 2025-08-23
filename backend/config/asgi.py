@@ -1,14 +1,18 @@
 # config/asgi.py
 import os
+
 from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
 from channels.security.websocket import AllowedHostsOriginValidator, OriginValidator
-import projects.routing  # must define `websocket_urlpatterns`
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
+# Initialize Django (loads settings & apps)
 django_asgi_app = get_asgi_application()
+
+# Safe to import Django-dependent modules now
+import projects.routing  # noqa: E402  # must define `websocket_urlpatterns`
 
 # Restrict websocket origins (add your real domains)
 WEBSOCKET_ALLOWED_ORIGINS = [

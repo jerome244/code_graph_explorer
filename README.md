@@ -77,3 +77,20 @@ docker rm a93526c3d741      # optional but tidy
 
 # now run the one you want
 docker run --rm --name redis7 -p 6379:6379 redis:7
+
+
+
+
+
+
+
+
+# Redis (for Django Channels)
+docker rm -f redis || true
+docker run -d --name redis --restart unless-stopped \
+  -p 127.0.0.1:6379:6379 redis:7
+
+# Tor SOCKS proxy
+docker rm -f torproxy || true
+docker run -d --name torproxy --restart unless-stopped \
+  -p 127.0.0.1:9150:9050 dperson/torproxy:latest

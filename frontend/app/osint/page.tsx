@@ -3,6 +3,7 @@
 import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
+import DarkWebSearch from "../../components/DarkWebSearch";
 
 // Graph viewer (Cytoscape)
 const CytoscapeComponent = dynamic(() => import("react-cytoscapejs"), { ssr: false });
@@ -632,6 +633,9 @@ export default function OsintPage() {
 
         {/* RIGHT COLUMN */}
         <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
+          {/* Dark Web (Tor) — text-only crawler/search */}
+          <DarkWebSearch />
+
           {/* URL input */}
           <div style={box}>
             <div style={{ display: "grid", gap: 8 }}>
@@ -997,6 +1001,8 @@ export default function OsintPage() {
             </ul>
           </div>
         </div>
+
+
       </section>
     </main>
   );

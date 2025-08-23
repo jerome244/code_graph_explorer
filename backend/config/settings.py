@@ -122,5 +122,5 @@ CHANNEL_LAYERS = {
 }
 
 # Dark-web proxy through Tor
-TOR_SOCKS_PROXY = os.getenv("TOR_SOCKS_PROXY", "socks5h://127.0.0.1:32769")
+TOR_SOCKS_PROXY = os.getenv("TOR_SOCKS_PROXY", "socks5h://127.0.0.1:9150")
 

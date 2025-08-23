@@ -59,3 +59,9 @@ http://192.168.1.23:3000/pong?room=lobby
 
 
 user@DESKTOP-T6R9LL5:/mnt/c$ ipconfig.exe | grep -i "ipv4"
+
+
+
+https://the-odds-api.com/sports-odds-data/sports-apis.html?utm_source=chatgpt.com
+
+

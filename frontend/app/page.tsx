@@ -91,6 +91,31 @@ export default async function HomePage() {
           >
             Play Craft
           </Link>
+          <Link
+            href="/brawler"
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid #e5e7eb",
+              textDecoration: "none",
+              fontWeight: 600,
+            }}
+          >
+            Play Brawler
+          </Link>
+          <Link
+            href="/betting"
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid #e5e7eb",
+              textDecoration: "none",
+              fontWeight: 600,
+            }}
+          >
+            Sports Odds
+          </Link>
+
 
           {me ? (
             <form action="/api/users/logout" method="post">

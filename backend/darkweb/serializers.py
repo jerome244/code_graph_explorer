@@ -1,8 +1,7 @@
 from rest_framework import serializers
 from .models import Page
 
-
 class PageSerializer(serializers.ModelSerializer):
-	class Meta:
-		model = Page
-		fields = ["id","url","domain","title","text","fetched_at","sha256"]
+    class Meta:
+        model = Page
+        fields = ["id", "url", "domain", "title", "text", "fetched_at", "sha256"]

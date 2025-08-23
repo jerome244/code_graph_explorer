@@ -1,11 +1,21 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.generics import RetrieveAPIView
 from django.db import models
+
 from .models import Page
+from .serializers import PageSerializer
 from .utils import fetch_via_tor, extract_text_and_title, hash_text, domain_from_url
 
 class CrawlView(APIView):
+    """
+    POST /api/darkweb/crawl
+    -> fetch via Tor, extract full text, upsert Page, return full record
+    """
+    authentication_classes = []
+    permission_classes = []
+
     def post(self, request):
         url = (request.data or {}).get("url")
         if not url:
@@ -22,19 +32,14 @@ class CrawlView(APIView):
                 url=url,
                 defaults={"domain": dom, "title": title, "text": text, "sha256": sha},
             )
-            return Response({
-                "id": page.id, "url": page.url, "domain": page.domain,
-                "title": page.title, "text": page.text, "fetched_at": page.fetched_at,
-                "sha256": page.sha256,
-            })
+            return Response(PageSerializer(page).data, status=201)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
-
 
 class SearchView(APIView):
     """
     GET /api/darkweb/search?q=term&limit=20
-    Case-insensitive search over title/text/domain. Returns quickly with a small payload.
+    -> returns a small payload with a short snippet
     """
     authentication_classes = []
     permission_classes = []
@@ -55,7 +60,8 @@ class SearchView(APIView):
             .filter(
                 models.Q(title__icontains=q) |
                 models.Q(text__icontains=q) |
-                models.Q(domain__icontains=q)
+                models.Q(domain__icontains=q) |
+                models.Q(url__icontains=q)
             )
             .order_by("-fetched_at")[:limit]
         )
@@ -72,3 +78,13 @@ class SearchView(APIView):
             for p in qs
         ]
         return Response(data, status=200)
+
+class PageDetailView(RetrieveAPIView):
+    """
+    GET /api/darkweb/pages/<id>
+    -> returns the full Page (including full text)
+    """
+    authentication_classes = []
+    permission_classes = []
+    queryset = Page.objects.all()
+    serializer_class = PageSerializer

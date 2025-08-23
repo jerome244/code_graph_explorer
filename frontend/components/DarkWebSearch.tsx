@@ -2,12 +2,25 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-type Page = {
+// Result row (from /search)
+type SearchResult = {
+  id: number;
+  url: string;
+  title?: string;
+  domain?: string;
+  snippet?: string;
+  fetched_at?: string;
+};
+
+// Full page (from /pages/:id)
+type PageDetail = {
+  id: number;
   url: string;
   title?: string;
   text?: string;
   fetched_at?: string;
   domain?: string;
+  sha256?: string;
 };
 
 const box: React.CSSProperties = { border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, background: "white" };
@@ -22,7 +35,7 @@ async function getJSON(url: string, timeoutMs = 20000) {
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const r = await fetch(url, { signal: ctrl.signal });
+    const r = await fetch(url, { signal: ctrl.signal, cache: "no-store" });
     const text = await r.text();
     if (!r.ok) throw new Error(`HTTP ${r.status} – ${text.slice(0, 300)}`);
     return text ? JSON.parse(text) : null;
@@ -57,8 +70,12 @@ export default function DarkWebSearch() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string>("");
 
-  const [lastCrawl, setLastCrawl] = useState<Page | null>(null);
-  const [results, setResults] = useState<Page[] | null>(null);
+  const [lastCrawl, setLastCrawl] = useState<PageDetail | null>(null);
+  const [results, setResults] = useState<SearchResult[] | null>(null);
+
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [expandedDoc, setExpandedDoc] = useState<PageDetail | null>(null);
+  const [loadingDoc, setLoadingDoc] = useState(false);
 
   useEffect(() => {
     if (typeof window !== "undefined") console.log("Using Next rewrite proxy → /api/*");
@@ -77,7 +94,7 @@ export default function DarkWebSearch() {
     setMsg("Crawling via Tor…");
     setLastCrawl(null);
     try {
-      const data: Page = await postJSON(`/api/darkweb/crawl`, { url: onionUrl });
+      const data: PageDetail = await postJSON(`/api/darkweb/crawl`, { url: onionUrl });
       setLastCrawl(data);
       setMsg("Done.");
     } catch (e: any) {
@@ -93,7 +110,7 @@ export default function DarkWebSearch() {
     setResults(null);
     try {
       const data = await getJSON(`/api/darkweb/search?q=${encodeURIComponent(q)}`);
-      const arr: Page[] = Array.isArray(data) ? data : Array.isArray((data as any)?.results) ? (data as any).results : [];
+      const arr: SearchResult[] = Array.isArray(data) ? data : [];
       setResults(arr);
       setMsg(`Found ${arr.length} result(s).`);
     } catch (e: any) {
@@ -103,10 +120,22 @@ export default function DarkWebSearch() {
     }
   }
 
-  function copy(text: string) {
+  async function openDoc(id: number) {
+    setExpandedId(id);
+    setExpandedDoc(null);
+    setLoadingDoc(true);
     try {
-      navigator.clipboard.writeText(text);
-    } catch {}
+      const data: PageDetail = await getJSON(`/api/darkweb/pages/${id}`);
+      setExpandedDoc(data);
+    } catch (e: any) {
+      setExpandedDoc(null);
+    } finally {
+      setLoadingDoc(false);
+    }
+  }
+
+  function copy(text: string) {
+    try { navigator.clipboard.writeText(text); } catch {}
   }
 
   return (
@@ -169,8 +198,8 @@ export default function DarkWebSearch() {
             <div style={small}>No results.</div>
           ) : (
             <div style={{ display: "grid", gap: 8, marginTop: 6 }}>
-              {results.slice(0, 20).map((p, i) => (
-                <div key={`${p.url}:${i}`} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
+              {results.slice(0, 20).map((p) => (
+                <div key={p.id} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
                   <div style={{ fontWeight: 600 }}>
                     {p.title || "(no title)"} <span style={{ color: "#64748b" }}>• {p.url}</span>
                   </div>
@@ -178,11 +207,12 @@ export default function DarkWebSearch() {
                     {p.domain ? <span style={chip}>{p.domain}</span> : null} {p.fetched_at ? ` · ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(p.fetched_at))}` : ""}
                   </div>
                   <div style={{ marginTop: 6, fontSize: 13, color: "#334155", maxHeight: 120, overflow: "auto", whiteSpace: "pre-wrap" }}>
-                    {(p.text || "").slice(0, 800) || "(empty)"}{(p.text || "").length > 800 ? "…" : ""}
+                    {(p.snippet || "").slice(0, 800) || "(empty)"}{(p.snippet || "").length > 800 ? "…" : ""}
                   </div>
-                  <div style={{ marginTop: 6, display: "flex", gap: 8 }}>
+                  <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <button onClick={() => copy(p.url)} style={{ ...btn, padding: "4px 8px" }}>Copy URL</button>
-                    <button onClick={() => copy(p.text || "")} style={{ ...btn, padding: "4px 8px" }}>Copy excerpt</button>
+                    <button onClick={() => copy(p.snippet || "")} style={{ ...btn, padding: "4px 8px" }}>Copy snippet</button>
+                    <button onClick={() => openDoc(p.id)} style={{ ...btn, padding: "4px 8px" }}>Read more</button>
                   </div>
                 </div>
               ))}
@@ -190,6 +220,40 @@ export default function DarkWebSearch() {
             </div>
           ))}
       </div>
+
+      {/* Read more modal */}
+      {expandedId !== null && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}
+          onClick={() => { setExpandedId(null); setExpandedDoc(null); }}
+        >
+          <div onClick={(e) => e.stopPropagation()} style={{ maxWidth: 900, maxHeight: "80vh", overflow: "auto", background: "white", borderRadius: 12, padding: 16 }}>
+            {loadingDoc ? (
+              <div>Loading…</div>
+            ) : expandedDoc ? (
+              <>
+                <div style={{ fontWeight: 600, fontSize: 18 }}>
+                  {expandedDoc.title || expandedDoc.url}
+                </div>
+                <div style={{ ...small, marginTop: 4 }}>
+                  {expandedDoc.domain ? <span style={chip}>{expandedDoc.domain}</span> : null}
+                  {expandedDoc.fetched_at ? ` · ${tzFmt.format(new Date(expandedDoc.fetched_at))}` : ""}
+                  {expandedDoc.sha256 ? ` · sha256:${expandedDoc.sha256.slice(0, 12)}…` : ""}
+                </div>
+                <div style={{ marginTop: 8, whiteSpace: "pre-wrap", fontSize: 13, color: "#334155" }}>
+                  {expandedDoc.text || "(empty)"}
+                </div>
+                <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <a href={expandedDoc.url} target="_blank" rel="noreferrer" style={{ ...btn, textDecoration: "none" }}>Open onion link (Tor)</a>
+                  <button onClick={() => copy(expandedDoc.text || "")} style={{ ...btn, padding: "4px 8px" }}>Copy full text</button>
+                </div>
+              </>
+            ) : (
+              <div>Couldn’t load this page.</div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={{ marginTop: 8, ...small }}>
         Note: Onion links won’t open in a normal browser—use Tor Browser if you need to view them.

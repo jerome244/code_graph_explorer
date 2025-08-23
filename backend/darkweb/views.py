@@ -5,10 +5,11 @@ from rest_framework.generics import RetrieveAPIView
 from django.db import models
 from django.db.models import Count, Prefetch
 
-from .models import Page, Entity, Mention
-from .serializers import PageSerializer, EntitySerializer
+from .models import Page, Entity, Mention, Alert
+from .serializers import PageSerializer, EntitySerializer, AlertSerializer
 from .utils import fetch_via_tor, extract_text_and_title, hash_text, domain_from_url
 from .ioc import extract_iocs
+from .alert import run_alert
 
 class CrawlView(APIView):
     authentication_classes = []
@@ -141,3 +142,81 @@ class EntitiesView(APIView):
         qs = qs.annotate(pages=Count("mentions__page", distinct=True)).order_by("-pages", "value")[:limit]
         data = EntitySerializer(qs, many=True).data
         return Response(data, status=200)
+
+class AlertsView(APIView):
+    """
+    GET /api/darkweb/alerts           → list alerts
+    POST /api/darkweb/alerts          → create alert
+      body: { name?, q?, entity_kind?, entity_value?, domain_contains?,
+              frequency: "15m"|"hourly"|"daily",
+              notify_email?, notify_webhook?, since? }
+    """
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request):
+        alerts = Alert.objects.order_by("-created_at")
+        return Response(AlertSerializer(alerts, many=True).data)
+
+    def post(self, request):
+        data = request.data or {}
+        # sensible default "since" = now, so only future matches trigger
+        data.setdefault("since", timezone.now().isoformat())
+        ser = AlertSerializer(data=data)
+        if ser.is_valid():
+            a = ser.save(is_active=True)
+            return Response(AlertSerializer(a).data, status=201)
+        return Response(ser.errors, status=400)
+
+class AlertToggleView(APIView):
+    """POST /api/darkweb/alerts/<id>/toggle {is_active:true|false}"""
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request, pk):
+        try:
+            a = Alert.objects.get(pk=pk)
+        except Alert.DoesNotExist:
+            return Response({"error":"not found"}, status=404)
+        a.is_active = bool((request.data or {}).get("is_active", True))
+        a.save(update_fields=["is_active"])
+        return Response({"ok": True, "is_active": a.is_active})
+
+class AlertTestView(APIView):
+    """POST /api/darkweb/alerts/<id>/test → run once immediately and return match count (no side-effects)."""
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request, pk):
+        try:
+            a = Alert.objects.get(pk=pk)
+        except Alert.DoesNotExist:
+            return Response({"error":"not found"}, status=404)
+        # Dry-run: build queryset and count, don't update last_notified_at
+        from .alerts import _build_queryset
+        qs = _build_queryset(a)
+        count = qs.count()
+        sample = [
+            {"id": p.id, "title": p.title, "url": p.url, "domain": p.domain, "fetched_at": p.fetched_at}
+            for p in qs[:10]
+        ]
+        return Response({"count": count, "sample": sample})
+
+# darkweb/views.py
+class SourcesView(APIView):
+    authentication_classes = []
+    permission_classes = []
+    def get(self, request):
+        from .serializers import SourceSerializer
+        return Response(SourceSerializer(Source.objects.order_by("-created_at"), many=True).data)
+
+    def post(self, request):
+        from .serializers import SourceSerializer
+        data = request.data or {}
+        if "domain" not in data:
+            data["domain"] = domain_from_url(data.get("url","") or "")
+        ser = SourceSerializer(data=data)
+        if ser.is_valid():
+            s = ser.save(is_active=True)
+            return Response(SourceSerializer(s).data, status=201)
+        return Response(ser.errors, status=400)

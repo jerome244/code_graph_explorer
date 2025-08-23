@@ -41,3 +41,47 @@ class Mention(models.Model):
             models.Index(fields=["entity"]),
         ]
         unique_together = ("page", "entity")
+
+class Alert(models.Model):
+    FREQ_CHOICES = (
+        ("15m", "Every 15 minutes"),
+        ("hourly", "Hourly"),
+        ("daily", "Daily"),
+    )
+    name = models.CharField(max_length=200, blank=True, default="")
+    q = models.CharField(max_length=500, blank=True, default="")
+    entity_kind = models.CharField(max_length=16, blank=True, default="")   # email/ip/btc/xmr/...
+    entity_value = models.CharField(max_length=500, blank=True, default="")
+    domain_contains = models.CharField(max_length=255, blank=True, default="")
+
+    frequency = models.CharField(max_length=10, choices=FREQ_CHOICES, default="hourly")
+    is_active = models.BooleanField(default=True)
+
+    notify_email = models.EmailField(blank=True, default="")
+    notify_webhook = models.URLField(blank=True, default="")
+
+    last_run_at = models.DateTimeField(blank=True, null=True)
+    last_notified_at = models.DateTimeField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # Optional: only alert on pages newer than this (set on create)
+    since = models.DateTimeField(blank=True, null=True)
+
+    def __str__(self):
+        tgt = self.notify_email or self.notify_webhook or "(no target)"
+        return f"[{self.frequency}] {self.q or self.entity_value or '*'} → {tgt}"
+
+# darkweb/models.py
+class Source(models.Model):
+    url = models.URLField(max_length=2000, unique=True)
+    domain = models.CharField(max_length=255, db_index=True)
+    depth = models.IntegerField(default=1)           # 0 = only this page, 1 = follow internal links from it
+    frequency = models.CharField(max_length=10, default="hourly")  # "15m"|"hourly"|"daily"
+    is_active = models.BooleanField(default=True)
+    last_crawled_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self): return f"{self.domain} ({self.url})"
+    

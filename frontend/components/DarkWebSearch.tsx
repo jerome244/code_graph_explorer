@@ -30,6 +30,7 @@ const label: React.CSSProperties = { fontSize: 12, color: "#475569" };
 const chip: React.CSSProperties = { background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 6, padding: "2px 6px" };
 const inputStyle: React.CSSProperties = { flex: 1, minWidth: 240, border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 10px" };
 const btn: React.CSSProperties = { padding: "8px 12px", border: "1px solid #e5e7eb", borderRadius: 8, cursor: "pointer" };
+const miniBtn: React.CSSProperties = { padding: "2px 6px", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer", fontSize: 12 };
 
 // ---- helpers with timeout + clearer errors ----
 async function getJSON(url: string, timeoutMs = 20000) {
@@ -77,6 +78,12 @@ export default function DarkWebSearch() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [expandedDoc, setExpandedDoc] = useState<PageDetail | null>(null);
   const [loadingDoc, setLoadingDoc] = useState(false);
+
+  // Alert UI state
+  const [alertName, setAlertName] = useState("");
+  const [alertEmail, setAlertEmail] = useState("");
+  const [alertWebhook, setAlertWebhook] = useState("");
+  const [alertFreq, setAlertFreq] = useState<"15m" | "hourly" | "daily">("hourly");
 
   useEffect(() => {
     if (typeof window !== "undefined") console.log("Using Next rewrite proxy → /api/*");
@@ -140,6 +147,32 @@ export default function DarkWebSearch() {
     }
   }
 
+  async function createAlert(kind?: string, value?: string) {
+    setBusy(true);
+    setMsg("Creating alert…");
+    try {
+      if (!alertEmail && !alertWebhook) {
+        throw new Error("Provide an email or a webhook URL for notifications.");
+      }
+      const body: any = {
+        name: alertName || `Alert: ${q || value || kind || "*"}`,
+        q: q || "",
+        entity_kind: kind || "",
+        entity_value: value || "",
+        domain_contains: "",
+        frequency: alertFreq,
+        notify_email: alertEmail || "",
+        notify_webhook: alertWebhook || "",
+      };
+      await postJSON(`/api/darkweb/alerts`, body);
+      setMsg("Alert created.");
+    } catch (e: any) {
+      setMsg(e.message || "Failed to create alert");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function openDoc(id: number) {
     setExpandedId(id);
     setExpandedDoc(null);
@@ -155,9 +188,7 @@ export default function DarkWebSearch() {
   }
 
   function copy(text: string) {
-    try {
-      navigator.clipboard.writeText(text);
-    } catch {}
+    try { navigator.clipboard.writeText(text); } catch {}
   }
 
   return (
@@ -177,7 +208,7 @@ export default function DarkWebSearch() {
             placeholder="http://… .onion/"
             style={inputStyle}
           />
-        <button onClick={crawl} style={btn}>Crawl</button>
+          <button onClick={crawl} style={btn}>Crawl</button>
         </div>
         <div style={small}>Fetched through Django using your Tor proxy (SOCKS).</div>
 
@@ -220,6 +251,19 @@ export default function DarkWebSearch() {
           <button onClick={search} style={btn}>Search</button>
         </div>
 
+        {/* Save alert for this search */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          <input value={alertName} onChange={e=>setAlertName(e.target.value)} placeholder="Alert name (optional)" style={{ ...inputStyle, minWidth: 180 }} />
+          <input value={alertEmail} onChange={e=>setAlertEmail(e.target.value)} placeholder="Notify email (optional)" style={{ ...inputStyle, minWidth: 200 }} />
+          <input value={alertWebhook} onChange={e=>setAlertWebhook(e.target.value)} placeholder="Notify webhook URL (optional)" style={{ ...inputStyle, minWidth: 260 }} />
+          <select value={alertFreq} onChange={e=>setAlertFreq(e.target.value as any)} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 10px" }}>
+            <option value="15m">Every 15 min</option>
+            <option value="hourly">Hourly</option>
+            <option value="daily">Daily</option>
+          </select>
+          <button onClick={()=>createAlert()} style={btn}>Save alert for this search</button>
+        </div>
+
         {Array.isArray(results) &&
           (results.length === 0 ? (
             <div style={small}>No results.</div>
@@ -235,28 +279,40 @@ export default function DarkWebSearch() {
                     {p.fetched_at ? ` · ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(p.fetched_at))}` : ""}
                   </div>
 
-                  {/* entity chips */}
+                  {/* entity chips + quick alert bells */}
                   {p.entities && (
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
                       {(p.entities.email || []).map((v, i) => (
-                        <button key={`e:${v}:${i}`} onClick={() => searchByEntity("email", v)} style={{ ...chip, cursor: "pointer" }}>
-                          📧 {v}
-                        </button>
+                        <div key={`e:${v}:${i}`} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                          <button onClick={() => searchByEntity("email", v)} style={{ ...chip, cursor: "pointer" }}>
+                            📧 {v}
+                          </button>
+                          <button title="Create alert for this email" onClick={() => createAlert("email", v)} style={miniBtn}>🔔</button>
+                        </div>
                       ))}
                       {(p.entities.ip || []).map((v, i) => (
-                        <button key={`ip:${v}:${i}`} onClick={() => searchByEntity("ip", v)} style={{ ...chip, cursor: "pointer" }}>
-                          🧭 {v}
-                        </button>
+                        <div key={`ip:${v}:${i}`} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                          <button onClick={() => searchByEntity("ip", v)} style={{ ...chip, cursor: "pointer" }}>
+                            🧭 {v}
+                          </button>
+                          <button title="Create alert for this IP" onClick={() => createAlert("ip", v)} style={miniBtn}>🔔</button>
+                        </div>
                       ))}
                       {(p.entities.btc || []).map((v, i) => (
-                        <button key={`btc:${v}:${i}`} onClick={() => searchByEntity("btc", v)} style={{ ...chip, cursor: "pointer" }}>
-                          ₿ {v.slice(0, 10)}…
-                        </button>
+                        <div key={`btc:${v}:${i}`} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                          <button onClick={() => searchByEntity("btc", v)} style={{ ...chip, cursor: "pointer" }}>
+                            ₿ {v.slice(0, 10)}…
+                          </button>
+                          <button title="Create alert for this BTC address" onClick={() => createAlert("btc", v)} style={miniBtn}>🔔</button>
+                        </div>
                       ))}
                       {(p.entities.xmr || []).map((v, i) => (
-                        <button key={`xmr:${v}:${i}`} onClick={() => searchByEntity("xmr", v)} style={{ ...chip, cursor: "pointer" }}>
-                          ɱ {v.slice(0, 10)}…
-                        </button>
+                        <div key={`xmr:${v}:${i}`} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                          <button onClick={() => searchByEntity("xmr", v)} style={{ ...chip, cursor: "pointer" }}>
+                            ɱ {v.slice(0, 10)}…
+                          </button>
+                          <button title="Create alert for this XMR address" onClick={() => createAlert("xmr", v)} style={miniBtn}>🔔</button>
+                        </div>
                       ))}
                     </div>
                   )}

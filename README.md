@@ -102,3 +102,19 @@ user@DESKTOP-T6R9LL5:/mnt/c$ docker run -d --name torproxy --restart unless-stop
 cf5f15665759bf52b64544f344009e0811dfbfb4d5f8c2c2b8245354a030a2a0
 user@DESKTOP-T6R9LL5:/mnt/c$ docker port torproxy 9050
 127.0.0.1:9150
+
+
+
+
+curl -X POST "https://discord.com/api/webhooks/1408864996854857890/2gAkKCyFqYlHfpa_M80J4F5Qna5783nEZPoIt05kJ8f4T2SeJkKoWeSpREFGgq0bZw-t"   -H "Content-Type: application/json"   -d '{"content":"@here test alert from OSINT","allowed_mentions":{"parse":["everyone","roles","users"]}}'
+
+
+
+
+
+python manage.py shell <<'PY'
+from darkweb.models import Alert
+from darkweb.alerts import run_alert
+a = Alert.objects.order_by('-id').first()  # or Alert.objects.get(id=<ID>)
+print("sent:", run_alert(a))
+PY

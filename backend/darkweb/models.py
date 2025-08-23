@@ -57,8 +57,8 @@ class Alert(models.Model):
     frequency = models.CharField(max_length=10, choices=FREQ_CHOICES, default="hourly")
     is_active = models.BooleanField(default=True)
 
-    notify_email = models.EmailField(blank=True, default="")
-    notify_webhook = models.URLField(blank=True, default="")
+    notify_email   = models.EmailField(blank=True, default="", max_length=320)
+    notify_webhook = models.URLField(blank=True, default="", max_length=1000)  # was 200
 
     last_run_at = models.DateTimeField(blank=True, null=True)
     last_notified_at = models.DateTimeField(blank=True, null=True)

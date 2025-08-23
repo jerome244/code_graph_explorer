@@ -4,12 +4,15 @@ from rest_framework import status
 from rest_framework.generics import RetrieveAPIView
 from django.db import models
 from django.db.models import Count, Prefetch
+from django.utils import timezone
+from django.db import DataError, IntegrityError
+from rest_framework.exceptions import ValidationError
 
 from .models import Page, Entity, Mention, Alert
 from .serializers import PageSerializer, EntitySerializer, AlertSerializer
 from .utils import fetch_via_tor, extract_text_and_title, hash_text, domain_from_url
 from .ioc import extract_iocs
-from .alert import run_alert
+from .alerts import run_alert
 
 class CrawlView(APIView):
     authentication_classes = []
@@ -160,14 +163,17 @@ class AlertsView(APIView):
 
     def post(self, request):
         data = request.data or {}
-        # sensible default "since" = now, so only future matches trigger
-        data.setdefault("since", timezone.now().isoformat())
-        ser = AlertSerializer(data=data)
-        if ser.is_valid():
+        data.setdefault("since", timezone.now())  # let DRF handle datetime object
+        try:
+            ser = AlertSerializer(data=data)
+            ser.is_valid(raise_exception=True)
             a = ser.save(is_active=True)
             return Response(AlertSerializer(a).data, status=201)
-        return Response(ser.errors, status=400)
-
+        except ValidationError as ve:
+            return Response(ve.detail, status=400)
+        except (DataError, IntegrityError) as e:
+            return Response({"error": "Invalid data", "detail": str(e)}, status=400)
+        
 class AlertToggleView(APIView):
     """POST /api/darkweb/alerts/<id>/toggle {is_active:true|false}"""
     authentication_classes = []

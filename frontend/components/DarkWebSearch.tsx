@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type Page = {
   url: string;
@@ -17,16 +17,52 @@ const chip: React.CSSProperties = { background: "#f8fafc", border: "1px solid #e
 const inputStyle: React.CSSProperties = { flex: 1, minWidth: 240, border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 10px" };
 const btn: React.CSSProperties = { padding: "8px 12px", border: "1px solid #e5e7eb", borderRadius: 8, cursor: "pointer" };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+// ---- helpers with timeout + clearer errors ----
+async function getJSON(url: string, timeoutMs = 20000) {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal });
+    const text = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status} – ${text.slice(0, 300)}`);
+    return text ? JSON.parse(text) : null;
+  } finally {
+    clearTimeout(to);
+  }
+}
+
+async function postJSON(url: string, body: any, timeoutMs = 30000) {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    const text = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status} – ${text.slice(0, 300)}`);
+    return text ? JSON.parse(text) : null;
+  } finally {
+    clearTimeout(to);
+  }
+}
 
 export default function DarkWebSearch() {
-  const [onionUrl, setOnionUrl] = useState("http://exampleonion.onion/");
+  const [onionUrl, setOnionUrl] = useState(
+    "http://ciadotgov4sjwlzihbbgxnqg3xiyrg7so2r2o3lt5wz5ypk4sxyjstad.onion/"
+  );
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string>("");
 
   const [lastCrawl, setLastCrawl] = useState<Page | null>(null);
   const [results, setResults] = useState<Page[] | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") console.log("Using Next rewrite proxy → /api/*");
+  }, []);
 
   const tzFmt = useMemo(() => {
     try {
@@ -41,13 +77,7 @@ export default function DarkWebSearch() {
     setMsg("Crawling via Tor…");
     setLastCrawl(null);
     try {
-      const r = await fetch(`${API_BASE}/api/darkweb/crawl`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url: onionUrl }),
-      });
-      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-      const data: Page = await r.json();
+      const data: Page = await postJSON(`/api/darkweb/crawl`, { url: onionUrl });
       setLastCrawl(data);
       setMsg("Done.");
     } catch (e: any) {
@@ -62,10 +92,8 @@ export default function DarkWebSearch() {
     setMsg("Searching index…");
     setResults(null);
     try {
-      const r = await fetch(`${API_BASE}/api/darkweb/search?q=${encodeURIComponent(q)}`);
-      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-      const data = await r.json();
-      const arr: Page[] = Array.isArray(data) ? data : Array.isArray(data?.results) ? data.results : [];
+      const data = await getJSON(`/api/darkweb/search?q=${encodeURIComponent(q)}`);
+      const arr: Page[] = Array.isArray(data) ? data : Array.isArray((data as any)?.results) ? (data as any).results : [];
       setResults(arr);
       setMsg(`Found ${arr.length} result(s).`);
     } catch (e: any) {
@@ -136,20 +164,18 @@ export default function DarkWebSearch() {
           <button onClick={search} style={btn}>Search</button>
         </div>
 
-        {Array.isArray(results) && (
-          results.length === 0 ? (
+        {Array.isArray(results) &&
+          (results.length === 0 ? (
             <div style={small}>No results.</div>
           ) : (
             <div style={{ display: "grid", gap: 8, marginTop: 6 }}>
               {results.slice(0, 20).map((p, i) => (
                 <div key={`${p.url}:${i}`} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 8 }}>
                   <div style={{ fontWeight: 600 }}>
-                    {p.title || "(no title)"}{" "}
-                    <span style={{ color: "#64748b" }}>• {p.url}</span>
+                    {p.title || "(no title)"} <span style={{ color: "#64748b" }}>• {p.url}</span>
                   </div>
                   <div style={{ ...small, marginTop: 4 }}>
-                    {p.domain ? <span style={chip}>{p.domain}</span> : null}{" "}
-                    {p.fetched_at ? ` · ${tzFmt.format(new Date(p.fetched_at))}` : ""}
+                    {p.domain ? <span style={chip}>{p.domain}</span> : null} {p.fetched_at ? ` · ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(p.fetched_at))}` : ""}
                   </div>
                   <div style={{ marginTop: 6, fontSize: 13, color: "#334155", maxHeight: 120, overflow: "auto", whiteSpace: "pre-wrap" }}>
                     {(p.text || "").slice(0, 800) || "(empty)"}{(p.text || "").length > 800 ? "…" : ""}
@@ -162,8 +188,7 @@ export default function DarkWebSearch() {
               ))}
               {results.length > 20 && <div style={small}>+{results.length - 20} more (refine your query)</div>}
             </div>
-          )
-        )}
+          ))}
       </div>
 
       <div style={{ marginTop: 8, ...small }}>

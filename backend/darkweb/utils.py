@@ -67,3 +67,15 @@ def hash_text(text: str) -> str:
 
 def domain_from_url(url: str) -> str:
     return urlparse(url).netloc
+
+def normalize_onion_url(s: str) -> str:
+    s = (s or "").strip()
+    if not s:
+        return s
+    if "://" not in s:
+        s = "http://" + s
+    # block non-onion (optional)
+    u = urlparse(s)
+    if not u.netloc.endswith(".onion"):
+        return s  # or raise ValueError("Only .onion allowed")
+    return s

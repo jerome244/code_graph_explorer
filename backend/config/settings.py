@@ -26,7 +26,8 @@ INSTALLED_APPS = [
     # local
     "users",
     "projects",
-    "channels"
+    "channels",
+    "darkweb"
 ]
 
 MIDDLEWARE = [
@@ -119,3 +120,7 @@ CHANNEL_LAYERS = {
         "CONFIG": {"hosts": ["redis://127.0.0.1:6379"]},
     }
 }
+
+# Dark-web proxy through Tor
+TOR_SOCKS_PROXY = os.getenv("TOR_SOCKS_PROXY", "socks5h://127.0.0.1:32769")
+

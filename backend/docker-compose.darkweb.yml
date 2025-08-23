@@ -1,0 +1,9 @@
+version: "3.8"
+services:
+tor:
+image: dperson/torproxy:latest
+command: -a 0.0.0.0
+ports:
+- "127.0.0.1:9050:9050" # SOCKS5 on host for local dev
+restart: unless-stopped
+# If your Django runs in Docker too, you can set TOR_SOCKS_PROXY to socks5h://tor:9050

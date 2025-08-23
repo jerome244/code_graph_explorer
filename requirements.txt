@@ -6,3 +6,8 @@ python-dotenv>=1.0
 channels>=4
 channels-redis>=4
 daphne>=4
+
+requests[socks]
+trafilatura
+beautifulsoup4
+lxml

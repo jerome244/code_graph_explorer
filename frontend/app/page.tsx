@@ -116,6 +116,12 @@ export default async function HomePage() {
             Sports Odds
           </Link>
 
+          <Link
+            href="/osint"
+            style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #e5e7eb", textDecoration: "none", fontWeight: 600 }}
+          >
+            OSINT Lab
+          </Link>
 
           {me ? (
             <form action="/api/users/logout" method="post">

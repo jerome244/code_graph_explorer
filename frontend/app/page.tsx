@@ -41,6 +41,20 @@ export default async function HomePage() {
           >
             Go to Graph
           </Link>
+
+          {/* Games */}
+          <Link
+            href="/doom"
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid #e5e7eb",
+              textDecoration: "none",
+              fontWeight: 600,
+            }}
+          >
+            Play Doom-like
+          </Link>
           <Link
             href="/pong"
             style={{
@@ -51,7 +65,31 @@ export default async function HomePage() {
               fontWeight: 600,
             }}
           >
-            Play Pong (realtime)
+            Play Pong
+          </Link>
+          <Link
+            href="/kart"
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid #e5e7eb",
+              textDecoration: "none",
+              fontWeight: 600,
+            }}
+          >
+            Play Mini Kart
+          </Link>
+          <Link
+            href="/craft"
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid #e5e7eb",
+              textDecoration: "none",
+              fontWeight: 600,
+            }}
+          >
+            Play Craft
           </Link>
 
           {me ? (

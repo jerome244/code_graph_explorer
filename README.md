@@ -94,3 +94,11 @@ docker run -d --name redis --restart unless-stopped \
 docker rm -f torproxy || true
 docker run -d --name torproxy --restart unless-stopped \
   -p 127.0.0.1:9150:9050 dperson/torproxy:latest
+
+
+
+user@DESKTOP-T6R9LL5:/mnt/c$ docker run -d --name torproxy --restart unless-stopped \
+  -p 127.0.0.1:9150:9050 dperson/torproxy:latest       
+cf5f15665759bf52b64544f344009e0811dfbfb4d5f8c2c2b8245354a030a2a0
+user@DESKTOP-T6R9LL5:/mnt/c$ docker port torproxy 9050
+127.0.0.1:9150

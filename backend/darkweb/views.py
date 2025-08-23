@@ -1,55 +1,74 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from django.db.models import Q
-from django.conf import settings
+from django.db import models
 from .models import Page
-from .serializers import PageSerializer
 from .utils import fetch_via_tor, extract_text_and_title, hash_text, domain_from_url
 
-
-def _socks_from_settings():
-    return getattr(settings, "TOR_SOCKS_PROXY", "socks5h://127.0.0.1:9050")
-
-
 class CrawlView(APIView):
-    """
-    POST { "url": "http://example.onion/" }
-    Crawls a single page via Tor (text-only), stores/updates it, returns the record.
-    """
     def post(self, request):
-        url = request.data.get("url")
-        if not url or not url.startswith("http"):
-            return Response({"detail":"Provide a valid http(s) URL."}, status=status.HTTP_400_BAD_REQUEST)
+        url = (request.data or {}).get("url")
+        if not url:
+            return Response({"error": "Missing url"}, status=400)
         try:
-            html = fetch_via_tor(url, _socks_from_settings())
+            html = fetch_via_tor(url, timeout=30)
             title, text = extract_text_and_title(html)
-            if not text.strip():
-                return Response({"detail":"Fetched but found no extractable text."}, status=status.HTTP_204_NO_CONTENT)
-            sha = hash_text(html)
-            obj, _ = Page.objects.update_or_create(
+            if not text:
+                return Response({"error": "No text extracted"}, status=502)
+
+            dom = domain_from_url(url)
+            sha = hash_text(text)
+            page, _ = Page.objects.update_or_create(
                 url=url,
-                defaults={
-                    "domain": domain_from_url(url),
-                    "title": title,
-                    "text": text,
-                    "sha256": sha,
-                },
+                defaults={"domain": dom, "title": title, "text": text, "sha256": sha},
             )
-            return Response(PageSerializer(obj).data, status=status.HTTP_200_OK)
+            return Response({
+                "id": page.id, "url": page.url, "domain": page.domain,
+                "title": page.title, "text": page.text, "fetched_at": page.fetched_at,
+                "sha256": page.sha256,
+            })
         except Exception as e:
-            return Response({"detail": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
 
 
 class SearchView(APIView):
     """
-    GET /api/darkweb/search?q=term
-    Full-text-ish search (title/text LIKE) limited to 50 results.
+    GET /api/darkweb/search?q=term&limit=20
+    Case-insensitive search over title/text/domain. Returns quickly with a small payload.
     """
+    authentication_classes = []
+    permission_classes = []
+
     def get(self, request):
-        q = request.GET.get("q","").strip()
-        qs = Page.objects.all()
-        if q:
-            qs = qs.filter(Q(title__icontains=q) | Q(text__icontains=q) | Q(url__icontains=q))
-        qs = qs.order_by("-fetched_at")[:50]
-        return Response(PageSerializer(qs, many=True).data, status=status.HTTP_200_OK)
+        q = (request.query_params.get("q") or "").strip()
+        if not q:
+            return Response([], status=200)
+
+        try:
+            limit = int(request.query_params.get("limit", "20"))
+        except ValueError:
+            limit = 20
+        limit = max(1, min(limit, 50))
+
+        qs = (
+            Page.objects
+            .filter(
+                models.Q(title__icontains=q) |
+                models.Q(text__icontains=q) |
+                models.Q(domain__icontains=q)
+            )
+            .order_by("-fetched_at")[:limit]
+        )
+
+        data = [
+            {
+                "id": p.id,
+                "url": p.url,
+                "domain": p.domain,
+                "title": p.title or p.domain,
+                "snippet": (p.text or "")[:300],
+                "fetched_at": p.fetched_at,
+            }
+            for p in qs
+        ]
+        return Response(data, status=200)

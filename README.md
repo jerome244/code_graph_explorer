@@ -12,5 +12,10 @@ npm run dev
 
 sudo apt update
 sudo apt install tor
-sudo service tor start          # starts SOCKS at 127.0.0.1:9050
+sudo service tor start           
+SOCKS at 127.0.0.1:9050
 sudo service tor status
+
+
+
+npm i @react-three/fiber three

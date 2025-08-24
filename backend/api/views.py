@@ -184,8 +184,9 @@ def entities(request):
                     "role": r.choice(["farmer", "guard", "merchant"])
                 })
 
-    # Animals on grass above water
-    for i in range(r.randint(0, 3)):
+    # Animals on grass above water (guarantee 2..5 per chunk)
+    count = r.randint(2, 5)
+    for i in range(count):
         x = cx * size + r.randint(0, size - 1)
         z = cz * size + r.randint(0, size - 1)
         y_top = height_at(x, z)
@@ -194,7 +195,8 @@ def entities(request):
             ents.append({
                 "id": f"a-{cx}-{cz}-{i}",
                 "type": kind,
-                "x": x + 0.5, "y": y_top + 1, "z": z + 0.5
+                "x": x + 0.5, "y": y_top + 1.05, "z": z + 0.5
             })
+
 
     return JsonResponse({"entities": ents, "center": village_center})

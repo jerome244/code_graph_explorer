@@ -25,7 +25,19 @@ SECRET_KEY = "django-insecure-qdw2hu!3_)r@le@vvn8lv0&873r(qwem!okzbzl@6g4^=p_e(e
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+# Use ASGI (Channels)
+ASGI_APPLICATION = "config.asgi.application"
+
+# Allow dev hosts
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", "DESKTOP-T6R9LL5"]  # add your hostname if needed
+
+# Channels layer (Redis)
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {"hosts": ["redis://127.0.0.1:6379/1"]},
+    }
+}
 
 
 # Application definition
@@ -34,6 +46,7 @@ INSTALLED_APPS = [
     # third-party
     "rest_framework",
     "corsheaders",
+    "channels",
 
     # django
     "django.contrib.admin",

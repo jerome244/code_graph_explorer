@@ -33,26 +33,34 @@ export default function VoxelApp() {
   const [water, setWater] = useState<Set<string>>(new Set());
   const [chunks, setChunks] = useState<Map<string, ChunkResp>>(new Map());
   const [entities, setEntities] = useState<Map<string, Entity[]>>(new Map());
-  const [overrides, setOverrides] = useState<Map<string, string|null>>(new Map()); // key -> material or null (for future mining)
+  const [overrides, setOverrides] = useState<Map<string, string|null>>(new Map()); // key -> material or null
 
   return (
     <div style={{ width: '100%', height: '80vh', border: '1px solid #eee', borderRadius: 8, position: 'relative' }}>
       <Canvas camera={{ position: [10, 12, 16], fov: 70 }}>
         <DayNightProvider dayLengthSec={180}>
           <SkySunClouds />
+
           <WorldLoader
             chunks={chunks} setChunks={setChunks}
             entities={entities} setEntities={setEntities}
             setSolid={setSolid} setWater={setWater}
           />
+
           {Array.from(chunks.values()).map((c) => (
             <Chunk key={`${c.origin[0]}|${c.origin[2]}`} data={c} overrides={overrides} />
           ))}
 
           {/* placed blocks layer */}
           <PlacedOverrides overrides={overrides} />
+
+          {/* NPCs & animals */}
           <EntitiesSim data={entities} solids={solid} />
+
+          {/* Player controller (swims in water; AZERTY Q⇄D inverted) */}
           <FPSControls solid={solid} water={water} />
+
+          {/* Interactions (mine/place, etc.) */}
           <Interactions
             solids={solid} water={water}
             overrides={overrides} setOverrides={setOverrides}
@@ -123,7 +131,9 @@ function WorldLoader({
     if (centerKey === lastCenter.current) return;
     lastCenter.current = centerKey;
 
-    for (let dz = -RADIUS; dz <= RADIUS; dz++) for (let dx = -RADIUS; dx <= RADIUS; dx++) loadChunk(cx + dx, cz + dz);
+    for (let dz = -RADIUS; dz <= RADIUS; dz++)
+      for (let dx = -RADIUS; dx <= RADIUS; dx++)
+        loadChunk(cx + dx, cz + dz);
 
     setChunks(prev => {
       const m = new Map(prev);
@@ -175,7 +185,6 @@ function Chunk({ data, overrides }: { data: ChunkResp; overrides: Map<string, st
     </>
   );
 }
-
 
 function PlacedOverrides({ overrides }: { overrides: Map<string, string|null> }) {
   const placed = useMemo(() => {

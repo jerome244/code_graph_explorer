@@ -6,23 +6,19 @@ import * as THREE from 'three';
 
 type Axis = 'x' | 'y' | 'z';
 
-type Props = {
-  solid: Set<string>;                                      // set of "x|y|z" for solid blocks
-  isWater?: (x: number, y: number, z: number) => boolean;  // optional water test for swimming
-  onPose?: (x: number, y: number, z: number, ry: number) => void; // multiplayer pose sender
-};
-
-/**
- * Capsule-like player using an axis-aligned AABB for collisions.
- * - radius (x/z): 0.35
- * - height (y):   1.8
- * Camera sits at pos.y + EYE.
- */
-export default function FPSControls({ solid, isWater, onPose }: Props) {
+export default function FPSControls({
+  solid,
+  water,
+  onPose,
+}: {
+  solid: Set<string>;
+  water: Set<string>;
+  onPose?: (x: number, y: number, z: number, ry: number) => void;
+}) {
   const { camera } = useThree();
 
   // --- constants ---
-  const RADIUS = 0.35;     // half-width in x/z
+  const RADIUS = 0.35;     // capsule half-width in x/z
   const HEIGHT = 1.8;      // body height
   const EYE = 1.6;         // eye height above feet
   const G = 20;            // gravity (m/s^2)
@@ -34,22 +30,20 @@ export default function FPSControls({ solid, isWater, onPose }: Props) {
 
   // --- state ---
   const keys = useRef<Record<string, boolean>>({});
-  const pos = useRef(new THREE.Vector3(8, 6, 8)); // start somewhere sane
+  const pos = useRef(new THREE.Vector3(8, 6, 8));
   const vel = useRef(new THREE.Vector3());
   const fwd = useRef(new THREE.Vector3());
   const right = useRef(new THREE.Vector3());
   const up = useRef(new THREE.Vector3(0, 1, 0));
   const onGround = useRef(false);
 
-  // helpers
   const isSolid = useMemo(() => {
     return (x: number, y: number, z: number) => solid.has(`${x}|${y}|${z}`);
   }, [solid]);
 
   const isWaterAt = useMemo(() => {
-    if (!isWater) return (_x: number, _y: number, _z: number) => false;
-    return isWater;
-  }, [isWater]);
+    return (x: number, y: number, z: number) => water.has(`${x}|${y}|${z}`);
+  }, [water]);
 
   // keyboard
   useEffect(() => {
@@ -60,24 +54,24 @@ export default function FPSControls({ solid, isWater, onPose }: Props) {
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', upH); };
   }, []);
 
-  // main loop
+  // physics + camera follow
   useFrame((_, dt) => {
-    // clamp dt (tab switch, frame spikes)
+    // clamp dt (tab switch, spikes)
     const maxDt = 0.05;
     let t = Math.min(dt, maxDt);
 
-    // build horizontal move direction from keys
-    // AZERTY + WASD, with Q⇄D inverted (D = left, A/Q = right)
+    // build desired horizontal direction (AZERTY & WASD) with Q⇄D inverted
+    // D = left, A/Q = right
     const forwardKey = keys.current['KeyW'] || keys.current['KeyZ'] || keys.current['ArrowUp'];
     const backKey    = keys.current['KeyS'] || keys.current['ArrowDown'];
-    const leftKey    = keys.current['KeyD'] || keys.current['ArrowLeft'];     // D = left (inverted)
-    const rightKey   = keys.current['KeyA'] || keys.current['KeyQ'] || keys.current['ArrowRight']; // A/Q = right
+    const leftKey    = keys.current['KeyD'] || keys.current['ArrowLeft'];           // inverted
+    const rightKey   = keys.current['KeyA'] || keys.current['KeyQ'] || keys.current['ArrowRight']; // inverted
     const sprinting  = keys.current['ShiftLeft'] || keys.current['ShiftRight'];
     const swimDown   = keys.current['ControlLeft'] || keys.current['ControlRight'];
 
     camera.getWorldDirection(fwd.current);
     fwd.current.y = 0; fwd.current.normalize();
-    right.current.crossVectors(fwd.current, up.current).normalize().multiplyScalar(-1); // camera-right
+    right.current.crossVectors(fwd.current, up.current).normalize().multiplyScalar(-1);
 
     const moveDir = new THREE.Vector3();
     if (forwardKey) moveDir.add(fwd.current);
@@ -87,12 +81,8 @@ export default function FPSControls({ solid, isWater, onPose }: Props) {
     if (moveDir.lengthSq() > 0) moveDir.normalize();
 
     const targetSpeed = (sprinting ? SPRINT : SPEED);
-    const desiredVx = moveDir.x * targetSpeed;
-    const desiredVz = moveDir.z * targetSpeed;
-
-    // set horizontal velocity directly (arcade feel)
-    vel.current.x = desiredVx;
-    vel.current.z = desiredVz;
+    vel.current.x = moveDir.x * targetSpeed;
+    vel.current.z = moveDir.z * targetSpeed;
 
     // swimming?
     const feetInWater = isWaterAt(Math.floor(pos.current.x), Math.floor(pos.current.y + 0.1), Math.floor(pos.current.z));
@@ -102,15 +92,12 @@ export default function FPSControls({ solid, isWater, onPose }: Props) {
     // jump or swim up/down
     if (inWater) {
       const swimUp = keys.current['Space'];
-      const swimAccel = 10;
-      if (swimUp) vel.current.y = THREE.MathUtils.damp(vel.current.y, 3.5, 8, dt);
+      if (swimUp)       vel.current.y = THREE.MathUtils.damp(vel.current.y,  3.5, 8, dt);
       else if (swimDown) vel.current.y = THREE.MathUtils.damp(vel.current.y, -3.5, 8, dt);
-      else vel.current.y = THREE.MathUtils.damp(vel.current.y, 0, 5, dt);
-    } else {
-      if (keys.current['Space'] && onGround.current) {
-        vel.current.y = JUMP;
-        onGround.current = false;
-      }
+      else               vel.current.y = THREE.MathUtils.damp(vel.current.y,  0.0, 5, dt);
+    } else if (keys.current['Space'] && onGround.current) {
+      vel.current.y = JUMP;
+      onGround.current = false;
     }
 
     // integrate with substeps
@@ -121,10 +108,9 @@ export default function FPSControls({ solid, isWater, onPose }: Props) {
       const gNow = inWater ? G * 0.2 : G;
       vel.current.y -= gNow * step;
 
-      // reset ground flag each substep
       onGround.current = false;
 
-      // sweep Y then X then Z (helps with small steps)
+      // sweep Y then X then Z
       sweepAxis('y', vel.current.y * step);
       sweepAxis('x', vel.current.x * step);
       sweepAxis('z', vel.current.z * step);
@@ -132,22 +118,22 @@ export default function FPSControls({ solid, isWater, onPose }: Props) {
       t -= step;
     }
 
-    // camera follows head
+    // camera follows player head
     camera.position.set(pos.current.x, pos.current.y + EYE, pos.current.z);
 
-    // multiplayer: send pose ~10 Hz (caller can throttle further)
+    // optional: send pose to multiplayer
     if (onPose) onPose(pos.current.x, pos.current.y + EYE, pos.current.z, camera.rotation.y);
   });
 
-  // pointer lock rotates camera; we move camera position ourselves above
+  // pointer lock rotates camera; we move the camera position ourselves above
   return <PointerLockControls />;
 
-  // -------- collision routines ----------
+  // ------- collision routines --------
   function sweepAxis(axis: Axis, delta: number) {
     if (delta === 0) return;
     const p = pos.current;
 
-    // try tentative move along axis
+    // tentative move along the axis
     const next = p.clone();
     next[axis] += delta;
 
@@ -166,40 +152,27 @@ export default function FPSControls({ solid, isWater, onPose }: Props) {
 
     if (delta > 0) {
       bound = Infinity;
-      for (let xi = x0; xi <= x1; xi++) {
-        for (let yi = y0; yi <= y1; yi++) {
-          for (let zi = z0; zi <= z1; zi++) {
-            if (!isSolid(xi, yi, zi)) continue;
-            const candidate = contactPosition(axis, 1, { xi, yi, zi });
-            if (candidate < bound) { bound = candidate; blocked = true; }
-          }
-        }
+      for (let xi = x0; xi <= x1; xi++) for (let yi = y0; yi <= y1; yi++) for (let zi = z0; zi <= z1; zi++) {
+        if (!isSolid(xi, yi, zi)) continue;
+        const candidate = contactPosition(axis, 1, { xi, yi, zi });
+        if (candidate < bound) { bound = candidate; blocked = true; }
       }
       if (blocked) {
         p[axis] = bound;
-        if (axis === 'y') vel.current.y = Math.min(0, vel.current.y); // hit ceiling
-        else vel.current[axis] = 0;
+        if (axis === 'y') vel.current.y = Math.min(0, vel.current.y); else vel.current[axis] = 0;
         return;
       }
     } else { // delta < 0
       bound = -Infinity;
-      for (let xi = x0; xi <= x1; xi++) {
-        for (let yi = y0; yi <= y1; yi++) {
-          for (let zi = z0; zi <= z1; zi++) {
-            if (!isSolid(xi, yi, zi)) continue;
-            const candidate = contactPosition(axis, -1, { xi, yi, zi });
-            if (candidate > bound) { bound = candidate; blocked = true; }
-          }
-        }
+      for (let xi = x0; xi <= x1; xi++) for (let yi = y0; yi <= y1; yi++) for (let zi = z0; zi <= z1; zi++) {
+        if (!isSolid(xi, yi, zi)) continue;
+        const candidate = contactPosition(axis, -1, { xi, yi, zi });
+        if (candidate > bound) { bound = candidate; blocked = true; }
       }
       if (blocked) {
         p[axis] = bound;
-        if (axis === 'y') {
-          vel.current.y = Math.max(0, vel.current.y);
-          onGround.current = true; // landed
-        } else {
-          vel.current[axis] = 0;
-        }
+        if (axis === 'y') { vel.current.y = Math.max(0, vel.current.y); onGround.current = true; }
+        else vel.current[axis] = 0;
         return;
       }
     }
@@ -210,11 +183,11 @@ export default function FPSControls({ solid, isWater, onPose }: Props) {
 
   function contactPosition(axis: Axis, dir: 1 | -1, cell: { xi: number; yi: number; zi: number }) {
     // Where to place the player's position so the AABB just touches the block
-    // Block AABB: [xi,xi+1] x [yi,yi+1] x [zi,zi+1]
+    // Block AABB: [xi,xi+1]x[yi,yi+1]x[zi,zi+1]
     if (axis === 'x') {
       return dir > 0
-        ? cell.xi - RADIUS - EPS                           // player maxX = block minX
-        : cell.xi + 1 + RADIUS + EPS;                      // player minX = block maxX
+        ? cell.xi - RADIUS - EPS         // player maxX = block minX
+        : cell.xi + 1 + RADIUS + EPS;    // player minX = block maxX
     }
     if (axis === 'z') {
       return dir > 0
@@ -223,7 +196,7 @@ export default function FPSControls({ solid, isWater, onPose }: Props) {
     }
     // axis === 'y'
     return dir > 0
-      ? cell.yi - HEIGHT - EPS                             // player top = block bottom
-      : cell.yi + 1 + EPS;                                 // player feet = block top
+      ? cell.yi - HEIGHT - EPS          // player top = block bottom
+      : cell.yi + 1 + EPS;              // player feet = block top
   }
 }

@@ -1,96 +1,15 @@
-// app/page.tsx
-import Link from "next/link";
-import { apiFetch } from "@/lib/api";
+import Game from "@/components/Game";
 
-type Me = {
-  id: number;
-  username: string;
-  first_name?: string | null;
-  role?: "USER" | "ADMIN";
-};
-
-export default async function HomePage() {
-  let me: Me | null = null;
-  try {
-    me = await apiFetch("/api/users/me/");
-  } catch {
-    me = null;
-  }
-
+export default function Home() {
   return (
-    <main style={{ padding: 24, maxWidth: 960, margin: "0 auto" }}>
-      <header
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 24,
-        }}
-      >
-        <h1 style={{ margin: 0 }}>Code Graph Explorer</h1>
-        <nav style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <Link
-            href="/graph"
-            style={{
-              padding: "8px 12px",
-              borderRadius: 8,
-              border: "1px solid #e5e7eb",
-              textDecoration: "none",
-              fontWeight: 600,
-            }}
-          >
-            Go to Graph
-          </Link>
-
-          {me ? (
-            <form action="/api/users/logout" method="post">
-              <button type="submit">Logout</button>
-            </form>
-          ) : (
-            <>
-              <Link
-                href="/login"
-                style={{
-                  padding: "8px 12px",
-                  borderRadius: 8,
-                  border: "1px solid #e5e7eb",
-                  textDecoration: "none",
-                  fontWeight: 600,
-                }}
-              >
-                Login
-              </Link>
-              <Link
-                href="/register"
-                style={{
-                  padding: "8px 12px",
-                  borderRadius: 8,
-                  border: "1px solid #e5e7eb",
-                  textDecoration: "none",
-                  fontWeight: 600,
-                }}
-              >
-                Register
-              </Link>
-            </>
-          )}
-        </nav>
-      </header>
-
-      {me ? (
-        <section style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16 }}>
-          <h2 style={{ marginTop: 0 }}>Welcome, {me.first_name || me.username} 👋</h2>
-          <p style={{ color: "#6b7280" }}>You’re signed in. Jump into the Graph any time.</p>
-        </section>
-      ) : (
-        <section style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16 }}>
-          <h2 style={{ marginTop: 0 }}>Explore without an account</h2>
-          <p style={{ color: "#6b7280" }}>
-            You can upload a ZIP or import from GitHub on the Graph page without registering. Accounts are only needed if you want
-            auth-protected features later.
-          </p>
-        </section>
-      )}
+    <main className="min-h-screen flex items-center justify-center p-6">
+      <div className="w-full max-w-3xl">
+        <h1 className="text-3xl font-bold mb-4">Pong (Django + Next.js)</h1>
+        <Game />
+        <p className="text-sm text-gray-500 mt-4">
+          Open this page in a second browser/window, join the same room, and play!
+        </p>
+      </div>
     </main>
   );
 }

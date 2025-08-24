@@ -13,6 +13,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <nav style={{ display: 'flex', gap: 12 }}>
             <Link href="/">Home</Link>
             <Link href="/games">Games</Link>
+            <Link href="/tools/osint">Tools</Link>
           </nav>
         </header>
         <main style={{ padding: 24 }}>{children}</main>

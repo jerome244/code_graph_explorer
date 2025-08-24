@@ -10,7 +10,3 @@ npm run dev
 
 
 
-python - <<'PY'
-import config.asgi
-print(type(config.asgi.application).__name__)
-PY

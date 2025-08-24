@@ -1,8 +1,13 @@
-# backend/api/urls.py
-from django.urls import re_path
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
 from .views import chunk, entities
+from . import osint as osint_views  # NEW
+
+router = DefaultRouter()
+# (you may have other viewsets registered here)
 
 urlpatterns = [
-    re_path(r"^chunk/?$", chunk),        # /api/chunk or /api/chunk/
-    re_path(r"^entities/?$", entities),  # /api/entities or /api/entities/
+    path("chunk", chunk),
+    path("entities", entities),
+    path("osint/scan", osint_views.osint_scan),  # NEW
 ]

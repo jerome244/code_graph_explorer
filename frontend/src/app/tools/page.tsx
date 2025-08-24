@@ -155,6 +155,21 @@ export default function ToolsPage() {
       description: 'Plan video calls: agenda + timer, attendance, notes, actions, export minutes & .ics.',
       category: 'Collaboration',
     },
+    {
+      id: 'video-chat',
+      name: 'Team Video Chat (P2P)',
+      href: '/tools/team/video',
+      description: 'Small-room WebRTC video + chat (Socket.IO signaling).',
+      category: 'Collaboration',
+    },
+
+    {
+      id: 'watch-party',
+      name: 'Watch Party',
+      href: '/tools/team/watch',
+      description: 'Synchronized video watching (MP4/YouTube) with chat and host control.',
+      category: 'Collaboration',
+    },
 
   ] as const;
 

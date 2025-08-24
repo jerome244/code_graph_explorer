@@ -9,6 +9,10 @@ import { DayNightProvider } from './DayNight';
 import EntitiesSim, { Entity } from './EntitiesSim';
 import Interactions from './Interactions';
 
+// Multiplayer
+import { useMultiplayer } from './multiplayer';
+import PlayerGhosts from './PlayerGhosts';
+
 type Block = { x:number; y:number; z:number; material:string };
 type ChunkResp = { size:number; origin:[number,number,number]; blocks: Block[] };
 
@@ -28,12 +32,15 @@ const MAT_COLOR: Record<string, number> = {
 const CHUNK_SIZE = 16;
 const RADIUS = 2;
 
-export default function VoxelApp() {
+export default function VoxelApp({ world = 1, playerName }: { world?: number; playerName?: string }) {
   const [solid, setSolid] = useState<Set<string>>(new Set());
   const [water, setWater] = useState<Set<string>>(new Set());
   const [chunks, setChunks] = useState<Map<string, ChunkResp>>(new Map());
   const [entities, setEntities] = useState<Map<string, Entity[]>>(new Map());
   const [overrides, setOverrides] = useState<Map<string, string|null>>(new Map()); // key -> material or null
+
+  // Multiplayer hook per world/party
+  const mp = useMultiplayer(world, playerName);
 
   return (
     <div style={{ width: '100%', height: '80vh', border: '1px solid #eee', borderRadius: 8, position: 'relative' }}>
@@ -42,6 +49,7 @@ export default function VoxelApp() {
           <SkySunClouds />
 
           <WorldLoader
+            world={world}
             chunks={chunks} setChunks={setChunks}
             entities={entities} setEntities={setEntities}
             setSolid={setSolid} setWater={setWater}
@@ -57,10 +65,17 @@ export default function VoxelApp() {
           {/* NPCs & animals */}
           <EntitiesSim data={entities} solids={solid} />
 
-          {/* Player controller (swims in water; AZERTY Q⇄D inverted) */}
-          <FPSControls solid={solid} water={water} />
+          {/* Other players (ghost capsules) */}
+          <PlayerGhosts others={mp.others} />
 
-          {/* Interactions (mine/place, etc.) */}
+          {/* Player controller (swims in water; AZERTY Q⇄D inverted). Sends pose to WS */}
+          <FPSControls
+            solid={solid}
+            water={water}
+            onPose={(x, y, z, ry) => mp.sendPos(x, y, z, ry)}
+          />
+
+          {/* Interactions (mine/place, etc.) — can later call mp.sendBlockPlace/Break if desired */}
           <Interactions
             solids={solid} water={water}
             overrides={overrides} setOverrides={setOverrides}
@@ -77,13 +92,22 @@ export default function VoxelApp() {
         <div style={{ position: 'absolute', left: 7, top: 0, width: 2, height: 16, background: '#0008' }} />
         <div style={{ position: 'absolute', top: 7, left: 0, width: 16, height: 2, background: '#0008' }} />
       </div>
+
+      {/* Small party indicator */}
+      <div style={{
+        position: 'absolute', left: 12, top: 12, padding: '6px 8px',
+        background: '#0008', color: '#fff', borderRadius: 6, fontSize: 12
+      }}>
+        Party #{world} {mp.connected ? '● online' : '○ offline'}
+      </div>
     </div>
   );
 }
 
 function WorldLoader({
-  chunks, setChunks, entities, setEntities, setSolid, setWater
+  world, chunks, setChunks, entities, setEntities, setSolid, setWater
 }: {
+  world: number;
   chunks: Map<string, ChunkResp>;
   setChunks: React.Dispatch<React.SetStateAction<Map<string, ChunkResp>>>;
   entities: Map<string, Entity[]>;
@@ -92,12 +116,13 @@ function WorldLoader({
   setWater: React.Dispatch<React.SetStateAction<Set<string>>>;
 }) {
   const { camera } = useThree();
-  const lastCenter = useRef<string>("");
+  const lastCenter = useRef<string>('');
 
   const loadChunk = async (cx: number, cz: number) => {
     const key = `${cx}|${cz}`;
     if (chunks.has(key)) return;
     try {
+      // (Backend terrain is global; no world param required here)
       const res = await fetch(`http://127.0.0.1:8000/api/chunk?cx=${cx}&cy=0&cz=${cz}&size=${CHUNK_SIZE}`);
       if (!res.ok) return;
       const data: ChunkResp = await res.json();
@@ -127,7 +152,7 @@ function WorldLoader({
   useFrame(() => {
     const cx = Math.floor(camera.position.x / CHUNK_SIZE);
     const cz = Math.floor(camera.position.z / CHUNK_SIZE);
-    const centerKey = `${cx}|${cz}`;
+    const centerKey = `${world}:${cx}|${cz}`;
     if (centerKey === lastCenter.current) return;
     lastCenter.current = centerKey;
 

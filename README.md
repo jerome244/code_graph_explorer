@@ -6,6 +6,7 @@ python -m daphne -p 8000 config.asgi:application
 
 cd frontend
 npm ci
+npm i @react-three/fiber three
 npm run dev
 
 
@@ -18,4 +19,3 @@ sudo service tor status
 
 
 
-npm i @react-three/fiber three

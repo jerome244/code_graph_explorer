@@ -1,16 +1,19 @@
 'use client';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useDayNight } from './DayNight';
 import * as THREE from 'three';
+import { VVillager, VSheep, VCow, VPig } from './VoxelModels';
+import { GLTFSwitch } from './GltfModels';
 
 export type Entity = {
   id?: string;
-  type: string;
+  type: string;                // villager | sheep | cow | pig
   x: number; y: number; z: number;
   home?: [number, number, number];
   square?: [number, number, number];
-  role?: string;
+  role?: string;               // farmer | guard | merchant
+  skin?: 'voxel' | 'gltf';     // optional per-entity override
 };
 
 type State = {
@@ -20,14 +23,26 @@ type State = {
   mood: 'sleep' | 'work' | 'wander' | 'go_home' | 'go_square';
 };
 
+type SkinMode = 'voxel' | 'gltf' | 'mixed';
+
 export default function EntitiesSim({ data, solids }: { data: Map<string, Entity[]>; solids: Set<string>; }) {
   const entsMap = useMemo(() => Array.from(data.values()).flat(), [data]);
-
-  // persistent state per id
   const states = useRef<Map<string, State>>(new Map());
   const { hours } = useDayNight();
 
-  // ensure states exist when entities arrive/update
+  // Default to voxel so no assets are required
+  const [skinMode, setSkinMode] = useState<SkinMode>('voxel');
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'KeyV') setSkinMode('voxel');
+      if (e.code === 'KeyG') setSkinMode('gltf');
+      if (e.code === 'KeyM') setSkinMode('mixed');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // ensure states exist
   useEffect(() => {
     for (const e of entsMap) {
       const id = e.id ?? `${e.type}:${e.x}:${e.y}:${e.z}`;
@@ -42,7 +57,6 @@ export default function EntitiesSim({ data, solids }: { data: Map<string, Entity
     }
   }, [entsMap]);
 
-  // ground helper: find highest solid at (x,z) near y
   const topYAt = (x: number, yGuess: number, z: number) => {
     let best = -Infinity;
     const xi = Math.floor(x), zi = Math.floor(z);
@@ -59,27 +73,21 @@ export default function EntitiesSim({ data, solids }: { data: Map<string, Entity
       const id = e.id ?? `${e.type}:${e.x}:${e.y}:${e.z}`;
       let s = states.current.get(id);
       if (!s) {
-        // Safety: initialize immediately if effect hasn't run yet
-        s = {
-          pos: new THREE.Vector3(e.x, e.y, e.z),
-          vel: new THREE.Vector3(),
-          target: null,
-          mood: 'wander',
-        };
+        s = { pos: new THREE.Vector3(e.x, e.y, e.z), vel: new THREE.Vector3(), target: null, mood: 'wander' };
         states.current.set(id, s);
       }
 
-      // Schedule / mood
+      // schedule
       if (e.type === 'villager') {
         if (H >= 22 || H < 6) s.mood = 'sleep';
         else if (H < 8) s.mood = 'go_square';
         else if (H < 18) s.mood = 'work';
         else if (H < 22) s.mood = 'go_home';
       } else {
-        s.mood = 'wander'; // animals
+        s.mood = 'wander';
       }
 
-      // Target selection
+      // choose target
       if (s.mood === 'go_home' && e.home) s.target = new THREE.Vector3(...e.home);
       else if (s.mood === 'go_square' && e.square) s.target = new THREE.Vector3(...e.square);
       else if (s.mood === 'work') {
@@ -95,10 +103,10 @@ export default function EntitiesSim({ data, solids }: { data: Map<string, Entity
         s.target = new THREE.Vector3(...e.home);
       }
 
-      // Movement
-      const speed = (e.type === 'villager') ? 2.5 : 1.8;
+      // move
+      const baseSpeed = e.type === 'villager' ? 2.5 : 1.8;
       const nightFactor = (H >= 22 || H < 6) ? 0.6 : 1.0;
-      const maxSpeed = speed * nightFactor;
+      const maxSpeed = baseSpeed * nightFactor;
 
       if (s.target) {
         const dir = s.target.clone().sub(s.pos);
@@ -110,16 +118,13 @@ export default function EntitiesSim({ data, solids }: { data: Map<string, Entity
           s.vel.z = THREE.MathUtils.damp(s.vel.z, dir.z, 6, dt);
         }
       }
-
-      // apply move
       s.pos.x += s.vel.x * dt;
       s.pos.z += s.vel.z * dt;
 
-      // snap to terrain
+      // ground snap
       const yTop = topYAt(s.pos.x, s.pos.y, s.pos.z);
       s.pos.y = yTop + 1.02;
 
-      // Arrive
       if (s.target && s.pos.distanceTo(s.target) < 0.6) {
         s.target = null;
         s.vel.setScalar(0);
@@ -127,24 +132,23 @@ export default function EntitiesSim({ data, solids }: { data: Map<string, Entity
     }
   });
 
-  // render models (safe-init during render)
+  // render
   return (
     <group>
       {entsMap.map((e) => {
         const id = e.id ?? `${e.type}:${e.x}:${e.y}:${e.z}`;
         let s = states.current.get(id);
         if (!s) {
-          s = {
-            pos: new THREE.Vector3(e.x, e.y, e.z),
-            vel: new THREE.Vector3(),
-            target: null,
-            mood: 'wander',
-          };
+          s = { pos: new THREE.Vector3(e.x, e.y, e.z), vel: new THREE.Vector3(), target: null, mood: 'wander' };
           states.current.set(id, s);
         }
+        const speed = Math.hypot(s.vel.x, s.vel.z);
+        const moving = speed > 0.05;
+        const mode = e.skin ?? skinMode;
+
         return (
           <group key={id} position={s.pos}>
-            {renderEntityModel(e)}
+            {renderSkinned(e, mode, moving)}
           </group>
         );
       })}
@@ -152,51 +156,34 @@ export default function EntitiesSim({ data, solids }: { data: Map<string, Entity
   );
 }
 
-// Simple voxel-ish models
-function renderEntityModel(e: Entity) {
-  switch (e.type) {
-    case 'villager':   return <Villager role={e.role} />;
-    case 'sheep':      return <Sheep />;
-    case 'cow':        return <Cow />;
-    case 'pig':        return <Pig />;
-    default:           return <Villager role="common" />;
+function renderSkinned(e: Entity, mode: 'voxel'|'gltf'|'mixed', moving: boolean) {
+  // 'mixed': villagers voxel (guards try GLTF), animals GLTF when present (fallback voxel)
+  if (mode === 'mixed') {
+    if (e.type === 'villager') {
+      if (e.role === 'guard') {
+        return <GLTFSwitch url="/models/villager_guard.glb" scale={0.9} moving={moving} voxel={<VVillager role={e.role} />} />;
+      }
+      return <VVillager role={e.role} />;
+    }
+    if (e.type === 'sheep') return <GLTFSwitch url="/models/sheep.glb" scale={0.7} moving={moving} voxel={<VSheep />} />;
+    if (e.type === 'cow')   return <GLTFSwitch url="/models/cow.glb"   scale={0.9} moving={moving} voxel={<VCow />} />;
+    if (e.type === 'pig')   return <GLTFSwitch url="/models/pig.glb"   scale={0.8} moving={moving} voxel={<VPig />} />;
   }
-}
 
-function Villager({ role }: { role?: string }) {
-  const coat = role === 'guard' ? 0x455a64 : role === 'merchant' ? 0xffb74d : 0x7cb342;
-  return (
-    <group>
-      <mesh position={[0, 0.35, 0]}><boxGeometry args={[0.6, 0.7, 0.4]} /><meshStandardMaterial color={coat} /></mesh>
-      <mesh position={[0, 0.9, 0]}><boxGeometry args={[0.35, 0.35, 0.35]} /><meshStandardMaterial color={0xffe0b2} /></mesh>
-      <mesh position={[-0.15, 0.05, 0]}><boxGeometry args={[0.18, 0.2, 0.18]} /><meshStandardMaterial color={0x333333} /></mesh>
-      <mesh position={[ 0.15, 0.05, 0]}><boxGeometry args={[0.18, 0.2, 0.18]} /><meshStandardMaterial color={0x333333} /></mesh>
-      <mesh position={[-0.35, 0.42, 0]}><boxGeometry args={[0.2, 0.2, 0.2]} /><meshStandardMaterial color={coat} /></mesh>
-      <mesh position={[ 0.35, 0.42, 0]}><boxGeometry args={[0.2, 0.2, 0.2]} /><meshStandardMaterial color={coat} /></mesh>
-    </group>
-  );
-}
-function Sheep() {
-  return (
-    <group>
-      <mesh position={[0, 0.25, 0]}><boxGeometry args={[0.7, 0.5, 0.4]} /><meshStandardMaterial color={0xffffff} /></mesh>
-      <mesh position={[0, 0.55, 0.2]}><boxGeometry args={[0.25, 0.25, 0.25]} /><meshStandardMaterial color={0xffffff} /></mesh>
-    </group>
-  );
-}
-function Cow() {
-  return (
-    <group>
-      <mesh position={[0, 0.3, 0]}><boxGeometry args={[0.9, 0.6, 0.5]} /><meshStandardMaterial color={0x5d4037} /></mesh>
-      <mesh position={[0.2, 0.6, 0.25]}><boxGeometry args={[0.3, 0.3, 0.3]} /><meshStandardMaterial color={0x5d4037} /></mesh>
-    </group>
-  );
-}
-function Pig() {
-  return (
-    <group>
-      <mesh position={[0, 0.25, 0]}><boxGeometry args={[0.7, 0.5, 0.45]} /><meshStandardMaterial color={0xff8a80} /></mesh>
-      <mesh position={[0.2, 0.55, 0.2]}><boxGeometry args={[0.25, 0.25, 0.25]} /><meshStandardMaterial color={0xff8a80} /></mesh>
-    </group>
-  );
+  if (mode === 'gltf') {
+    if (e.type === 'villager') {
+      const url = e.role === 'guard' ? '/models/villager_guard.glb' : '/models/villager.glb';
+      return <GLTFSwitch url={url} scale={0.95} moving={moving} voxel={<VVillager role={e.role} />} />;
+    }
+    if (e.type === 'sheep') return <GLTFSwitch url="/models/sheep.glb" scale={0.7} moving={moving} voxel={<VSheep />} />;
+    if (e.type === 'cow')   return <GLTFSwitch url="/models/cow.glb"   scale={0.9} moving={moving} voxel={<VCow />} />;
+    if (e.type === 'pig')   return <GLTFSwitch url="/models/pig.glb"   scale={0.8} moving={moving} voxel={<VPig />} />;
+  }
+
+  // voxel
+  if (e.type === 'villager') return <VVillager role={e.role} />;
+  if (e.type === 'sheep') return <VSheep />;
+  if (e.type === 'cow')   return <VCow />;
+  if (e.type === 'pig')   return <VPig />;
+  return <VVillager role="common" />;
 }

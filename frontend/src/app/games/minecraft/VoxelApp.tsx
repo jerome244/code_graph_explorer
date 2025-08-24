@@ -39,7 +39,7 @@ export default function VoxelApp({ world = 1, playerName }: { world?: number; pl
   const [entities, setEntities] = useState<Map<string, Entity[]>>(new Map());
   const [overrides, setOverrides] = useState<Map<string, string|null>>(new Map()); // key -> material or null
 
-  // Multiplayer hook per world/party
+  // Multiplayer
   const mp = useMultiplayer(world, playerName);
 
   return (
@@ -65,17 +65,17 @@ export default function VoxelApp({ world = 1, playerName }: { world?: number; pl
           {/* NPCs & animals */}
           <EntitiesSim data={entities} solids={solid} />
 
-          {/* Other players (ghost capsules) */}
+          {/* Other players (ghost capsules + names) */}
           <PlayerGhosts others={mp.others} />
 
-          {/* Player controller (swims in water; AZERTY Q⇄D inverted). Sends pose to WS */}
+          {/* Player controller (swims; AZERTY Q⇄D inverted). Sends pose to WS */}
           <FPSControls
             solid={solid}
             water={water}
             onPose={(x, y, z, ry) => mp.sendPos(x, y, z, ry)}
           />
 
-          {/* Interactions (mine/place, etc.) — can later call mp.sendBlockPlace/Break if desired */}
+          {/* Interactions (mine/place) */}
           <Interactions
             solids={solid} water={water}
             overrides={overrides} setOverrides={setOverrides}
@@ -93,12 +93,12 @@ export default function VoxelApp({ world = 1, playerName }: { world?: number; pl
         <div style={{ position: 'absolute', top: 7, left: 0, width: 16, height: 2, background: '#0008' }} />
       </div>
 
-      {/* Small party indicator */}
+      {/* Party badge */}
       <div style={{
         position: 'absolute', left: 12, top: 12, padding: '6px 8px',
         background: '#0008', color: '#fff', borderRadius: 6, fontSize: 12
       }}>
-        Party #{world} {mp.connected ? '● online' : '○ offline'}
+        Party #{world} {mp.connected ? '● online' : '○ offline'} — others: {mp.others.size}
       </div>
     </div>
   );
@@ -116,13 +116,12 @@ function WorldLoader({
   setWater: React.Dispatch<React.SetStateAction<Set<string>>>;
 }) {
   const { camera } = useThree();
-  const lastCenter = useRef<string>('');
+  const lastCenter = useRef<string>("");
 
   const loadChunk = async (cx: number, cz: number) => {
     const key = `${cx}|${cz}`;
     if (chunks.has(key)) return;
     try {
-      // (Backend terrain is global; no world param required here)
       const res = await fetch(`http://127.0.0.1:8000/api/chunk?cx=${cx}&cy=0&cz=${cz}&size=${CHUNK_SIZE}`);
       if (!res.ok) return;
       const data: ChunkResp = await res.json();
@@ -141,7 +140,8 @@ function WorldLoader({
       setWater(prev => { const s = new Set(prev); waterLocal.forEach(k => s.add(k)); return s; });
       setSolid(prev => { const s = new Set(prev); solidLocal.forEach(k => s.add(k)); return s; });
 
-      const er = await fetch(`http://127.0.0.1:8000/api/entities?cx=${cx}&cz=${cz}&size=${CHUNK_SIZE}`);
+      // entities: include world so RNG matches party
+      const er = await fetch(`http://127.0.0.1:8000/api/entities?cx=${cx}&cz=${cz}&size=${CHUNK_SIZE}&world=${world}`);
       if (er.ok) {
         const ed = await er.json();
         setEntities(prev => { const m = new Map(prev); m.set(key, (ed.entities ?? []) as Entity[]); return m; });

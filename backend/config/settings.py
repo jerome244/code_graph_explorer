@@ -20,29 +20,34 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-pe4(ixjukaxc9jhll4y@203!m%eo_ej2btatscztdhn9^(a8b+"
+SECRET_KEY = "django-insecure-qdw2hu!3_)r@le@vvn8lv0&873r(qwem!okzbzl@6g4^=p_e(e"
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ASGI_APPLICATION = "config.asgi.application"
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = []
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    # third-party
+    "rest_framework",
+    "corsheaders",
+
+    # django
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "channels",
-    "game",
+    # local    
+    "api",
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",  # put it near the top
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -124,9 +129,7 @@ STATIC_URL = "static/"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": [("127.0.0.1", 6379)]},
-    }
-}
+# Dev CORS (safe because Next.js proxy already avoids CORS, but this helps if you hit Django directly in the browser)
+CORS_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+REST_FRAMEWORK = { "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"] }

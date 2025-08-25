@@ -183,7 +183,14 @@ export default function ToolsPage() {
       href: '/tools/iot/house',
       description: 'Draw your home, drop devices, bind to Pico or simulate, control & track consumption.',
       category: 'IoT & Domotics',
-    }
+    },
+    {
+      id: 'pico-configurator',
+      name: 'Pico Wiring Configurator',
+      href: '/tools/iot/pico-configurator',
+      description: 'Mix keypad/motor/servo; get GPIO schematic + MicroPython/C code.',
+      category: 'IoT & Domotics',
+    },
 
 
   ] as const;

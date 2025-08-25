@@ -1,7 +1,7 @@
 // /frontend/src/app/tools/code-graph/components/CodePopup.tsx
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { extToLang } from '../lib/utils';
 import { highlightVSCodeHTML } from '../lib/highlight';
 import type { SupportedType } from '../lib/types';
@@ -12,6 +12,11 @@ export function CodePopup({
   x: number; y: number; title: string; path: string; content: string; ext: SupportedType; onClose: () => void;
 }) {
   const [html, setHtml] = useState<string | null>(null);
+
+  const lineCount = useMemo(() => {
+    // for optional future use; not shown in UI unless you want it
+    return content.split('\n').length;
+  }, [content]);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,14 +39,14 @@ export function CodePopup({
         position: 'absolute',
         left: x, top: y,
         transform: 'translate(-50%, -100%) translateY(-8px)',
-        maxWidth: 520, minWidth: 260,
+        maxWidth: 560, minWidth: 280,
         pointerEvents: 'auto',
         zIndex: 5,
       }}
     >
       <div
         style={{
-          background: '#0B1220',
+          background: '#0B1220', // dark shell (as before)
           color: '#E5E7EB',
           border: '1px solid #334155',
           borderRadius: 10,
@@ -49,7 +54,7 @@ export function CodePopup({
           overflow: 'hidden',
         }}
       >
-        {/* Dark header (as before) */}
+        {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', padding: '6px 10px', gap: 8, background: '#111827' }}>
           <span style={{
             fontSize: 11, padding: '2px 6px', borderRadius: 999, border: '1px solid #374151',
@@ -76,19 +81,65 @@ export function CodePopup({
           </button>
         </div>
 
-        {/* Shiki HTML (VS Code Dark+) */}
-        <div style={{ maxHeight: 320, overflow: 'auto' }}>
+        {/* Body */}
+        <div style={{ maxHeight: 340, overflow: 'auto', background: 'transparent' }}>
+          {/* VS Code-like line numbers via CSS counters on Shiki's .line spans */}
+          <style>{`
+            /* Ensure each line is its own block and add gutter */
+            .shiki code { counter-reset: shiki-line; }
+            .shiki code .line {
+              display: block;
+              position: relative;
+              padding-left: 3.2em;       /* space for gutter */
+              white-space: pre;           /* keep Shiki's spacing */
+            }
+            .shiki code .line::before {
+              counter-increment: shiki-line;
+              content: counter(shiki-line);
+              position: absolute;
+              left: 0;
+              width: 2.6em;
+              text-align: right;
+              padding-right: 0.6em;
+              color: #9CA3AF;            /* VSCode-ish gray */
+              opacity: 0.8;
+              user-select: none;
+            }
+            /* subtle gutter divider */
+            .shiki {
+              position: relative;
+            }
+            .shiki::before {
+              content: '';
+              position: absolute;
+              top: 0;
+              bottom: 0;
+              left: 3.2em;               /* same as padding-left above */
+              width: 1px;
+              background: rgba(148,163,184,0.25); /* slate-400 @ ~25% */
+              pointer-events: none;
+            }
+            /* Use a nice monospace stack */
+            .shiki, .shiki code {
+              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+              font-size: 12px;
+              line-height: 1.45;
+            }
+          `}</style>
+
           {html ? (
             <div
               // eslint-disable-next-line react/no-danger
               dangerouslySetInnerHTML={{ __html: html }}
             />
           ) : (
+            // Fallback while Shiki warms up
             <pre
               style={{
-                margin: 0, padding: 12, maxHeight: 320, overflow: 'auto',
-                fontSize: 12, lineHeight: 1.4, whiteSpace: 'pre',
+                margin: 0, padding: '8px 12px', maxHeight: 340, overflow: 'auto',
                 background: '#1e1e1e', color: '#d4d4d4',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                fontSize: 12, lineHeight: 1.45,
               }}
             >
 {content}
@@ -97,6 +148,7 @@ export function CodePopup({
         </div>
       </div>
 
+      {/* arrow */}
       <div
         style={{
           position: 'absolute', left: '50%', transform: 'translateX(-50%)',

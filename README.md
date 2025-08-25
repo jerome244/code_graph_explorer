@@ -1,6 +1,7 @@
 # in backend venv
+pip install -r requirements.txt
 sudo service redis-server start
-
+sudo service tor start 
 python -m daphne -p 8000 config.asgi:application
 
 
@@ -8,6 +9,7 @@ cd frontend
 npm ci
 npm i @react-three/fiber three
 npm i socket.io socket.io-client
+npm i jszip cytoscape
 npm run dev
 
 

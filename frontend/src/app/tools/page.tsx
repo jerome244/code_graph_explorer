@@ -191,6 +191,13 @@ export default function ToolsPage() {
       description: 'Mix keypad/motor/servo; get GPIO schematic + MicroPython/C code.',
       category: 'IoT & Domotics',
     },
+    {
+      id: 'code-graph',
+      name: 'Code Graph Explorer',
+      href: '/tools/code-graph',
+      description: 'Upload a .zip, unzip locally, and explore C/Python/HTML/CSS/JS files as an interactive Cytoscape graph.',
+      category: 'DevOps & SecOps',
+    },
 
 
   ] as const;

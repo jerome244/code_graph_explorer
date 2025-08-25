@@ -5,7 +5,7 @@ export const metadata = {
   description: 'Browse available tools',
 };
 
-type Category = 'OSINT' | 'Machine Learning' | 'Blockchain' | 'Cybersecurity' | 'DevOps & SecOps' | 'Collaboration';
+type Category = 'OSINT' | 'Machine Learning' | 'Blockchain' | 'Cybersecurity' | 'DevOps & SecOps' | 'Collaboration' | 'IoT & Domotics';
 
 type Tool = {
   id: string;
@@ -170,6 +170,21 @@ export default function ToolsPage() {
       description: 'Synchronized video watching (MP4/YouTube) with chat and host control.',
       category: 'Collaboration',
     },
+    {
+      id: 'domotic',
+      name: 'Domotics Control (Pico)',
+      href: '/tools/iot/domotic',
+      description: 'Web Serial dashboard: lights/relay, PWM, servo, ADC — with demo mode.',
+      category: 'IoT & Domotics',
+    },
+    {
+      id: 'house',
+      name: 'Smart Home Builder',
+      href: '/tools/iot/house',
+      description: 'Draw your home, drop devices, bind to Pico or simulate, control & track consumption.',
+      category: 'IoT & Domotics',
+    }
+
 
   ] as const;
 
@@ -180,6 +195,7 @@ export default function ToolsPage() {
     'Cybersecurity',
     'DevOps & SecOps',
     'Collaboration',
+    'IoT & Domotics',
   ];
 
   const grouped = order

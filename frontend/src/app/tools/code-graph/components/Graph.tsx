@@ -5,6 +5,20 @@ import cytoscape, { Core, ElementDefinition, LayoutOptions } from 'cytoscape';
 
 export type GraphHandle = { fit: () => void };
 
+function isEdge(el: ElementDefinition) {
+  // edges have data.source & data.target
+  const d: any = (el as any).data;
+  return d && typeof d.source === 'string' && typeof d.target === 'string';
+}
+function isNode(el: ElementDefinition) {
+  return !isEdge(el);
+}
+function sameIdSet(a: Set<string>, b: Set<string>) {
+  if (a.size !== b.size) return false;
+  for (const x of a) if (!b.has(x)) return false;
+  return true;
+}
+
 export const Graph = forwardRef<GraphHandle, {
   elements: ElementDefinition[];
   layoutName: string;
@@ -108,7 +122,6 @@ function GraphImpl(
       }
       onPositions(out);
     };
-
     cy.on('render zoom pan position dragfree layoutstop', updatePositions);
 
     cyRef.current = cy;
@@ -116,28 +129,66 @@ function GraphImpl(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // push new elements whenever they change (fixes “missing nodes” after ZIP)
+  // helper to apply hidden edge visibility
+  function applyHiddenToEdges(cy: Core) {
+    cy.edges().forEach(e => {
+      const hide = hiddenFiles.has(e.source().id()) || hiddenFiles.has(e.target().id());
+      e.style('display', hide ? 'none' : 'element');
+    });
+  }
+
+  // 🔁 Update elements without losing node positions
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
-    cy.startBatch();
-    cy.elements().remove();
-    cy.add(elements as any);
-    cy.endBatch();
-    cy.layout({ name: layoutName as any, animate: true }).run();
-  }, [elements, layoutName]);
 
-  // Apply hidden state to nodes and edges
+    // Split incoming into nodes/edges
+    const incomingNodes = elements.filter(isNode);
+    const incomingEdges = elements.filter(isEdge);
+
+    const currentNodeIds = new Set<string>(cy.nodes().map(n => n.id()));
+    const newNodeIds = new Set<string>(incomingNodes.map((el: any) => el.data.id));
+
+    const nodesUnchanged = sameIdSet(currentNodeIds, newNodeIds);
+
+    if (nodesUnchanged) {
+      // 💡 Only edges changed (e.g., toggling dependency edges)
+      cy.startBatch();
+      cy.edges().remove();                         // remove old edges
+      cy.add(incomingEdges as any);                // add new edges
+      applyHiddenToEdges(cy);                      // respect hidden files
+      cy.endBatch();
+
+      // refresh popup positions
+      const out: Record<string, { x: number; y: number }> = {};
+      for (const id of openRef.current) {
+        const n = cy.getElementById(id);
+        if (n.empty() || n.hasClass('hidden-file')) continue;
+        const p = n.renderedPosition();
+        out[id] = { x: p.x, y: p.y };
+      }
+      onPositions(out);
+
+    } else {
+      // 🔄 Node set changed (new ZIP, different files, etc.) — do full rebuild + layout
+      cy.startBatch();
+      cy.elements().remove();
+      cy.add(elements as any);
+      cy.endBatch();
+      cy.layout({ name: layoutName as any, animate: true }).run();
+      applyHiddenToEdges(cy);
+    }
+  }, [elements, layoutName]); // NOTE: layoutName is only used on full rebuild
+
+  // Apply hidden state to nodes (and edges) when hiddenFiles changes
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
     cy.startBatch();
     cy.nodes('.file').forEach(n => {
       hiddenFiles.has(n.id()) ? n.addClass('hidden-file') : n.removeClass('hidden-file');
     });
-    cy.edges().forEach(e => {
-      const hide = hiddenFiles.has(e.source().id()) || hiddenFiles.has(e.target().id());
-      e.style('display', hide ? 'none' : 'element');
-    });
+    applyHiddenToEdges(cy);
     cy.endBatch();
+
     // refresh positions (hidden nodes won't report)
     const out: Record<string, { x: number; y: number }> = {};
     for (const id of openRef.current) {
@@ -147,7 +198,7 @@ function GraphImpl(
       out[id] = { x: p.x, y: p.y };
     }
     onPositions(out);
-  }, [hiddenFiles, onPositions]);
+  }, [hiddenFiles]);
 
   // expose fit()
   useImperativeHandle(ref, () => ({

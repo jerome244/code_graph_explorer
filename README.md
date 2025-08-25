@@ -10,6 +10,7 @@ npm ci
 npm i @react-three/fiber three
 npm i socket.io socket.io-client
 npm i jszip cytoscape
+npm i shiki @shikijs/themes @shikijs/langs
 npm run dev
 
 

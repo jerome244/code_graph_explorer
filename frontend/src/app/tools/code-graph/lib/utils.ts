@@ -199,3 +199,15 @@ export function extBadgeBg(ext: SupportedType) {
     case 'c': return '#E9D5FF';
   }
 }
+
+
+// Map our extensions to Shiki language ids
+export function extToLang(ext: SupportedType): string {
+  switch (ext) {
+    case 'js': return 'javascript';
+    case 'py': return 'python';
+    case 'html': return 'html';
+    case 'css': return 'css';
+    case 'c': return 'c';
+  }
+}

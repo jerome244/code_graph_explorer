@@ -201,20 +201,23 @@ export default function CodeGraphPage() {
               if (!f || !pos || hiddenFiles.has(id)) return null;
               return (
                 <CodePopup
-                  key={id}
-                  x={pos.x}
-                  y={pos.y}
-                  title={f.name}
-                  path={f.path}
-                  content={f.content}
-                  onClose={() =>
+                key={id}
+                x={pos.x}
+                y={pos.y}
+                title={f.name}
+                path={f.path}
+                content={f.content}
+                ext={f.ext}
+                onClose={() =>
                     setOpenPopups(prev => {
-                      const next = new Set(prev);
-                      next.delete(id);
-                      return next;
+                    const next = new Set(prev);
+                    next.delete(id);
+                    return next;
                     })
-                  }
+                }
                 />
+
+
               );
             })}
           </div>

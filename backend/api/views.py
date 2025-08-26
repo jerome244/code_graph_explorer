@@ -5,7 +5,8 @@ import random
 import math
 from typing import List, Dict, Tuple
 
-# ---- world knobs ----
+# ==== WORLD GEN SETTINGS ====
+
 SEED = 1337
 WATER_LEVEL = 8
 CHUNK_SIZE_DEFAULT = 16
@@ -109,8 +110,9 @@ def flat_enough_for_structure(minx: int, minz: int, size: int) -> Tuple[bool, in
     Check a patch for flatness; returns (ok, avg_height).
     """
     heights = []
-    for sx in range(minx, minx + size, max(1, size // 4)):
-        for sz in range(minz, minz + size, max(1, size // 4)):
+    step = max(1, size // 4)
+    for sx in range(minx, minx + size, step):
+        for sz in range(minz, minz + size, step):
             heights.append(height_at(sx, sz))
     if not heights:
         return (False, 0)
@@ -294,3 +296,58 @@ def entities(request):
                 })
 
     return JsonResponse({"entities": ents})
+
+
+# ==== AUTH (JWT) ====
+
+from django.contrib.auth.models import User
+from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework_simplejwt.tokens import RefreshToken
+
+@csrf_exempt
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def register_user(request):
+    """Create a new user and return JWT tokens.
+
+    Request JSON: { "username": str, "email": str, "password": str }
+    """
+    data = request.data or {}
+    username = (data.get("username") or "").strip()
+    email = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+
+    if not username or not password:
+        return Response({"detail": "username and password are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    if User.objects.filter(username__iexact=username).exists():
+        return Response({"detail": "username already exists"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        validate_password(password)
+    except DjangoValidationError as e:
+        return Response({"detail": " ".join(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = User.objects.create_user(username=username, email=email or None, password=password)
+    user.save()
+
+    refresh = RefreshToken.for_user(user)
+    return Response({
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "access": str(refresh.access_token),
+        "refresh": str(refresh),
+    }, status=status.HTTP_201_CREATED)
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def whoami(request):
+    u = request.user
+    return Response({"id": u.id, "username": u.username, "email": u.email})

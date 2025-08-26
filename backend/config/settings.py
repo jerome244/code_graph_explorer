@@ -20,24 +20,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-qdw2hu!3_)r@le@vvn8lv0&873r(qwem!okzbzl@6g4^=p_e(e"
+SECRET_KEY = "django-insecure-6)kv6(=mt0e6bwi4n#_r3g2*8(1$^o3x9^$5o9@f&b5c@8)9@)"
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-# Use ASGI (Channels)
-ASGI_APPLICATION = "config.asgi.application"
-
-# Allow dev hosts
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "DESKTOP-T6R9LL5"]  # add your hostname if needed
-
-# Channels layer (Redis)
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": ["redis://127.0.0.1:6379/1"]},
-    }
-}
+ALLOWED_HOSTS: list[str] = []
 
 
 # Application definition
@@ -55,12 +43,13 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    # local    
+
+    # local
     "api",
 ]
 
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",  # put it near the top
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -105,18 +94,10 @@ DATABASES = {
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
 AUTH_PASSWORD_VALIDATORS = [
-    {
-        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
-    },
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
 
@@ -146,3 +127,8 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 CORS_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
 REST_FRAMEWORK = { "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"] }
+
+# REST framework & JWT
+REST_FRAMEWORK.setdefault("DEFAULT_AUTHENTICATION_CLASSES", [
+    "rest_framework_simplejwt.authentication.JWTAuthentication",
+])

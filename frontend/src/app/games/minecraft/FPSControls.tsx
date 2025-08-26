@@ -27,6 +27,7 @@ export default function FPSControls({
   const SPRINT = 11;       // sprint speed
   const SUB_DT = 1 / 120;  // physics substep
   const EPS = 1e-4;
+  const VOID_Y = -32;      // safety floor; respawn if we fall below this
 
   // --- state ---
   const keys = useRef<Record<string, boolean>>({});
@@ -37,6 +38,9 @@ export default function FPSControls({
   const up = useRef(new THREE.Vector3(0, 1, 0));
   const onGround = useRef(false);
 
+  // world readiness + spawn management
+  const spawned = useRef(false);
+
   const isSolid = useMemo(() => {
     return (x: number, y: number, z: number) => solid.has(`${x}|${y}|${z}`);
   }, [solid]);
@@ -44,6 +48,27 @@ export default function FPSControls({
   const isWaterAt = useMemo(() => {
     return (x: number, y: number, z: number) => water.has(`${x}|${y}|${z}`);
   }, [water]);
+
+  // Snap to the highest solid block at current x,z (called once chunks exist)
+  function snapToGround() {
+    if (solid.size === 0) return; // nothing loaded yet
+    const xi = Math.floor(pos.current.x);
+    const zi = Math.floor(pos.current.z);
+
+    let topY = Number.NEGATIVE_INFINITY;
+    solid.forEach(k => {
+      const [sx, sy, sz] = k.split('|').map(Number);
+      if (sx === xi && sz === zi && sy > topY) topY = sy;
+    });
+
+    if (topY !== Number.NEGATIVE_INFINITY) {
+      pos.current.set(xi + 0.5, topY + 1 + EPS, zi + 0.5);
+      vel.current.set(0, 0, 0);
+      onGround.current = true;
+      camera.position.set(pos.current.x, pos.current.y + EYE, pos.current.z);
+      spawned.current = true;
+    }
+  }
 
   // keyboard
   useEffect(() => {
@@ -56,6 +81,15 @@ export default function FPSControls({
 
   // physics + camera follow
   useFrame((_, dt) => {
+    // If we haven't spawned yet, wait until some terrain exists then snap to it.
+    if (!spawned.current) {
+      if (solid.size > 0) snapToGround();
+      // Keep camera synced while waiting
+      camera.position.set(pos.current.x, pos.current.y + EYE, pos.current.z);
+      if (onPose) onPose(pos.current.x, pos.current.y + EYE, pos.current.z, camera.rotation.y);
+      return;
+    }
+
     // clamp dt (tab switch, spikes)
     const maxDt = 0.05;
     let t = Math.min(dt, maxDt);
@@ -92,7 +126,7 @@ export default function FPSControls({
     // jump or swim up/down
     if (inWater) {
       const swimUp = keys.current['Space'];
-      if (swimUp)       vel.current.y = THREE.MathUtils.damp(vel.current.y,  3.5, 8, dt);
+      if (swimUp)        vel.current.y = THREE.MathUtils.damp(vel.current.y,  3.5, 8, dt);
       else if (swimDown) vel.current.y = THREE.MathUtils.damp(vel.current.y, -3.5, 8, dt);
       else               vel.current.y = THREE.MathUtils.damp(vel.current.y,  0.0, 5, dt);
     } else if (keys.current['Space'] && onGround.current) {
@@ -116,6 +150,18 @@ export default function FPSControls({
       sweepAxis('z', vel.current.z * step);
 
       t -= step;
+    }
+
+    // Safety: if we fell out of the loaded world, snap back to ground
+    if (pos.current.y < VOID_Y) {
+      spawned.current = false;   // force re-snap next frame (if solids exist)
+      snapToGround();
+      if (!spawned.current) {
+        // If still not spawned (no ground at current x/z), keep camera synced and bail
+        camera.position.set(pos.current.x, pos.current.y + EYE, pos.current.z);
+        if (onPose) onPose(pos.current.x, pos.current.y + EYE, pos.current.z, camera.rotation.y);
+        return;
+      }
     }
 
     // camera follows player head

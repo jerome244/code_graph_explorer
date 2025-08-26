@@ -1,4 +1,3 @@
-// /frontend/src/app/tools/code-graph/components/Graph.tsx
 'use client';
 
 import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
@@ -44,12 +43,10 @@ function GraphImpl(
       container: containerRef.current,
       elements,
       style: [
-        // Folders (compound)
         { selector: 'node.folder', style: {
           'background-opacity': 0.08, 'border-width': 1, 'border-color': '#CBD5E1', 'shape': 'round-rectangle',
           'label': 'data(label)', 'text-valign': 'top', 'text-halign': 'center', 'font-size': 12, 'color': '#475569', 'padding': '12px',
         }},
-        // Files
         { selector: 'node.file', style: {
           'background-color': '#E5E7EB','border-color': '#9CA3AF','border-width': 1,'shape': 'round-rectangle',
           'label': 'data(label)','font-size': 11,'text-wrap': 'wrap','text-max-width': 120,'color': '#111827','padding': '6px',
@@ -61,20 +58,15 @@ function GraphImpl(
         { selector: 'node.file.css',  style: { 'background-color': '#DCFCE7' } },
         { selector: 'node.file.c',    style: { 'background-color': '#E9D5FF' } },
 
-        // Dependency edges
         { selector: 'edge.dep', style: {
           'width': 1.5, 'line-color': '#94A3B8', 'curve-style': 'bezier',
           'target-arrow-shape': 'triangle', 'target-arrow-color': '#94A3B8', 'arrow-scale': 0.9,
         }},
-
-        // (call edges are no longer used — we draw popup-to-popup lines in page.tsx)
         { selector: 'edge.call', style: {
           'width': 1.6, 'line-color': '#f472b6', 'curve-style': 'bezier',
           'target-arrow-shape': 'triangle', 'target-arrow-color': '#f472b6', 'line-style': 'dashed',
           'arrow-scale': 0.95,
         }},
-
-        // Hidden node
         { selector: 'node.hidden-file', style: { 'display': 'none' } },
       ],
       layout: { name: 'cose', animate: true } as LayoutOptions,
@@ -94,8 +86,6 @@ function GraphImpl(
       onPositions(out);
     };
     cy.on('render zoom pan position dragfree layoutstop', updatePositions);
-
-    // Ensure we have positions immediately after init
     updatePositions();
 
     cyRef.current = cy;
@@ -103,7 +93,6 @@ function GraphImpl(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Recompute popup positions whenever the open set changes (important for new popups)
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
     const out: Record<string, { x: number; y: number }> = {};
@@ -123,7 +112,6 @@ function GraphImpl(
     });
   }
 
-  // Update elements without losing node positions
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
 
@@ -132,7 +120,6 @@ function GraphImpl(
 
     const currentNodeIds = new Set<string>(cy.nodes().map(n => n.id()));
     const newNodeIds = new Set<string>(incomingNodes.map((el: any) => el.data.id));
-
     const nodesUnchanged = sameIdSet(currentNodeIds, newNodeIds);
 
     if (nodesUnchanged) {
@@ -143,7 +130,7 @@ function GraphImpl(
       cy.endBatch();
 
       const out: Record<string, { x: number; y: number }> = {};
-      for (const id of (new Set<string>(Array.from(currentNodeIds)))) {
+      for (const id of currentNodeIds) {
         const n = cy.getElementById(id);
         if (n.empty() || n.hasClass('hidden-file')) continue;
         const p = n.renderedPosition();

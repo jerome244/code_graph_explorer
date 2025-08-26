@@ -1,4 +1,3 @@
-// /frontend/src/app/tools/code-graph/page.tsx
 'use client';
 
 import React, { useMemo, useRef, useState } from 'react';
@@ -12,7 +11,6 @@ import { CodePopup } from './components/CodePopup';
 
 import { buildElements, buildTree, filterTree, humanBytes } from './lib/utils';
 import type { ParsedFile, TreeNode } from './lib/types';
-
 import { buildFunctionIndex, buildFnHueMap } from './lib/functions';
 
 export default function CodeGraphPage() {
@@ -31,6 +29,7 @@ export default function CodeGraphPage() {
 
   const [popupPositions, setPopupPositions] = useState<Record<string, { x: number; y: number }>>({});
   const graphRef = useRef<GraphHandle>(null);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
 
   // Derived
   const baseElements: ElementDefinition[] = useMemo(
@@ -38,11 +37,9 @@ export default function CodeGraphPage() {
     [files, includeDeps]
   );
 
-  // Function index + hues
   const fnIndex = useMemo(() => buildFunctionIndex(files), [files]);
   const fnHues = useMemo(() => buildFnHueMap(fnIndex), [fnIndex]);
 
-  // Keep graph edges to deps only; function links are drawn between popups instead.
   const elements: ElementDefinition[] = useMemo(
     () => baseElements,
     [baseElements]
@@ -55,7 +52,6 @@ export default function CodeGraphPage() {
   );
   const totalBytes = useMemo(() => files.reduce((s, f) => s + f.size, 0), [files]);
 
-  // Tree interactions
   function toggleFolder(id: string) {
     setOpenFolders(prev => {
       const next = new Set(prev);
@@ -75,7 +71,6 @@ export default function CodeGraphPage() {
       return next;
     });
   }
-
   function handleTogglePopup(path: string) {
     setOpenPopups(prev => {
       const next = new Set(prev);
@@ -83,7 +78,6 @@ export default function CodeGraphPage() {
       return next;
     });
   }
-
   function onZipLoaded(next: ParsedFile[]) {
     setFiles(next);
     setHiddenFiles(new Set());
@@ -96,18 +90,20 @@ export default function CodeGraphPage() {
     setOpenFolders(tops);
   }
 
+  // Minimal escape for attribute selector values (quotes)
+  const escAttr = (s: string) => s.replace(/["\\]/g, '\\$&');
+
   return (
     <div style={{ display: 'grid', gap: 16 }}>
       <h1 style={{ margin: 0 }}>Code Graph Explorer</h1>
       <p style={{ margin: 0, color: '#555' }}>
         Upload a <code>.zip</code>. Visualizes <b>.c</b>, <b>.py</b>, <b>.html</b>, <b>.css</b>, <b>.js</b>.{' '}
         Tree: click files to show/hide nodes. Graph: click nodes to open code popups.{' '}
-        Use <b>Fn links</b> to color functions and draw links <i>between open popups</i>.
+        Use <b>Fn links</b> to color functions and draw links <i>between matching function names</i>.
       </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <ZipDrop onLoaded={onZipLoaded} />
-
         <Controls
           treeCollapsed={treeCollapsed}
           onToggleTree={() => setTreeCollapsed(s => !s)}
@@ -168,6 +164,7 @@ export default function CodeGraphPage() {
 
         {/* Graph + popups */}
         <div
+          ref={overlayRef}
           style={{
             position: 'relative',
             height: '68vh',
@@ -196,28 +193,52 @@ export default function CodeGraphPage() {
               style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 10 }}
             >
               {(() => {
+                const container = overlayRef.current;
+                if (!container) return null;
+                const crect = container.getBoundingClientRect();
+                const toLocal = (rect: DOMRect) => ({
+                  x: rect.left + rect.width / 2 - crect.left,
+                  y: rect.top + rect.height / 2 - crect.top,
+                });
+
                 const lines: JSX.Element[] = [];
                 const open = new Set(openPopups);
-                const arrowOffset = 8; // CodePopup translates up by 8px
+
                 for (const [name, callers] of fnIndex.callsByName) {
                   const decls = fnIndex.declsByName.get(name);
                   if (!decls || decls.size === 0) continue;
+
                   const hue = fnHues[name] ?? 200;
                   const stroke = `hsla(${hue}, 70%, 35%, 0.95)`;
+
+                  const pickAnchor = (filePath: string) => {
+                    // find the popup for this file
+                    const popup = container.querySelector(
+                      `[data-popup-file="${escAttr(filePath)}"]`
+                    ) as HTMLElement | null;
+                    if (!popup) return null;
+                    // find a highlighted function span inside that popup
+                    const span = popup.querySelector(
+                      `.fn-hit[data-fn="${escAttr(name)}"]`
+                    ) as HTMLElement | null;
+                    if (!span) return null;
+                    return toLocal(span.getBoundingClientRect());
+                  };
+
                   for (const src of callers) {
                     if (!open.has(src)) continue;
-                    const p1 = popupPositions[src];
-                    if (!p1) continue;
+                    const s = pickAnchor(src);
+                    if (!s) continue;
+
                     for (const dst of decls) {
                       if (src === dst || !open.has(dst)) continue;
-                      const p2 = popupPositions[dst];
-                      if (!p2) continue;
+                      const dpt = pickAnchor(dst);
+                      if (!dpt) continue;
 
-                      const x1 = p1.x, y1 = p1.y - arrowOffset;
-                      const x2 = p2.x, y2 = p2.y - arrowOffset;
+                      const x1 = s.x, y1 = s.y;
+                      const x2 = dpt.x, y2 = dpt.y;
 
-                      // slight upward curve for readability
-                      const cy = Math.min(y1, y2) - 40;
+                      const cy = Math.min(y1, y2) - 40; // slight arc
                       const d = `M ${x1} ${y1} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y2}`;
 
                       lines.push(

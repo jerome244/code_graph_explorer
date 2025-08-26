@@ -24,7 +24,7 @@ export default function CodeGraphPage() {
   const [hiddenFiles, setHiddenFiles] = useState<Set<string>>(new Set());
   const [openPopups, setOpenPopups] = useState<Set<string>>(new Set());
 
-  // NEW: function-mode toggle
+  // function-mode toggle
   const [fnMode, setFnMode] = useState(false);
 
   const [popupPositions, setPopupPositions] = useState<Record<string, { x: number; y: number }>>({});
@@ -97,9 +97,9 @@ export default function CodeGraphPage() {
     <div style={{ display: 'grid', gap: 16 }}>
       <h1 style={{ margin: 0 }}>Code Graph Explorer</h1>
       <p style={{ margin: 0, color: '#555' }}>
-        Upload a <code>.zip</code>. Visualizes <b>.c</b>, <b>.py</b>, <b>.html</b>, <b>.css</b>, <b>.js</b>.{' '}
+        Upload a <code>.zip</code>. Visualizes <b>.c</b>, <b>.py</b>, <b>.html</b>, <b>.css</b>, <b>.js/ts</b>.{' '}
         Tree: click files to show/hide nodes. Graph: click nodes to open code popups.{' '}
-        Use <b>Fn links</b> to color functions and draw links <i>between matching function names</i>.
+        <b>Fn links</b> connects function calls to defs and CSS selectors (<code>.class</code>/<code>#id</code>) to HTML uses.
       </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -185,7 +185,7 @@ export default function CodeGraphPage() {
             onPositions={setPopupPositions}
           />
 
-          {/* Popup-to-popup function links (when Fn mode is ON) */}
+          {/* Popup-to-popup links (Fn mode) */}
           {fnMode && (
             <svg
               width="100%"
@@ -203,18 +203,29 @@ export default function CodeGraphPage() {
                 });
 
                 // map file path -> ext for tiny language-aware hints
-                const pathToExt = new Map(files.map(f => [f.path, f.ext]));
+                const pathToExt = new Map(files.map(f => [f.path, f.ext.toLowerCase()]));
 
-                // Try to extract a small text window around an element
-                const contextAround = (el: HTMLElement) => {
+                const extIs = (filePath: string, kinds: string[]) => {
+                  const e = (pathToExt.get(filePath) || '').toLowerCase();
+                  if (['js','mjs','cjs','jsx','ts','tsx'].includes(e)) return kinds.includes('js');
+                  if (['html','htm'].includes(e)) return kinds.includes('html');
+                  return kinds.includes(e);
+                };
+
+                // a small context window around an element
+                const ctx = (el: HTMLElement) => {
                   const prev = (el.previousSibling?.textContent ?? '').slice(-80);
                   const self = el.textContent ?? '';
                   const next = (el.nextSibling?.textContent ?? '').slice(0, 80);
-                  return { prev, self, next, window: prev + self + next };
+                  const windowTxt = prev + self + next;
+                  return { prev, self, next, windowTxt };
                 };
 
-                // Prefer anchors that are actual calls "name(" for callers,
-                // and "def name(" for declarations. Avoid import lines.
+                // Prefer:
+                //  - CALL:   JS/py/C -> "name(" ; HTML -> inside class="" or id="" attributes
+                //  - DECL:   py  -> "def name(" ; CSS -> ".name" or "#name" in selector area
+                // Avoid:
+                //  - import lines (Python)
                 const pickAnchor = (filePath: string, fnName: string, kind: 'caller' | 'decl') => {
                   const popup = container.querySelector(
                     `[data-popup-file="${escAttr(filePath)}"]`
@@ -226,31 +237,45 @@ export default function CodeGraphPage() {
                   );
                   if (!hits.length) return null;
 
+                  // CALLERS
                   if (kind === 'caller') {
-                    const call = hits.find(el => {
-                      const { prev, next } = contextAround(el);
-                      const looksLikeCall = /^\s*\(/.test(next);
-                      const looksLikeImport = /(?:^|\n|\r)\s*(?:from\s+\S+\s+import|import\s+)$/.test(prev);
-                      return looksLikeCall && !looksLikeImport;
-                    });
+                    // HTML attribute usage
+                    if (extIs(filePath, ['html'])) {
+                      const htmlCall = hits.find(el => {
+                        const { prev, windowTxt } = ctx(el);
+                        const inClass = /class\s*=\s*["'][^"']*\b$/.test(prev) || /\bclass\s*=\s*["'][^"']*\b/.test(windowTxt);
+                        const inId = /\bid\s*=\s*["'][^"']*\b$/.test(prev) || /\bid\s*=\s*["'][^"']*\b/.test(windowTxt);
+                        return inClass || inId;
+                      });
+                      if (htmlCall) return toLocalPoint(htmlCall.getBoundingClientRect());
+                    }
+                    // Generic function call like name(
+                    const call = hits.find(el => /^\s*\(/.test((el.nextSibling?.textContent ?? '')));
                     if (call) return toLocalPoint(call.getBoundingClientRect());
+                    // Avoid Python import lines
+                    const nonImport = hits.find(el => !/(?:^|\n|\r)\s*(?:from\s+\S+\s+import|import\s+)/.test((el.previousSibling?.textContent ?? '')));
+                    if (nonImport) return toLocalPoint(nonImport.getBoundingClientRect());
+                    return toLocalPoint(hits[0].getBoundingClientRect());
                   }
 
-                  if (kind === 'decl' && pathToExt.get(filePath) === 'py') {
-                    const def = hits.find(el => {
-                      const { prev, window } = contextAround(el);
-                      return /(^|\s)def\s+$/.test(prev) || /^\s*def\s+\w+\s*\(/.test(window);
-                    });
-                    if (def) return toLocalPoint(def.getBoundingClientRect());
+                  // DECLARATIONS
+                  if (kind === 'decl') {
+                    // Python def name(
+                    if (extIs(filePath, ['py'])) {
+                      const def = hits.find(el => /(^|\s)def\s+$/.test((el.previousSibling?.textContent ?? '')) ||
+                        /^\s*def\s+\w+\s*\(/.test((el.previousSibling?.textContent ?? '') + (el.textContent ?? '') + (el.nextSibling?.textContent ?? '')));
+                      if (def) return toLocalPoint(def.getBoundingClientRect());
+                    }
+                    // CSS .name or #name in selector lists
+                    if (extIs(filePath, ['css'])) {
+                      const cssDef = hits.find(el => /[.#]\s*$/.test((el.previousSibling?.textContent ?? '').slice(-2)));
+                      if (cssDef) return toLocalPoint(cssDef.getBoundingClientRect());
+                    }
+                    // fallback
+                    return toLocalPoint(hits[0].getBoundingClientRect());
                   }
 
-                  // Fallback: avoid import lines if possible
-                  const nonImport = hits.find(el => {
-                    const { prev } = contextAround(el);
-                    return !/(?:^|\n|\r)\s*(?:from\s+\S+\s+import|import\s+)/.test(prev);
-                  });
-                  const chosen = nonImport ?? hits[0];
-                  return toLocalPoint(chosen.getBoundingClientRect());
+                  return null;
                 };
 
                 const lines: JSX.Element[] = [];
@@ -276,7 +301,7 @@ export default function CodeGraphPage() {
                       const x1 = s.x, y1 = s.y;
                       const x2 = dpt.x, y2 = dpt.y;
 
-                      const cy = Math.min(y1, y2) - 40; // slight arc
+                      const cy = Math.min(y1, y2) - 40; // slight arc for separation
                       const d = `M ${x1} ${y1} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y2}`;
 
                       lines.push(

@@ -1,4 +1,5 @@
 # in backend venv
+cd backend
 pip install -r requirements.txt
 sudo service redis-server start
 sudo service tor start 

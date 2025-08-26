@@ -1,9 +1,11 @@
 // /frontend/src/app/tools/code-graph/lib/functions.ts
-// Cross-file index for two domains:
+// Two-domain cross-file index (functions + styles), with a robust two-pass call finder
+// that matches only calls to known declared functions.
 //
+// Domains:
 // 1) functions (code): JS/TS, Python, C
 //    - decls: function names
-//    - calls: free calls  name(...)
+//    - calls: occurrences of those names in "name(" form (ignores imports in Py)
 // 2) styles: CSS ↔ HTML
 //    - CSS decls: .class / #id in selector lists
 //    - HTML calls: class="..." names, id="..." names
@@ -22,7 +24,7 @@ export type FnIndex = {
 
 const IDENT = `[A-Za-z_][A-Za-z0-9_]*`;
 
-// ---------- helpers ----------
+// ---------- small helpers ----------
 function add(map: NameMap, key: string, value: string) {
   let set = map.get(key);
   if (!set) { set = new Set(); map.set(key, set); }
@@ -32,6 +34,9 @@ function addFileName(fileToNames: Map<string, Set<string>>, file: string, name: 
   let set = fileToNames.get(file);
   if (!set) { set = new Set(); fileToNames.set(file, set); }
   set.add(name);
+}
+function escRe(s: string) {
+  return s.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
 }
 function extFromPath(path: string): string {
   const m = path.match(/\.([A-Za-z0-9]+)$/);
@@ -46,7 +51,7 @@ function normExt(ext: string, path: string, content: string): string {
   if (e === 'css') return 'css';
   if (['html','htm'].includes(e)) return 'html';
 
-  // Heuristics if no/lost extension
+  // Heuristics if extension is missing/odd
   if (/^#!.*\bpython[0-9.]*\b/m.test(content) || /^\s*def\s+[A-Za-z_]\w*\s*\(/m.test(content)) return 'py';
   if (/<\/?(?:html|head|body|div|span|script|link|meta)\b/i.test(content)) return 'html';
   if (/\bfunction\s+[A-Za-z_]\w*\s*\(|\bconst\s+[A-Za-z_]\w*\s*=\s*\(/m.test(content)) return 'js';
@@ -70,24 +75,17 @@ const JS_DECL_RE = new RegExp([
 const C_DECL_RE  = new RegExp(String.raw`(?:^|[\s;])(?:[A-Za-z_][A-Za-z0-9_*\s]+?\s+)?(${IDENT})\s*\([^;{}]*\)\s*(?:\{|;)`, 'gm');
 const PY_DECL_RE = new RegExp(String.raw`^[ \t]*def[ \t]+(${IDENT})[ \t]*\(`, 'gm');
 
-// ---------- calls ----------
-// Try modern lookbehind for a clean "not preceded by . or \w" check, fallback otherwise.
-let FREE_CALL_RE: RegExp;
-try {
-  FREE_CALL_RE = new RegExp(String.raw`(?<![.\w])(${IDENT})[ \t]*\(`, 'gm');
-} catch {
-  FREE_CALL_RE = new RegExp(String.raw`(^|[^.\w])(${IDENT})[ \t]*\(`, 'gm');
-}
-// Python-specific "start-of-line/indented" call matcher (helper(), return helper(), await helper(), etc.)
+// ---------- Python line-start calls (helper(), return helper(), await helper(), etc.) ----------
 const PY_LINE_CALL_RE = new RegExp(String.raw`^[ \t]*(?:return\s+|await\s+|yield\s+)?(${IDENT})[ \t]*\(`, 'gm');
 
 // Words to ignore as identifiers
 const RESERVED = new Set([
   'if','for','while','switch','return','with','yield','class','def','lambda','except','try','assert','raise',
   'from','import','new','catch','finally','delete','typeof','void','in','of','case','break','continue',
+  'self','cls',
 ]);
 
-// CSS selectors -> .class / #id before '{'
+// ---------- CSS/HTML helpers ----------
 function collectCssSelectorNames(css: string): { classes: Set<string>, ids: Set<string> } {
   const classes = new Set<string>();
   const ids = new Set<string>();
@@ -98,8 +96,6 @@ function collectCssSelectorNames(css: string): { classes: Set<string>, ids: Set<
   }
   return { classes, ids };
 }
-
-// HTML class/id attributes
 function collectHtmlAttrNames(html: string): { classes: Set<string>, ids: Set<string> } {
   const classes = new Set<string>();
   const ids = new Set<string>();
@@ -123,12 +119,12 @@ export function buildFunctionIndex(files: ParsedFile[]): FnIndex {
   const styleCalls: NameMap = new Map();
   const fileToNames: Map<string, Set<string>> = new Map();
 
+  // ---------- PASS 1: gather declarations (code + css) ----------
   for (const f of files) {
     const path = f.path;
     const ext = normExt((f as any).ext ?? '', path, f.content);
     const text = f.content;
 
-    // ---- Declarations
     if (ext === 'js') {
       for (const m of text.matchAll(JS_DECL_RE)) {
         const name = (m[1] || m[2]) as string;
@@ -155,29 +151,50 @@ export function buildFunctionIndex(files: ParsedFile[]): FnIndex {
       for (const n of classes) { add(styleDecls, n, path); addFileName(fileToNames, path, n); }
       for (const n of ids)     { add(styleDecls, n, path); addFileName(fileToNames, path, n); }
     }
+  }
 
-    // ---- Calls
+  // Build one alternation regex of all declared function names (only code domain)
+  const declaredFnNames = Array.from(fnDecls.keys());
+  if (declaredFnNames.length) {
+    // Sort longest-first to make alternation a bit safer (fooBar before foo)
+    declaredFnNames.sort((a, b) => b.length - a.length);
+  }
+  const anyFn = declaredFnNames.length ? `(?:${declaredFnNames.map(escRe).join('|')})` : '';
+
+  // Combined call regex: (^|[^.\w])(Name1|Name2|...)\s*\(
+  const CALLS_ANY_RE = anyFn
+    ? new RegExp(String.raw`(^|[^.\w])(${anyFn})[ \t]*\(`, 'gm')
+    : null;
+
+  // ---------- PASS 2: gather calls (code + html) ----------
+  for (const f of files) {
+    const path = f.path;
+    const ext = normExt((f as any).ext ?? '', path, f.content);
+    const text = f.content;
+
     if (ext === 'js' || ext === 'py' || ext === 'c') {
-      let body = text;
-      if (ext === 'py') body = stripPythonImports(text);
+      if (CALLS_ANY_RE) {
+        let body = text;
+        if (ext === 'py') body = stripPythonImports(text);
 
-      // generic: name(
-      for (const m of body.matchAll(FREE_CALL_RE)) {
-        const name = (m[1] ?? m[2]) as string; // support both LB and fallback variant
-        if (!name || RESERVED.has(name)) continue;
-        if (ext === 'py' && (name === 'print' || name === 'len')) continue;
-        add(fnCalls, name, path);
-        addFileName(fileToNames, path, name);
-      }
-
-      // Python-specific extra pass: start-of-line/indented calls (e.g., inside defs)
-      if (ext === 'py') {
-        for (const m of body.matchAll(PY_LINE_CALL_RE)) {
-          const name = m[1] as string;
+        for (const m of body.matchAll(CALLS_ANY_RE)) {
+          const name = m[2] as string;
           if (!name || RESERVED.has(name)) continue;
-          if (name === 'print' || name === 'len') continue;
+          if (ext === 'py' && (name === 'print' || name === 'len')) continue;
           add(fnCalls, name, path);
           addFileName(fileToNames, path, name);
+        }
+
+        // Extra pass for Python indentation starts (covers odd DOM splits)
+        if (ext === 'py') {
+          for (const m of body.matchAll(PY_LINE_CALL_RE)) {
+            const name = m[1] as string;
+            if (!name || RESERVED.has(name)) continue;
+            if (!fnDecls.has(name)) continue; // ensure it's one of our declared names
+            if (name === 'print' || name === 'len') continue;
+            add(fnCalls, name, path);
+            addFileName(fileToNames, path, name);
+          }
         }
       }
     } else if (ext === 'html') {

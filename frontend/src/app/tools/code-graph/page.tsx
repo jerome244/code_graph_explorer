@@ -195,11 +195,63 @@ export default function CodeGraphPage() {
               {(() => {
                 const container = overlayRef.current;
                 if (!container) return null;
+
                 const crect = container.getBoundingClientRect();
-                const toLocal = (rect: DOMRect) => ({
+                const toLocalPoint = (rect: DOMRect) => ({
                   x: rect.left + rect.width / 2 - crect.left,
                   y: rect.top + rect.height / 2 - crect.top,
                 });
+
+                // map file path -> ext for tiny language-aware hints
+                const pathToExt = new Map(files.map(f => [f.path, f.ext]));
+
+                // Try to extract a small text window around an element
+                const contextAround = (el: HTMLElement) => {
+                  const prev = (el.previousSibling?.textContent ?? '').slice(-80);
+                  const self = el.textContent ?? '';
+                  const next = (el.nextSibling?.textContent ?? '').slice(0, 80);
+                  return { prev, self, next, window: prev + self + next };
+                };
+
+                // Prefer anchors that are actual calls "name(" for callers,
+                // and "def name(" for declarations. Avoid import lines.
+                const pickAnchor = (filePath: string, fnName: string, kind: 'caller' | 'decl') => {
+                  const popup = container.querySelector(
+                    `[data-popup-file="${escAttr(filePath)}"]`
+                  ) as HTMLElement | null;
+                  if (!popup) return null;
+
+                  const hits = Array.from(
+                    popup.querySelectorAll<HTMLElement>(`.fn-hit[data-fn="${escAttr(fnName)}"]`)
+                  );
+                  if (!hits.length) return null;
+
+                  if (kind === 'caller') {
+                    const call = hits.find(el => {
+                      const { prev, next } = contextAround(el);
+                      const looksLikeCall = /^\s*\(/.test(next);
+                      const looksLikeImport = /(?:^|\n|\r)\s*(?:from\s+\S+\s+import|import\s+)$/.test(prev);
+                      return looksLikeCall && !looksLikeImport;
+                    });
+                    if (call) return toLocalPoint(call.getBoundingClientRect());
+                  }
+
+                  if (kind === 'decl' && pathToExt.get(filePath) === 'py') {
+                    const def = hits.find(el => {
+                      const { prev, window } = contextAround(el);
+                      return /(^|\s)def\s+$/.test(prev) || /^\s*def\s+\w+\s*\(/.test(window);
+                    });
+                    if (def) return toLocalPoint(def.getBoundingClientRect());
+                  }
+
+                  // Fallback: avoid import lines if possible
+                  const nonImport = hits.find(el => {
+                    const { prev } = contextAround(el);
+                    return !/(?:^|\n|\r)\s*(?:from\s+\S+\s+import|import\s+)/.test(prev);
+                  });
+                  const chosen = nonImport ?? hits[0];
+                  return toLocalPoint(chosen.getBoundingClientRect());
+                };
 
                 const lines: JSX.Element[] = [];
                 const open = new Set(openPopups);
@@ -211,28 +263,14 @@ export default function CodeGraphPage() {
                   const hue = fnHues[name] ?? 200;
                   const stroke = `hsla(${hue}, 70%, 35%, 0.95)`;
 
-                  const pickAnchor = (filePath: string) => {
-                    // find the popup for this file
-                    const popup = container.querySelector(
-                      `[data-popup-file="${escAttr(filePath)}"]`
-                    ) as HTMLElement | null;
-                    if (!popup) return null;
-                    // find a highlighted function span inside that popup
-                    const span = popup.querySelector(
-                      `.fn-hit[data-fn="${escAttr(name)}"]`
-                    ) as HTMLElement | null;
-                    if (!span) return null;
-                    return toLocal(span.getBoundingClientRect());
-                  };
-
                   for (const src of callers) {
                     if (!open.has(src)) continue;
-                    const s = pickAnchor(src);
+                    const s = pickAnchor(src, name, 'caller');
                     if (!s) continue;
 
                     for (const dst of decls) {
                       if (src === dst || !open.has(dst)) continue;
-                      const dpt = pickAnchor(dst);
+                      const dpt = pickAnchor(dst, name, 'decl');
                       if (!dpt) continue;
 
                       const x1 = s.x, y1 = s.y;

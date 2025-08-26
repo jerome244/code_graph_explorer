@@ -22,7 +22,7 @@ export type FnIndex = {
 
 const IDENT = `[A-Za-z_][A-Za-z0-9_]*`;
 
-// helpers
+// ---------- helpers ----------
 function add(map: NameMap, key: string, value: string) {
   let set = map.get(key);
   if (!set) { set = new Set(); map.set(key, set); }
@@ -33,15 +33,25 @@ function addFileName(fileToNames: Map<string, Set<string>>, file: string, name: 
   if (!set) { set = new Set(); fileToNames.set(file, set); }
   set.add(name);
 }
-
-function normExt(ext: string): string {
-  const e = (ext || '').toLowerCase();
+function extFromPath(path: string): string {
+  const m = path.match(/\.([A-Za-z0-9]+)$/);
+  return m ? m[1] : '';
+}
+function normExt(ext: string, path: string, content: string): string {
+  let e = (ext || '').toLowerCase();
+  if (!e) e = (extFromPath(path) || '').toLowerCase();
   if (['js','mjs','cjs','jsx','ts','tsx'].includes(e)) return 'js';
   if (e === 'py') return 'py';
   if (['c','h'].includes(e)) return 'c';
   if (e === 'css') return 'css';
   if (['html','htm'].includes(e)) return 'html';
-  return e;
+
+  // Heuristics if no/lost extension
+  if (/^#!.*\bpython[0-9.]*\b/m.test(content) || /^\s*def\s+[A-Za-z_]\w*\s*\(/m.test(content)) return 'py';
+  if (/<\/?(?:html|head|body|div|span|script|link|meta)\b/i.test(content)) return 'html';
+  if (/\bfunction\s+[A-Za-z_]\w*\s*\(|\bconst\s+[A-Za-z_]\w*\s*=\s*\(/m.test(content)) return 'js';
+  if (/\.[A-Za-z_][\w-]*\s*[^{}]*\{/.test(content)) return 'css';
+  return e || 'other';
 }
 
 // Python: remove import lines so calls finder won’t match them
@@ -51,20 +61,23 @@ function stripPythonImports(source: string): string {
   return s;
 }
 
-// Decls
+// ---------- declarations ----------
 const JS_DECL_RE = new RegExp([
   `(?:^|[;\\s])function[\\s]+(${IDENT})[\\s]*\\(`, // function foo(
   `|(?:^|[;\\s])(?:const|let|var)[\\s]+(${IDENT})[\\s]*=[\\s]*(?:function|\\([^)\\n]*\\)[\\s]*=>|${IDENT}[\\s]*=>)`, // const foo = ...
 ].join(''), 'gm');
 
 const C_DECL_RE  = new RegExp(String.raw`(?:^|[\s;])(?:[A-Za-z_][A-Za-z0-9_*\s]+?\s+)?(${IDENT})\s*\([^;{}]*\)\s*(?:\{|;)`, 'gm');
-
 const PY_DECL_RE = new RegExp(String.raw`^[ \t]*def[ \t]+(${IDENT})[ \t]*\(`, 'gm');
 
-// Calls: free call name( ... ) avoiding foo.bar(
-// NOTE: 'm' so ^ and $ work line-wise
-const FREE_CALL_RE = new RegExp(String.raw`(^|[^.\w])(${IDENT})[ \t]*\(`, 'gm');
-
+// ---------- calls ----------
+// Try modern lookbehind for a clean "not preceded by . or \w" check, fallback otherwise.
+let FREE_CALL_RE: RegExp;
+try {
+  FREE_CALL_RE = new RegExp(String.raw`(?<![.\w])(${IDENT})[ \t]*\(`, 'gm');
+} catch {
+  FREE_CALL_RE = new RegExp(String.raw`(^|[^.\w])(${IDENT})[ \t]*\(`, 'gm');
+}
 // Python-specific "start-of-line/indented" call matcher (helper(), return helper(), await helper(), etc.)
 const PY_LINE_CALL_RE = new RegExp(String.raw`^[ \t]*(?:return\s+|await\s+|yield\s+)?(${IDENT})[ \t]*\(`, 'gm');
 
@@ -112,7 +125,7 @@ export function buildFunctionIndex(files: ParsedFile[]): FnIndex {
 
   for (const f of files) {
     const path = f.path;
-    const ext = normExt(f.ext);
+    const ext = normExt((f as any).ext ?? '', path, f.content);
     const text = f.content;
 
     // ---- Declarations
@@ -150,7 +163,7 @@ export function buildFunctionIndex(files: ParsedFile[]): FnIndex {
 
       // generic: name(
       for (const m of body.matchAll(FREE_CALL_RE)) {
-        const name = m[2] as string;
+        const name = (m[1] ?? m[2]) as string; // support both LB and fallback variant
         if (!name || RESERVED.has(name)) continue;
         if (ext === 'py' && (name === 'print' || name === 'len')) continue;
         add(fnCalls, name, path);

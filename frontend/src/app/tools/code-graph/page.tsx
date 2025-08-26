@@ -245,7 +245,7 @@ export default function CodeGraphPage() {
                     // Generic function call like name(
                     const call = hits.find(el => {
                       const { next, rightSib } = contextAround(el);
-                      const right = (next + rightSib).slice(0, 12);
+                      const right = (next + rightSib).slice(0, 16);
                       return /\s*\(/.test(right);
                     });
                     if (call) return toLocalPoint(call.getBoundingClientRect());

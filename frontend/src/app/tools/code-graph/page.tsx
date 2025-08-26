@@ -1,3 +1,4 @@
+// /frontend/src/app/tools/code-graph/page.tsx
 'use client';
 
 import React, { useMemo, useRef, useState } from 'react';
@@ -24,7 +25,6 @@ export default function CodeGraphPage() {
   const [hiddenFiles, setHiddenFiles] = useState<Set<string>>(new Set());
   const [openPopups, setOpenPopups] = useState<Set<string>>(new Set());
 
-  // function-mode toggle
   const [fnMode, setFnMode] = useState(false);
 
   const [popupPositions, setPopupPositions] = useState<Record<string, { x: number; y: number }>>({});
@@ -38,12 +38,9 @@ export default function CodeGraphPage() {
   );
 
   const fnIndex = useMemo(() => buildFunctionIndex(files), [files]);
-  const fnHues = useMemo(() => buildFnHueMap(fnIndex), [fnIndex]);
+  const fnHues  = useMemo(() => buildFnHueMap(fnIndex), [fnIndex]);
 
-  const elements: ElementDefinition[] = useMemo(
-    () => baseElements,
-    [baseElements]
-  );
+  const elements: ElementDefinition[] = useMemo(() => baseElements, [baseElements]);
 
   const tree: TreeNode = useMemo(() => buildTree(files), [files]);
   const filteredTree: TreeNode = useMemo(
@@ -99,7 +96,7 @@ export default function CodeGraphPage() {
       <p style={{ margin: 0, color: '#555' }}>
         Upload a <code>.zip</code>. Visualizes <b>.c</b>, <b>.py</b>, <b>.html</b>, <b>.css</b>, <b>.js/ts</b>.{' '}
         Tree: click files to show/hide nodes. Graph: click nodes to open code popups.{' '}
-        <b>Fn links</b> connects function calls to defs and CSS selectors (<code>.class</code>/<code>#id</code>) to HTML uses.
+        <b>Fn links</b> connects function calls ↔ defs (code) and CSS selectors ↔ HTML uses (styles).
       </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -202,9 +199,8 @@ export default function CodeGraphPage() {
                   y: rect.top + rect.height / 2 - crect.top,
                 });
 
-                // map file path -> ext for tiny language-aware hints
-                const pathToExt = new Map(files.map(f => [f.path, f.ext.toLowerCase()]));
-
+                // map file path -> ext (lowercased)
+                const pathToExt = new Map(files.map(f => [f.path, (f.ext || '').toLowerCase()]));
                 const extIs = (filePath: string, kinds: string[]) => {
                   const e = (pathToExt.get(filePath) || '').toLowerCase();
                   if (['js','mjs','cjs','jsx','ts','tsx'].includes(e)) return kinds.includes('js');
@@ -212,20 +208,19 @@ export default function CodeGraphPage() {
                   return kinds.includes(e);
                 };
 
-                // a small context window around an element
-                const ctx = (el: HTMLElement) => {
-                  const prev = (el.previousSibling?.textContent ?? '').slice(-80);
+                const contextAround = (el: HTMLElement) => {
+                  const prev = (el.previousSibling?.textContent ?? '').slice(-120);
                   const self = el.textContent ?? '';
-                  const next = (el.nextSibling?.textContent ?? '').slice(0, 80);
-                  const windowTxt = prev + self + next;
-                  return { prev, self, next, windowTxt };
+                  const next = (el.nextSibling?.textContent ?? '').slice(0, 120);
+                  const rightSib = ((el.nextElementSibling as HTMLElement | null)?.textContent ?? '').slice(0, 120);
+                  const win  = prev + self + next;
+                  return { prev, self, next, rightSib, win };
                 };
 
                 // Prefer:
-                //  - CALL:   JS/py/C -> "name(" ; HTML -> inside class="" or id="" attributes
-                //  - DECL:   py  -> "def name(" ; CSS -> ".name" or "#name" in selector area
-                // Avoid:
-                //  - import lines (Python)
+                // - CALLER: JS/PY/C -> "name("; HTML -> within class/id attribute
+                // - DECL:   PY       -> "def name("; CSS  -> selector token preceded by '.' or '#'
+                // Avoid Python import lines.
                 const pickAnchor = (filePath: string, fnName: string, kind: 'caller' | 'decl') => {
                   const popup = container.querySelector(
                     `[data-popup-file="${escAttr(filePath)}"]`
@@ -237,20 +232,22 @@ export default function CodeGraphPage() {
                   );
                   if (!hits.length) return null;
 
-                  // CALLERS
                   if (kind === 'caller') {
-                    // HTML attribute usage
                     if (extIs(filePath, ['html'])) {
                       const htmlCall = hits.find(el => {
-                        const { prev, windowTxt } = ctx(el);
-                        const inClass = /class\s*=\s*["'][^"']*\b$/.test(prev) || /\bclass\s*=\s*["'][^"']*\b/.test(windowTxt);
-                        const inId = /\bid\s*=\s*["'][^"']*\b$/.test(prev) || /\bid\s*=\s*["'][^"']*\b/.test(windowTxt);
+                        const { prev, win } = contextAround(el);
+                        const inClass = /class\s*=\s*["'][^"']*\b$/.test(prev) || /\bclass\s*=\s*["'][^"']*\b/.test(win);
+                        const inId    = /\bid\s*=\s*["'][^"']*\b$/.test(prev) || /\bid\s*=\s*["'][^"']*\b/.test(win);
                         return inClass || inId;
                       });
                       if (htmlCall) return toLocalPoint(htmlCall.getBoundingClientRect());
                     }
                     // Generic function call like name(
-                    const call = hits.find(el => /^\s*\(/.test((el.nextSibling?.textContent ?? '')));
+                    const call = hits.find(el => {
+                      const { next, rightSib } = contextAround(el);
+                      const right = (next + rightSib).slice(0, 12);
+                      return /\s*\(/.test(right);
+                    });
                     if (call) return toLocalPoint(call.getBoundingClientRect());
                     // Avoid Python import lines
                     const nonImport = hits.find(el => !/(?:^|\n|\r)\s*(?:from\s+\S+\s+import|import\s+)/.test((el.previousSibling?.textContent ?? '')));
@@ -258,20 +255,16 @@ export default function CodeGraphPage() {
                     return toLocalPoint(hits[0].getBoundingClientRect());
                   }
 
-                  // DECLARATIONS
                   if (kind === 'decl') {
-                    // Python def name(
                     if (extIs(filePath, ['py'])) {
                       const def = hits.find(el => /(^|\s)def\s+$/.test((el.previousSibling?.textContent ?? '')) ||
-                        /^\s*def\s+\w+\s*\(/.test((el.previousSibling?.textContent ?? '') + (el.textContent ?? '') + (el.nextSibling?.textContent ?? '')));
+                        /^\s*def\s+\w+\s*\(/.test(((el.previousSibling?.textContent ?? '') + (el.textContent ?? '') + (el.nextSibling?.textContent ?? ''))));
                       if (def) return toLocalPoint(def.getBoundingClientRect());
                     }
-                    // CSS .name or #name in selector lists
                     if (extIs(filePath, ['css'])) {
                       const cssDef = hits.find(el => /[.#]\s*$/.test((el.previousSibling?.textContent ?? '').slice(-2)));
                       if (cssDef) return toLocalPoint(cssDef.getBoundingClientRect());
                     }
-                    // fallback
                     return toLocalPoint(hits[0].getBoundingClientRect());
                   }
 
@@ -281,8 +274,9 @@ export default function CodeGraphPage() {
                 const lines: JSX.Element[] = [];
                 const open = new Set(openPopups);
 
-                for (const [name, callers] of fnIndex.callsByName) {
-                  const decls = fnIndex.declsByName.get(name);
+                // Draw FUNCTION edges (code: js/py/c)
+                for (const [name, callers] of fnIndex.fn.callsByName) {
+                  const decls = fnIndex.fn.declsByName.get(name);
                   if (!decls || decls.size === 0) continue;
 
                   const hue = fnHues[name] ?? 200;
@@ -298,15 +292,12 @@ export default function CodeGraphPage() {
                       const dpt = pickAnchor(dst, name, 'decl');
                       if (!dpt) continue;
 
-                      const x1 = s.x, y1 = s.y;
-                      const x2 = dpt.x, y2 = dpt.y;
-
-                      const cy = Math.min(y1, y2) - 40; // slight arc for separation
-                      const d = `M ${x1} ${y1} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y2}`;
+                      const cy = Math.min(s.y, dpt.y) - 40;
+                      const d = `M ${s.x} ${s.y} C ${s.x} ${cy}, ${dpt.x} ${cy}, ${dpt.x} ${dpt.y}`;
 
                       lines.push(
                         <path
-                          key={`pp-${name}-${src}->${dst}`}
+                          key={`fn-${name}-${src}->${dst}`}
                           d={d}
                           stroke={stroke}
                           strokeWidth={2}
@@ -317,6 +308,42 @@ export default function CodeGraphPage() {
                     }
                   }
                 }
+
+                // Draw STYLE edges (css ↔ html)
+                for (const [name, callers] of fnIndex.style.callsByName) {
+                  const decls = fnIndex.style.declsByName.get(name);
+                  if (!decls || decls.size === 0) continue;
+
+                  const hue = fnHues[name] ?? 200;
+                  const stroke = `hsla(${hue}, 60%, 40%, 0.8)`;
+
+                  for (const src of callers) {
+                    if (!open.has(src)) continue;
+                    const s = pickAnchor(src, name, 'caller');
+                    if (!s) continue;
+
+                    for (const dst of decls) {
+                      if (src === dst || !open.has(dst)) continue;
+                      const dpt = pickAnchor(dst, name, 'decl');
+                      if (!dpt) continue;
+
+                      const cy = Math.min(s.y, dpt.y) - 36;
+                      const d = `M ${s.x} ${s.y} C ${s.x} ${cy}, ${dpt.x} ${cy}, ${dpt.x} ${dpt.y}`;
+
+                      lines.push(
+                        <path
+                          key={`style-${name}-${src}->${dst}`}
+                          d={d}
+                          stroke={stroke}
+                          strokeWidth={2}
+                          vectorEffect="non-scaling-stroke"
+                          fill="none"
+                        />
+                      );
+                    }
+                  }
+                }
+
                 return lines;
               })()}
             </svg>

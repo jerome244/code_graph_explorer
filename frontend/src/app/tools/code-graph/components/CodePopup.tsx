@@ -10,16 +10,16 @@ export function CodePopup({
   fnMode,
   fnHues,
   namesForFile,
+  onDecorated, // NEW: tell parent when anchors are ready
 }: {
   x: number; y: number; title: string; path: string; content: string; ext: SupportedType; onClose: () => void;
   fnMode: boolean;
   fnHues: Record<string, number>;
   namesForFile: string[];
+  onDecorated?: () => void;
 }) {
   const [html, setHtml] = useState<string | null>(null);
   const codeRef = useRef<HTMLDivElement | null>(null);
-
-  const lineCount = useMemo(() => content.split('\n').length, [content]);
 
   useEffect(() => {
     let cancelled = false;
@@ -36,62 +36,93 @@ export function CodePopup({
     return () => { cancelled = true; };
   }, [content, ext]);
 
-  // Build a regex for the function names present in this file
-  const nameRegex = useMemo(() => {
+  // Build the pattern once; we'll create two regexes from it (stateless test + global match)
+  const namePattern = useMemo(() => {
     if (!fnMode || !namesForFile?.length) return null;
     const escaped = namesForFile
       .filter(Boolean)
       .map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     if (escaped.length === 0) return null;
-    return new RegExp(`\\b(${escaped.join('|')})\\b`, 'g');
+    return `\\b(${escaped.join('|')})\\b`;
   }, [fnMode, namesForFile]);
 
-  // After HTML is set, wrap matches in spans (.fn-hit) so the overlay can anchor to them
+  const nameReTest = useMemo(() => (namePattern ? new RegExp(namePattern) : null), [namePattern]);
+  const nameReMatchGlobal = useMemo(() => (namePattern ? new RegExp(namePattern, 'g') : null), [namePattern]);
+
+  // Write HTML into the ref *and* decorate it. React won't touch it again (no dangerouslySetInnerHTML).
   useEffect(() => {
     const root = codeRef.current;
-    if (!root || !html || !fnMode || !nameRegex) return;
+    if (!root) return;
 
-    root.innerHTML = html;
+    // 1) Set the highlighted HTML (or a plaintext fallback) ourselves.
+    if (html) {
+      root.innerHTML = html;
+    } else {
+      // plaintext fallback
+      root.textContent = content;
+    }
+
+    // 2) Decorate with .fn-hit anchors if in Fn mode
+    if (!fnMode || !nameReTest || !nameReMatchGlobal) {
+      // still notify so the parent can try drawing (e.g., CSS/HTML only)
+      requestAnimationFrame(() => onDecorated?.());
+      return;
+    }
 
     // Walk text nodes and wrap matches
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const toProcess: Text[] = [];
     while (true) {
-      const n = walker.nextNode();
+      const n = walker.nextNode() as Text | null;
       if (!n) break;
-      const parent = (n as any).parentElement as HTMLElement | null;
+      const parent = (n as any)?.parentElement as HTMLElement | null;
       if (!parent) continue;
       // Only wrap inside code/pre rendered by Shiki
       if (!parent.closest('.shiki')) continue;
       const txt = n.textContent || '';
-      if (nameRegex.test(txt)) toProcess.push(n as Text);
+      // stateless test (no 'g' flag)
+      if (nameReTest.test(txt)) toProcess.push(n);
     }
 
     for (const textNode of toProcess) {
       const txt = textNode.textContent || '';
       const frag = document.createDocumentFragment();
       let last = 0;
-      for (const m of txt.matchAll(nameRegex)) {
-        const before = txt.slice(last, m.index!);
+
+      // Use a fresh global regex per node (avoid cross-node lastIndex issues)
+      const re = new RegExp(nameReMatchGlobal.source, 'g');
+
+      for (const m of txt.matchAll(re)) {
+        const start = m.index ?? 0;
+        const before = txt.slice(last, start);
         if (before) frag.appendChild(document.createTextNode(before));
-        const name = m[1];
+
+        const matchText = m[0];
+        const name = m[1] ?? matchText;
         const hue = fnHues[name] ?? 200;
+
         const span = document.createElement('span');
         span.className = 'fn-hit';
-        span.setAttribute('data-fn', name);
+        span.dataset.fn = name;
+        // inline style so it's visible even if CSS fails
         span.style.backgroundColor = `hsla(${hue}, 90%, 70%, 0.35)`;
         span.style.outline = `1px solid hsla(${hue}, 70%, 35%, 0.85)`;
         span.style.borderRadius = '4px';
         span.style.padding = '0 2px';
-        span.textContent = name;
+        span.textContent = matchText;
+
         frag.appendChild(span);
-        last = m.index! + name.length;
+        last = start + matchText.length;
       }
       const after = txt.slice(last);
       if (after) frag.appendChild(document.createTextNode(after));
       textNode.parentNode?.replaceChild(frag, textNode);
     }
-  }, [fnMode, html, nameRegex, fnHues]);
+
+    // 3) Let the parent know anchors exist so it can re-measure and draw lines immediately
+    requestAnimationFrame(() => onDecorated?.());
+  // IMPORTANT: include all inputs that change the rendered/annotated DOM
+  }, [html, content, fnMode, nameReTest, nameReMatchGlobal, fnHues, onDecorated]);
 
   return (
     <div
@@ -175,23 +206,8 @@ export function CodePopup({
             }
           `}</style>
 
-          {html ? (
-            <div ref={codeRef}
-              // eslint-disable-next-line react/no-danger
-              dangerouslySetInnerHTML={{ __html: html }}
-            />
-          ) : (
-            <pre
-              style={{
-                margin: 0, padding: '8px 12px', maxHeight: 340, overflow: 'auto',
-                background: '#1e1e1e', color: '#d4d4d4',
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-                fontSize: 12, lineHeight: 1.45,
-              }}
-            >
-{content}
-            </pre>
-          )}
+          {/* We manage innerHTML ourselves in the effect to avoid React wiping decorations */}
+          <div ref={codeRef} />
         </div>
       </div>
 

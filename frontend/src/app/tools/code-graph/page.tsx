@@ -1,4 +1,3 @@
-// /frontend/src/app/tools/code-graph/page.tsx
 'use client';
 
 import React, { useMemo, useRef, useState } from 'react';
@@ -26,6 +25,10 @@ export default function CodeGraphPage() {
   const [openPopups, setOpenPopups] = useState<Set<string>>(new Set());
 
   const [fnMode, setFnMode] = useState(false);
+
+  // NEW: rerender trigger after popups decorate anchors
+  const [decorationVersion, setDecorationVersion] = useState(0);
+  const bumpDecoration = () => setDecorationVersion(v => v + 1);
 
   const [popupPositions, setPopupPositions] = useState<Record<string, { x: number; y: number }>>({});
   const graphRef = useRef<GraphHandle>(null);
@@ -87,7 +90,7 @@ export default function CodeGraphPage() {
     setOpenFolders(tops);
   }
 
-  // Minimal escape for attribute selector values (quotes)
+  // Minimal escape for attribute selector values (quotes + backslashes)
   const escAttr = (s: string) => s.replace(/["\\]/g, '\\$&');
 
   return (
@@ -185,6 +188,8 @@ export default function CodeGraphPage() {
           {/* Popup-to-popup links (Fn mode) */}
           {fnMode && (
             <svg
+              // depend on decorationVersion so we recompute right after popups decorate
+              key={decorationVersion}
               width="100%"
               height="100%"
               style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 10 }}
@@ -221,6 +226,7 @@ export default function CodeGraphPage() {
                 // - CALLER: JS/PY/C -> "name("; HTML -> within class/id attribute
                 // - DECL:   PY       -> "def name("; CSS  -> selector token preceded by '.' or '#'
                 // Avoid Python import lines.
+                const escAttr = (s: string) => s.replace(/["\\]/g, '\\$&');
                 const pickAnchor = (filePath: string, fnName: string, kind: 'caller' | 'decl') => {
                   const popup = container.querySelector(
                     `[data-popup-file="${escAttr(filePath)}"]`
@@ -250,15 +256,19 @@ export default function CodeGraphPage() {
                     });
                     if (call) return toLocalPoint(call.getBoundingClientRect());
                     // Avoid Python import lines
-                    const nonImport = hits.find(el => !/(?:^|\n|\r)\s*(?:from\s+\S+\s+import|import\s+)/.test((el.previousSibling?.textContent ?? '')));
+                    const nonImport = hits.find(el =>
+                      !/(?:^|\n|\r)\s*(?:from\s+\S+\s+import\s+|import\s+)/.test((el.previousSibling?.textContent ?? ''))
+                    );
                     if (nonImport) return toLocalPoint(nonImport.getBoundingClientRect());
                     return toLocalPoint(hits[0].getBoundingClientRect());
                   }
 
                   if (kind === 'decl') {
                     if (extIs(filePath, ['py'])) {
-                      const def = hits.find(el => /(^|\s)def\s+$/.test((el.previousSibling?.textContent ?? '')) ||
-                        /^\s*def\s+\w+\s*\(/.test(((el.previousSibling?.textContent ?? '') + (el.textContent ?? '') + (el.nextSibling?.textContent ?? ''))));
+                      const def = hits.find(el =>
+                        /(^|\s)def\s+$/.test((el.previousSibling?.textContent ?? '')) ||
+                        /^\s*def\s+\w+\s*\(/.test(((el.previousSibling?.textContent ?? '') + (el.textContent ?? '') + (el.nextSibling?.textContent ?? '')))
+                      );
                       if (def) return toLocalPoint(def.getBoundingClientRect());
                     }
                     if (extIs(filePath, ['css'])) {
@@ -368,6 +378,7 @@ export default function CodeGraphPage() {
                   fnMode={fnMode}
                   fnHues={fnHues}
                   namesForFile={namesForFile}
+                  onDecorated={bumpDecoration} // NEW: draw lines immediately after decoration
                 />
               );
             })}

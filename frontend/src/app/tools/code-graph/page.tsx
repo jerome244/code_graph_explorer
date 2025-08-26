@@ -13,7 +13,7 @@ import { CodePopup } from './components/CodePopup';
 import { buildElements, buildTree, filterTree, humanBytes } from './lib/utils';
 import type { ParsedFile, TreeNode } from './lib/types';
 
-import { buildFunctionIndex, buildCallEdges, buildFnHueMap } from './lib/functions';
+import { buildFunctionIndex, buildFnHueMap } from './lib/functions';
 
 export default function CodeGraphPage() {
   const [files, setFiles] = useState<ParsedFile[]>([]);
@@ -38,17 +38,14 @@ export default function CodeGraphPage() {
     [files, includeDeps]
   );
 
-  // Function index + hues + call edges
+  // Function index + hues
   const fnIndex = useMemo(() => buildFunctionIndex(files), [files]);
   const fnHues = useMemo(() => buildFnHueMap(fnIndex), [fnIndex]);
-  const callEdges: ElementDefinition[] = useMemo(
-    () => (fnMode ? buildCallEdges(fnIndex) : []),
-    [fnIndex, fnMode]
-  );
 
+  // Keep graph edges to deps only; function links are drawn between popups instead.
   const elements: ElementDefinition[] = useMemo(
-    () => (fnMode ? [...baseElements, ...callEdges] : baseElements),
-    [baseElements, callEdges, fnMode]
+    () => baseElements,
+    [baseElements]
   );
 
   const tree: TreeNode = useMemo(() => buildTree(files), [files]);
@@ -103,9 +100,9 @@ export default function CodeGraphPage() {
     <div style={{ display: 'grid', gap: 16 }}>
       <h1 style={{ margin: 0 }}>Code Graph Explorer</h1>
       <p style={{ margin: 0, color: '#555' }}>
-        Upload a <code>.zip</code>. Visualizes <b>.c</b>, <b>.py</b>, <b>.html</b>, <b>.css</b>, <b>.js</b>.  
-        Tree: click files to show/hide nodes. Graph: click nodes to open code popups.  
-        Use <b>Fn links</b> to color functions and draw cross-file call edges.
+        Upload a <code>.zip</code>. Visualizes <b>.c</b>, <b>.py</b>, <b>.html</b>, <b>.css</b>, <b>.js</b>.{' '}
+        Tree: click files to show/hide nodes. Graph: click nodes to open code popups.{' '}
+        Use <b>Fn links</b> to color functions and draw links <i>between open popups</i>.
       </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -190,6 +187,56 @@ export default function CodeGraphPage() {
             onTogglePopup={handleTogglePopup}
             onPositions={setPopupPositions}
           />
+
+          {/* Popup-to-popup function links (when Fn mode is ON) */}
+          {fnMode && (
+            <svg
+              width="100%"
+              height="100%"
+              style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 10 }}
+            >
+              {(() => {
+                const lines: JSX.Element[] = [];
+                const open = new Set(openPopups);
+                const arrowOffset = 8; // CodePopup translates up by 8px
+                for (const [name, callers] of fnIndex.callsByName) {
+                  const decls = fnIndex.declsByName.get(name);
+                  if (!decls || decls.size === 0) continue;
+                  const hue = fnHues[name] ?? 200;
+                  const stroke = `hsla(${hue}, 70%, 35%, 0.95)`;
+                  for (const src of callers) {
+                    if (!open.has(src)) continue;
+                    const p1 = popupPositions[src];
+                    if (!p1) continue;
+                    for (const dst of decls) {
+                      if (src === dst || !open.has(dst)) continue;
+                      const p2 = popupPositions[dst];
+                      if (!p2) continue;
+
+                      const x1 = p1.x, y1 = p1.y - arrowOffset;
+                      const x2 = p2.x, y2 = p2.y - arrowOffset;
+
+                      // slight upward curve for readability
+                      const cy = Math.min(y1, y2) - 40;
+                      const d = `M ${x1} ${y1} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y2}`;
+
+                      lines.push(
+                        <path
+                          key={`pp-${name}-${src}->${dst}`}
+                          d={d}
+                          stroke={stroke}
+                          strokeWidth={2}
+                          vectorEffect="non-scaling-stroke"
+                          fill="none"
+                        />
+                      );
+                    }
+                  }
+                }
+                return lines;
+              })()}
+            </svg>
+          )}
 
           <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
             {Array.from(openPopups).map((id) => {

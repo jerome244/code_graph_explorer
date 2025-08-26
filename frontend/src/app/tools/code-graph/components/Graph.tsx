@@ -67,7 +67,7 @@ function GraphImpl(
           'target-arrow-shape': 'triangle', 'target-arrow-color': '#94A3B8', 'arrow-scale': 0.9,
         }},
 
-        // Function call edges
+        // (call edges are no longer used — we draw popup-to-popup lines in page.tsx)
         { selector: 'edge.call', style: {
           'width': 1.6, 'line-color': '#f472b6', 'curve-style': 'bezier',
           'target-arrow-shape': 'triangle', 'target-arrow-color': '#f472b6', 'line-style': 'dashed',
@@ -95,10 +95,26 @@ function GraphImpl(
     };
     cy.on('render zoom pan position dragfree layoutstop', updatePositions);
 
+    // Ensure we have positions immediately after init
+    updatePositions();
+
     cyRef.current = cy;
     return () => { cy.destroy(); cyRef.current = null; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Recompute popup positions whenever the open set changes (important for new popups)
+  useEffect(() => {
+    const cy = cyRef.current; if (!cy) return;
+    const out: Record<string, { x: number; y: number }> = {};
+    for (const id of openPopups) {
+      const node = cy.getElementById(id);
+      if (node.empty() || node.hasClass('hidden-file')) continue;
+      const p = node.renderedPosition();
+      out[id] = { x: p.x, y: p.y };
+    }
+    onPositions(out);
+  }, [openPopups, onPositions]);
 
   function applyHiddenToEdges(cy: Core) {
     cy.edges().forEach(e => {

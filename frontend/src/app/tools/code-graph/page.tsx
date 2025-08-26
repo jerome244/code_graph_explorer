@@ -1,3 +1,4 @@
+// /frontend/src/app/tools/code-graph/page.tsx
 'use client';
 
 import React, { useMemo, useRef, useState } from 'react';
@@ -9,38 +10,47 @@ import { TreeView } from './components/TreeView';
 import { Graph, GraphHandle } from './components/Graph';
 import { CodePopup } from './components/CodePopup';
 
-import {
-  buildElements,
-  buildTree,
-  filterTree,
-  humanBytes,
-} from './lib/utils';
+import { buildElements, buildTree, filterTree, humanBytes } from './lib/utils';
 import type { ParsedFile, TreeNode } from './lib/types';
 
+import { buildFunctionIndex, buildCallEdges, buildFnHueMap } from './lib/functions';
+
 export default function CodeGraphPage() {
-  // Data
   const [files, setFiles] = useState<ParsedFile[]>([]);
   const [includeDeps, setIncludeDeps] = useState(true);
   const [layoutName, setLayoutName] = useState('cose');
   const [filter, setFilter] = useState('');
   const [treeCollapsed, setTreeCollapsed] = useState(false);
 
-  // Tree/UI state
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set(['__root__']));
   const [hiddenFiles, setHiddenFiles] = useState<Set<string>>(new Set());
+  const [openPopups, setOpenPopups] = useState<Set<string>>(new Set());
 
-  // Popups state
-  const [openPopups, setOpenPopups] = useState<Set<string>>(new Set()); // file paths
-  const [popupPositions, setPopupPositions] =
-    useState<Record<string, { x: number; y: number }>>({});
+  // NEW: function-mode toggle
+  const [fnMode, setFnMode] = useState(false);
 
+  const [popupPositions, setPopupPositions] = useState<Record<string, { x: number; y: number }>>({});
   const graphRef = useRef<GraphHandle>(null);
 
   // Derived
-  const elements: ElementDefinition[] = useMemo(
+  const baseElements: ElementDefinition[] = useMemo(
     () => buildElements(files, includeDeps),
     [files, includeDeps]
   );
+
+  // Function index + hues + call edges
+  const fnIndex = useMemo(() => buildFunctionIndex(files), [files]);
+  const fnHues = useMemo(() => buildFnHueMap(fnIndex), [fnIndex]);
+  const callEdges: ElementDefinition[] = useMemo(
+    () => (fnMode ? buildCallEdges(fnIndex) : []),
+    [fnIndex, fnMode]
+  );
+
+  const elements: ElementDefinition[] = useMemo(
+    () => (fnMode ? [...baseElements, ...callEdges] : baseElements),
+    [baseElements, callEdges, fnMode]
+  );
+
   const tree: TreeNode = useMemo(() => buildTree(files), [files]);
   const filteredTree: TreeNode = useMemo(
     () => filterTree(tree, filter) || { ...tree, children: [] },
@@ -60,7 +70,6 @@ export default function CodeGraphPage() {
     setHiddenFiles(prev => {
       const next = new Set(prev);
       next.has(path) ? next.delete(path) : next.add(path);
-      // also close popup for hidden node
       setOpenPopups(p => {
         const q = new Set(p);
         if (next.has(path)) q.delete(path);
@@ -70,7 +79,6 @@ export default function CodeGraphPage() {
     });
   }
 
-  // Popups
   function handleTogglePopup(path: string) {
     setOpenPopups(prev => {
       const next = new Set(prev);
@@ -79,12 +87,10 @@ export default function CodeGraphPage() {
     });
   }
 
-  // After ZIP parsed
   function onZipLoaded(next: ParsedFile[]) {
     setFiles(next);
     setHiddenFiles(new Set());
     setOpenPopups(new Set());
-    // open root & top-level
     const tops = new Set<string>(['__root__']);
     next.forEach(f => {
       const first = f.dir.split('/').filter(Boolean)[0];
@@ -97,13 +103,11 @@ export default function CodeGraphPage() {
     <div style={{ display: 'grid', gap: 16 }}>
       <h1 style={{ margin: 0 }}>Code Graph Explorer</h1>
       <p style={{ margin: 0, color: '#555' }}>
-        Drop a <code>.zip</code> of your project (runs locally). We visualize{' '}
-        <b>.c</b>, <b>.py</b>, <b>.html</b>, <b>.css</b>, <b>.js</b> as nodes.
-        Left panel is a collapsible tree (click files to show/hide nodes).
-        Click nodes to toggle code popups; multiple popups can stay open.
+        Upload a <code>.zip</code>. Visualizes <b>.c</b>, <b>.py</b>, <b>.html</b>, <b>.css</b>, <b>.js</b>.  
+        Tree: click files to show/hide nodes. Graph: click nodes to open code popups.  
+        Use <b>Fn links</b> to color functions and draw cross-file call edges.
       </p>
 
-      {/* Top controls */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <ZipDrop onLoaded={onZipLoaded} />
 
@@ -117,10 +121,11 @@ export default function CodeGraphPage() {
           filter={filter}
           setFilter={setFilter}
           onFit={() => graphRef.current?.fit()}
+          fnMode={fnMode}
+          setFnMode={setFnMode}
         />
       </div>
 
-      {/* Tree + Graph */}
       <div
         style={{
           display: 'grid',
@@ -147,14 +152,7 @@ export default function CodeGraphPage() {
         >
           {!treeCollapsed && (
             <>
-              <div
-                style={{
-                  padding: '8px 8px 4px 8px',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'baseline',
-                }}
-              >
+              <div style={{ padding: '8px 8px 4px 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>Project Tree</div>
                 <div style={{ color: '#64748B', fontSize: 12 }}>
                   {files.length} files · {humanBytes(totalBytes)}
@@ -171,7 +169,7 @@ export default function CodeGraphPage() {
           )}
         </div>
 
-        {/* Graph + Popups overlay */}
+        {/* Graph + popups */}
         <div
           style={{
             position: 'relative',
@@ -193,31 +191,26 @@ export default function CodeGraphPage() {
             onPositions={setPopupPositions}
           />
 
-          {/* Popups rendered above the canvas; follow nodes via positions */}
           <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
             {Array.from(openPopups).map((id) => {
               const f = files.find(ff => ff.path === id);
               const pos = popupPositions[id];
               if (!f || !pos || hiddenFiles.has(id)) return null;
+              const namesForFile = Array.from(fnIndex.fileToNames.get(f.path) ?? []);
               return (
                 <CodePopup
-                key={id}
-                x={pos.x}
-                y={pos.y}
-                title={f.name}
-                path={f.path}
-                content={f.content}
-                ext={f.ext}
-                onClose={() =>
-                    setOpenPopups(prev => {
-                    const next = new Set(prev);
-                    next.delete(id);
-                    return next;
-                    })
-                }
+                  key={id}
+                  x={pos.x}
+                  y={pos.y}
+                  title={f.name}
+                  path={f.path}
+                  content={f.content}
+                  ext={f.ext}
+                  onClose={() => setOpenPopups(prev => { const next = new Set(prev); next.delete(id); return next; })}
+                  fnMode={fnMode}
+                  fnHues={fnHues}
+                  namesForFile={namesForFile}
                 />
-
-
               );
             })}
           </div>

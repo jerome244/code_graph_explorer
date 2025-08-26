@@ -1,3 +1,4 @@
+// /frontend/src/app/tools/code-graph/components/Graph.tsx
 'use client';
 
 import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
@@ -6,7 +7,6 @@ import cytoscape, { Core, ElementDefinition, LayoutOptions } from 'cytoscape';
 export type GraphHandle = { fit: () => void };
 
 function isEdge(el: ElementDefinition) {
-  // edges have data.source & data.target
   const d: any = (el as any).data;
   return d && typeof d.source === 'string' && typeof d.target === 'string';
 }
@@ -45,58 +45,34 @@ function GraphImpl(
       elements,
       style: [
         // Folders (compound)
-        {
-          selector: 'node.folder',
-          style: {
-            'background-opacity': 0.08,
-            'border-width': 1,
-            'border-color': '#CBD5E1',
-            'shape': 'round-rectangle',
-            'label': 'data(label)',
-            'text-valign': 'top',
-            'text-halign': 'center',
-            'font-size': 12,
-            'color': '#475569',
-            'padding': '12px',
-          },
-        },
+        { selector: 'node.folder', style: {
+          'background-opacity': 0.08, 'border-width': 1, 'border-color': '#CBD5E1', 'shape': 'round-rectangle',
+          'label': 'data(label)', 'text-valign': 'top', 'text-halign': 'center', 'font-size': 12, 'color': '#475569', 'padding': '12px',
+        }},
         // Files
-        {
-          selector: 'node.file',
-          style: {
-            'background-color': '#E5E7EB',
-            'border-color': '#9CA3AF',
-            'border-width': 1,
-            'shape': 'round-rectangle',
-            'label': 'data(label)',
-            'font-size': 11,
-            'text-wrap': 'wrap',
-            'text-max-width': 120,
-            'color': '#111827',
-            'padding': '6px',
-            'width': 'mapData(size, 0, 50000, 40, 120)',
-            'height': 'mapData(size, 0, 50000, 24, 48)',
-          },
-        },
-        // File accents
+        { selector: 'node.file', style: {
+          'background-color': '#E5E7EB','border-color': '#9CA3AF','border-width': 1,'shape': 'round-rectangle',
+          'label': 'data(label)','font-size': 11,'text-wrap': 'wrap','text-max-width': 120,'color': '#111827','padding': '6px',
+          'width': 'mapData(size, 0, 50000, 40, 120)','height': 'mapData(size, 0, 50000, 24, 48)',
+        }},
         { selector: 'node.file.js',   style: { 'background-color': '#FEF3C7' } },
         { selector: 'node.file.py',   style: { 'background-color': '#DBEAFE' } },
         { selector: 'node.file.html', style: { 'background-color': '#FDE68A' } },
         { selector: 'node.file.css',  style: { 'background-color': '#DCFCE7' } },
         { selector: 'node.file.c',    style: { 'background-color': '#E9D5FF' } },
 
-        // Edges
-        {
-          selector: 'edge.dep',
-          style: {
-            'width': 1.5,
-            'line-color': '#94A3B8',
-            'curve-style': 'bezier',
-            'target-arrow-shape': 'triangle',
-            'target-arrow-color': '#94A3B8',
-            'arrow-scale': 0.9,
-          },
-        },
+        // Dependency edges
+        { selector: 'edge.dep', style: {
+          'width': 1.5, 'line-color': '#94A3B8', 'curve-style': 'bezier',
+          'target-arrow-shape': 'triangle', 'target-arrow-color': '#94A3B8', 'arrow-scale': 0.9,
+        }},
+
+        // Function call edges
+        { selector: 'edge.call', style: {
+          'width': 1.6, 'line-color': '#f472b6', 'curve-style': 'bezier',
+          'target-arrow-shape': 'triangle', 'target-arrow-color': '#f472b6', 'line-style': 'dashed',
+          'arrow-scale': 0.95,
+        }},
 
         // Hidden node
         { selector: 'node.hidden-file', style: { 'display': 'none' } },
@@ -105,13 +81,8 @@ function GraphImpl(
       wheelSensitivity: 0.2,
     });
 
-    // toggle popup on node click
-    cy.on('tap', 'node.file', (evt) => {
-      const id = evt.target.id();
-      onTogglePopup(id);
-    });
+    cy.on('tap', 'node.file', (evt) => onTogglePopup(evt.target.id()));
 
-    // update popup positions on viewport or node movement changes
     const updatePositions = () => {
       const out: Record<string, { x: number; y: number }> = {};
       for (const id of openRef.current) {
@@ -129,7 +100,6 @@ function GraphImpl(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // helper to apply hidden edge visibility
   function applyHiddenToEdges(cy: Core) {
     cy.edges().forEach(e => {
       const hide = hiddenFiles.has(e.source().id()) || hiddenFiles.has(e.target().id());
@@ -137,11 +107,10 @@ function GraphImpl(
     });
   }
 
-  // 🔁 Update elements without losing node positions
+  // Update elements without losing node positions
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
 
-    // Split incoming into nodes/edges
     const incomingNodes = elements.filter(isNode);
     const incomingEdges = elements.filter(isEdge);
 
@@ -151,25 +120,21 @@ function GraphImpl(
     const nodesUnchanged = sameIdSet(currentNodeIds, newNodeIds);
 
     if (nodesUnchanged) {
-      // 💡 Only edges changed (e.g., toggling dependency edges)
       cy.startBatch();
-      cy.edges().remove();                         // remove old edges
-      cy.add(incomingEdges as any);                // add new edges
-      applyHiddenToEdges(cy);                      // respect hidden files
+      cy.edges().remove();
+      cy.add(incomingEdges as any);
+      applyHiddenToEdges(cy);
       cy.endBatch();
 
-      // refresh popup positions
       const out: Record<string, { x: number; y: number }> = {};
-      for (const id of openRef.current) {
+      for (const id of (new Set<string>(Array.from(currentNodeIds)))) {
         const n = cy.getElementById(id);
         if (n.empty() || n.hasClass('hidden-file')) continue;
         const p = n.renderedPosition();
         out[id] = { x: p.x, y: p.y };
       }
       onPositions(out);
-
     } else {
-      // 🔄 Node set changed (new ZIP, different files, etc.) — do full rebuild + layout
       cy.startBatch();
       cy.elements().remove();
       cy.add(elements as any);
@@ -177,9 +142,8 @@ function GraphImpl(
       cy.layout({ name: layoutName as any, animate: true }).run();
       applyHiddenToEdges(cy);
     }
-  }, [elements, layoutName]); // NOTE: layoutName is only used on full rebuild
+  }, [elements, layoutName]);
 
-  // Apply hidden state to nodes (and edges) when hiddenFiles changes
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
     cy.startBatch();
@@ -188,30 +152,9 @@ function GraphImpl(
     });
     applyHiddenToEdges(cy);
     cy.endBatch();
-
-    // refresh positions (hidden nodes won't report)
-    const out: Record<string, { x: number; y: number }> = {};
-    for (const id of openRef.current) {
-      const n = cy.getElementById(id);
-      if (n.empty() || n.hasClass('hidden-file')) continue;
-      const p = n.renderedPosition();
-      out[id] = { x: p.x, y: p.y };
-    }
-    onPositions(out);
   }, [hiddenFiles]);
 
-  // expose fit()
-  useImperativeHandle(ref, () => ({
-    fit: () => cyRef.current?.fit(undefined, 20),
-  }), []);
+  useImperativeHandle(ref, () => ({ fit: () => cyRef.current?.fit(undefined, 20) }), []);
 
-  return (
-    <div
-      ref={containerRef}
-      style={{
-        position: 'absolute',
-        inset: 0,
-      }}
-    />
-  );
+  return <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />;
 });

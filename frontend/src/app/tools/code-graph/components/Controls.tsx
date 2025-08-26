@@ -1,3 +1,4 @@
+// /frontend/src/app/tools/code-graph/components/Controls.tsx
 'use client';
 
 import React from 'react';
@@ -12,6 +13,8 @@ export function Controls({
   filter,
   setFilter,
   onFit,
+  fnMode,
+  setFnMode,
 }: {
   treeCollapsed: boolean;
   onToggleTree: () => void;
@@ -22,6 +25,8 @@ export function Controls({
   filter: string;
   setFilter: (v: string) => void;
   onFit: () => void;
+  fnMode: boolean;
+  setFnMode: (v: boolean) => void;
 }) {
   return (
     <div
@@ -33,7 +38,7 @@ export function Controls({
         display: 'grid',
         gap: 8,
         alignItems: 'center',
-        gridTemplateColumns: 'auto 1fr 1fr 1fr auto',
+        gridTemplateColumns: 'auto auto 1fr 1fr 1fr auto',
       }}
     >
       <button
@@ -48,6 +53,21 @@ export function Controls({
         }}
       >
         {treeCollapsed ? '▶' : '◀'} Tree
+      </button>
+
+      <button
+        onClick={() => setFnMode(!fnMode)}
+        title="Toggle function links and colorization"
+        style={{
+          padding: '8px 12px',
+          borderRadius: 8,
+          border: '1px solid #CBD5E1',
+          background: fnMode ? '#DBEAFE' : '#fff',
+          cursor: 'pointer',
+          fontWeight: 600,
+        }}
+      >
+        {fnMode ? 'Fn links: ON' : 'Fn links: OFF'}
       </button>
 
       <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

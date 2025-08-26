@@ -8,6 +8,7 @@ import { Controls } from './components/Controls';
 import { TreeView } from './components/TreeView';
 import { Graph, GraphHandle } from './components/Graph';
 import { CodePopup } from './components/CodePopup';
+import { DrawingOverlay } from './components/DrawingOverlay'; // ← added
 
 import { buildElements, buildTree, filterTree, humanBytes } from './lib/utils';
 import type { ParsedFile, TreeNode } from './lib/types';
@@ -184,6 +185,9 @@ export default function CodeGraphPage() {
             onTogglePopup={handleTogglePopup}
             onPositions={setPopupPositions}
           />
+
+          {/* Drawing overlay for annotations */}
+          <DrawingOverlay />
 
           {/* Popup-to-popup links (Fn mode) */}
           {fnMode && (

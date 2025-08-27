@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 function wsFromHttp(httpUrl: string) {
   const u = new URL(httpUrl);
@@ -8,38 +8,21 @@ function wsFromHttp(httpUrl: string) {
 }
 
 export type Peer = { id: string; name?: string; color?: string; user_id?: number | null };
-export type NodePos = { id: string; x: number; y: number };
-
-type WireWelcomeOrState =
-  | {
-      type: 'welcome';
-      id: string;
-      can_edit: boolean;
-      peers?: Peer[];
-      positions?: Record<string, { x: number; y: number }>;
-    }
-  | {
-      type: 'state';
-      can_edit: boolean;
-      positions?: Record<string, { x: number; y: number }>;
-    };
+export type PosMap = Record<string, { x: number; y: number }>;
 
 export function useLiveProject(opts: {
   projectId?: number | null;
   shareToken?: string | null;
   jwt?: string | null;
   displayName?: string;
-
-  onPositions?: (snapshot: Record<string, { x: number; y: number }>) => void;
-  onNodesPos?: (updates: NodePos[]) => void;
-  onCanEditChange?: (can: boolean) => void;
 }) {
-  const { projectId, shareToken, jwt, displayName, onPositions, onNodesPos, onCanEditChange } = opts;
+  const { projectId, shareToken, jwt, displayName } = opts;
 
   const [connected, setConnected] = useState(false);
   const [canEdit, setCanEdit] = useState(false);
   const [peers, setPeers] = useState<Map<string, Peer>>(new Map());
   const [remoteSelections, setRemoteSelections] = useState<Map<string, string[]>>(new Map());
+  const [positions, setPositions] = useState<PosMap>({}); // <-- authoritative model coords
 
   const color = useMemo(() => {
     const h = Math.floor(Math.random() * 360);
@@ -48,51 +31,8 @@ export function useLiveProject(opts: {
 
   const wsRef = useRef<WebSocket | null>(null);
   const myIdRef = useRef<string | null>(null);
-  const canEditRef = useRef<boolean>(false);
 
-  // ---- batched outgoing node moves (~30 fps)
-  const pendingRef = useRef<Map<string, NodePos>>(new Map());
-  const tickingRef = useRef(false);
-
-  const flushPositions = useCallback(() => {
-    tickingRef.current = false;
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (!canEditRef.current) return;
-    const pending = pendingRef.current;
-    if (pending.size === 0) return;
-    const positions = Array.from(pending.values());
-    pending.clear();
-    try {
-      ws.send(JSON.stringify({ type: 'nodes_pos', positions }));
-    } catch {}
-  }, []);
-
-  /** Call while dragging a node locally. */
-  const queueNodeMove = useCallback((id: string, x: number, y: number) => {
-    if (!canEditRef.current) return;
-    pendingRef.current.set(id, { id, x, y });
-    if (!tickingRef.current) {
-      tickingRef.current = true;
-      setTimeout(flushPositions, 33);
-    }
-  }, [flushPositions]);
-
-  /** Force send whatever is queued. */
-  const publishPositionsNow = useCallback(() => flushPositions(), [flushPositions]);
-
-  /** Publish a full snapshot (host can call once on connect). */
-  const publishAllPositions = useCallback((all: Record<string, { x: number; y: number }>) => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (!canEditRef.current) return;
-    const positions = Object.entries(all).map(([id, p]) => ({ id, x: p.x, y: p.y }));
-    if (positions.length) {
-      try { ws.send(JSON.stringify({ type: 'nodes_pos', positions })); } catch {}
-    }
-  }, []);
-
-  // ---- connect
+  // connect
   useEffect(() => {
     const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
     if (!projectId && !shareToken) return;
@@ -108,30 +48,28 @@ export function useLiveProject(opts: {
     const socket = new WebSocket(base.toString());
     wsRef.current = socket;
 
-    socket.onopen = () => {
-      setConnected(true);
-      try {
-        socket.send(JSON.stringify({ type: 'hello', name: displayName || 'Guest', color }));
-        socket.send(JSON.stringify({ type: 'request_state' }));
-      } catch {}
-    };
+    socket.onopen = () => setConnected(true);
     socket.onclose = () => setConnected(false);
 
     socket.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
 
-      if (msg?.type === 'welcome' || msg?.type === 'state') {
-        const w = msg as WireWelcomeOrState;
-        if ('id' in w && w.type === 'welcome') {
-          myIdRef.current = w.id;
-          const m = new Map<string, Peer>();
-          (w.peers || []).forEach((p: Peer) => m.set(p.id, p));
-          setPeers(m);
+      if (msg.type === 'welcome') {
+        myIdRef.current = msg.id;
+        setCanEdit(!!msg.can_edit);
+
+        // peers
+        const m = new Map<string, Peer>();
+        (msg.peers || []).forEach((p: Peer) => m.set(p.id, p));
+        setPeers(m);
+
+        // positions snapshot from server (model coords)
+        if (msg.positions && typeof msg.positions === 'object') {
+          setPositions({ ...msg.positions });
         }
-        canEditRef.current = !!w.can_edit;
-        setCanEdit(canEditRef.current);
-        onCanEditChange?.(canEditRef.current);
-        if (w.positions) onPositions?.(w.positions);
+
+        // identify self
+        socket.send(JSON.stringify({ type: 'hello', name: displayName || 'Guest', color }));
         return;
       }
 
@@ -144,11 +82,21 @@ export function useLiveProject(opts: {
         });
         return;
       }
+
       if (msg.type === 'leave') {
-        setPeers((prev) => { const next = new Map(prev); next.delete(msg.id); return next; });
-        setRemoteSelections((prev) => { const next = new Map(prev); next.delete(msg.id); return next; });
+        setPeers((prev) => {
+          const next = new Map(prev);
+          next.delete(msg.id);
+          return next;
+        });
+        setRemoteSelections((prev) => {
+          const next = new Map(prev);
+          next.delete(msg.id);
+          return next;
+        });
         return;
       }
+
       if (msg.type === 'select') {
         if (msg.id === myIdRef.current) return;
         setRemoteSelections((prev) => {
@@ -158,17 +106,38 @@ export function useLiveProject(opts: {
         });
         return;
       }
+
       if (msg.type === 'options') {
         window.dispatchEvent(new CustomEvent('project:options', { detail: msg }));
         return;
       }
+
       if (msg.type === 'project_updated') {
         window.dispatchEvent(new CustomEvent('project:updated', { detail: msg }));
         return;
       }
-      if (msg.type === 'nodes_pos') {
-        const arr = (msg.positions || []) as NodePos[];
-        if (arr.length) onNodesPos?.(arr);
+
+      // --- positions sync ---
+      if (msg.type === 'positions_snapshot') {
+        if (msg.id && msg.id === myIdRef.current) return; // ignore echo
+        const snap = (msg.positions && typeof msg.positions === 'object') ? msg.positions : {};
+        setPositions({ ...snap });
+        return;
+      }
+
+      if (msg.type === 'positions_update') {
+        if (msg.id && msg.id === myIdRef.current) return; // ignore echo
+        const moves: Array<{ id: string; x: number; y: number }> = Array.isArray(msg.moves) ? msg.moves : [];
+        if (!moves.length) return;
+        setPositions((prev) => {
+          const next = { ...prev };
+          for (const m of moves) {
+            if (!m || typeof m.id !== 'string') continue;
+            const x = Number(m.x), y = Number(m.y);
+            if (Number.isFinite(x) && Number.isFinite(y)) next[m.id] = { x, y };
+          }
+          return next;
+        });
         return;
       }
     };
@@ -178,14 +147,12 @@ export function useLiveProject(opts: {
       wsRef.current = null;
       setPeers(new Map());
       setRemoteSelections(new Map());
+      setPositions({});
       setConnected(false);
-      canEditRef.current = false;
-      setCanEdit(false);
-      pendingRef.current.clear();
-      tickingRef.current = false;
     };
-  }, [projectId, shareToken, jwt, displayName, color, onPositions, onNodesPos, onCanEditChange]);
+  }, [projectId, shareToken, jwt, displayName, color]);
 
+  // API
   const sendSelections = (ids: string[]) => {
     const s = wsRef.current;
     if (!s || s.readyState !== WebSocket.OPEN) return;
@@ -198,19 +165,30 @@ export function useLiveProject(opts: {
     s.send(JSON.stringify({ type: 'options', ...opts }));
   };
 
+  const sendPositionsSnapshot = (pos: PosMap) => {
+    const s = wsRef.current;
+    if (!s || s.readyState !== WebSocket.OPEN) return;
+    s.send(JSON.stringify({ type: 'positions_snapshot', positions: pos }));
+  };
+
+  const sendPositionsUpdate = (moves: Array<{ id: string; x: number; y: number }>) => {
+    if (!moves.length) return;
+    const s = wsRef.current;
+    if (!s || s.readyState !== WebSocket.OPEN) return;
+    s.send(JSON.stringify({ type: 'positions_update', moves }));
+  };
+
   return {
     connected,
     canEdit,
     peers,
     remoteSelections,
+    positions, // latest authoritative model positions from server
     sendSelections,
     sendOptions,
-
-    // positions API
-    queueNodeMove,
-    publishPositionsNow,
-    publishAllPositions,
-
+    sendPositionsSnapshot,
+    sendPositionsUpdate,
     myColor: color,
+    myId: myIdRef.current,
   };
 }

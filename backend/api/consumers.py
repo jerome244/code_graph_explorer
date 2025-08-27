@@ -225,7 +225,7 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
             )
             return
 
-        # new: client can explicitly request a fresh snapshot
+        # explicit fresh snapshot request
         if t == "request_state":
             pos = positions_by_project[self.project.id]
             await self.send_json({
@@ -253,7 +253,62 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
             )
             return
 
-        # NEW: batched node positions (only editors)
+        # --- Node position sync ---
+
+        # Full snapshot push (host/editor publishes the full layout)
+        if t == "positions_snapshot":
+            if not self.can_edit:
+                return
+            snapshot = content.get("positions") or {}
+            if not isinstance(snapshot, dict):
+                return
+            store = positions_by_project[self.project.id]
+            store.clear()
+            for nid, p in snapshot.items():
+                try:
+                    x = float(p.get("x"))
+                    y = float(p.get("y"))
+                except Exception:
+                    continue
+                store[str(nid)] = (x, y)
+
+            await self.channel_layer.group_send(
+                self.group,
+                {"type": "project.broadcast",
+                 "data": {"type": "positions_snapshot", "id": self.peer_id,
+                          "positions": {k: {"x": v[0], "y": v[1]} for k, v in store.items()}}}
+            )
+            return
+
+        # Streaming batched updates while dragging (list of {id,x,y})
+        if t == "positions_update":
+            if not self.can_edit:
+                return
+            moves = content.get("moves") or []
+            if not isinstance(moves, list) or not moves:
+                return
+
+            store = positions_by_project[self.project.id]
+            out: List[Dict[str, Any]] = []
+            for it in moves:
+                try:
+                    nid = str(it["id"])
+                    x = float(it["x"])
+                    y = float(it["y"])
+                except Exception:
+                    continue
+                store[nid] = (x, y)
+                out.append({"id": nid, "x": x, "y": y})
+
+            if out:
+                await self.channel_layer.group_send(
+                    self.group,
+                    {"type": "project.broadcast",
+                     "data": {"type": "positions_update", "id": self.peer_id, "moves": out}}
+                )
+            return
+
+        # 🔁 Back-compat: accept old 'nodes_pos' as an update batch
         if t == "nodes_pos":
             if not self.can_edit:
                 return
@@ -261,7 +316,7 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
             if not isinstance(arr, list):
                 return
             store = positions_by_project[self.project.id]
-            updated: List[Dict[str, Any]] = []
+            out: List[Dict[str, Any]] = []
             for it in arr:
                 try:
                     nid = str(it["id"])
@@ -270,11 +325,12 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
                 except Exception:
                     continue
                 store[nid] = (x, y)
-                updated.append({"id": nid, "x": x, "y": y})
-
-            if updated:
+                out.append({"id": nid, "x": x, "y": y})
+            if out:
                 await self.channel_layer.group_send(
-                    self.group, {"type": "project.broadcast", "data": {"type": "nodes_pos", "positions": updated}}
+                    self.group,
+                    {"type": "project.broadcast",
+                     "data": {"type": "positions_update", "id": self.peer_id, "moves": out}}
                 )
             return
 
@@ -292,4 +348,5 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json(event["data"])
 
     async def project_event(self, event):
+        # used by viewset/group_send("project.event") to announce saves/updates
         await self.send_json(event["data"])

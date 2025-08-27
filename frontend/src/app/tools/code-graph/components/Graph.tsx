@@ -18,24 +18,39 @@ function sameIdSet(a: Set<string>, b: Set<string>) {
   return true;
 }
 
+type PosMap = Record<string, { x: number; y: number }>;
+type Move = { id: string; x: number; y: number };
+
 export const Graph = forwardRef<GraphHandle, {
   elements: ElementDefinition[];
   layoutName: string;
   hiddenFiles: Set<string>;
   openPopups: Set<string>;
   onTogglePopup: (id: string) => void;
+
+  // popup overlay (screen) positions
   onPositions: (p: Record<string, { x: number; y: number }>) => void;
-  /** Live Share: remote-selected node ids to highlight */
+
+  // Live Share
   remoteSelectedIds?: string[];
+
+  // NEW: apply authoritative model positions from server
+  presetPositions?: PosMap;
+
+  // NEW: stream model coord deltas while dragging
+  onModelDelta?: (moves: Move[]) => void;
+
+  // NEW: after layout or rebuild, provide a full model snapshot
+  onModelSnapshot?: (all: PosMap) => void;
 }>(
 function GraphImpl(
-  { elements, layoutName, hiddenFiles, openPopups, onTogglePopup, onPositions, remoteSelectedIds },
+  { elements, layoutName, hiddenFiles, openPopups, onTogglePopup, onPositions,
+    remoteSelectedIds, presetPositions, onModelDelta, onModelSnapshot },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cyRef = useRef<Core | null>(null);
   const openRef = useRef<Set<string>>(openPopups);
-
   useEffect(() => { openRef.current = openPopups; }, [openPopups]);
 
   // init once
@@ -69,7 +84,7 @@ function GraphImpl(
           'target-arrow-shape': 'triangle', 'target-arrow-color': '#f472b6', 'line-style': 'dashed',
           'arrow-scale': 0.95,
         }},
-        { selector: 'node.remote-selected', style: { 'border-width': 3, 'border-color': '#60A5FA' } }, // Live Share highlight
+        { selector: 'node.remote-selected', style: { 'border-width': 3, 'border-color': '#60A5FA' } },
         { selector: 'node.hidden-file', style: { 'display': 'none' } },
       ],
       layout: { name: 'cose', animate: true } as LayoutOptions,
@@ -78,24 +93,47 @@ function GraphImpl(
 
     cy.on('tap', 'node.file', (evt) => onTogglePopup(evt.target.id()));
 
-    const updatePositions = () => {
+    // Send popup overlay (rendered/screen) positions for open popups
+    const updateRenderedPositions = () => {
       const out: Record<string, { x: number; y: number }> = {};
       for (const id of openRef.current) {
         const node = cy.getElementById(id);
         if (node.empty() || node.hasClass('hidden-file')) continue;
-        const p = node.renderedPosition();
+        const p = node.renderedPosition(); // screen coords for overlay
         out[id] = { x: p.x, y: p.y };
       }
       onPositions(out);
     };
-    cy.on('render zoom pan position dragfree layoutstop', updatePositions);
-    updatePositions();
+    cy.on('render zoom pan position dragfree layoutstop', updateRenderedPositions);
+    updateRenderedPositions();
+
+    // Stream model deltas while dragging
+    cy.on('drag', 'node.file', (evt) => {
+      const n = evt.target;
+      const id = n.id();
+      const p = n.position(); // MODEL coords
+      onModelDelta?.([{ id, x: p.x, y: p.y }]);
+      // also keep overlay synced
+      updateRenderedPositions();
+    });
+
+    // After layout completes, send full model snapshot
+    cy.on('layoutstop', () => {
+      const all: PosMap = {};
+      cy.nodes('.file').forEach(n => {
+        const p = n.position();
+        all[n.id()] = { x: p.x, y: p.y };
+      });
+      onModelSnapshot?.(all);
+      updateRenderedPositions();
+    });
 
     cyRef.current = cy;
     return () => { cy.destroy(); cyRef.current = null; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // when open popups set changes, refresh overlay positions
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
     const out: Record<string, { x: number; y: number }> = {};
@@ -115,6 +153,7 @@ function GraphImpl(
     });
   }
 
+  // elements/layout changes
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
 
@@ -131,25 +170,30 @@ function GraphImpl(
       cy.add(incomingEdges as any);
       applyHiddenToEdges(cy);
       cy.endBatch();
-
-      const out: Record<string, { x: number; y: number }> = {};
-      for (const id of currentNodeIds) {
-        const n = cy.getElementById(id);
-        if (n.empty() || n.hasClass('hidden-file')) continue;
-        const p = n.renderedPosition();
-        out[id] = { x: p.x, y: p.y };
-      }
-      onPositions(out);
     } else {
       cy.startBatch();
       cy.elements().remove();
       cy.add(elements as any);
-      cy.endBatch();
-      cy.layout({ name: layoutName as any, animate: true }).run();
+
+      // If we have authoritative positions, apply them and use preset
+      const hasPreset = presetPositions && Object.keys(presetPositions).length > 0;
+      if (hasPreset) {
+        for (const [id, p] of Object.entries(presetPositions!)) {
+          const n = cy.getElementById(id);
+          if (!n.empty()) n.position({ x: p.x, y: p.y });
+        }
+        cy.endBatch();
+        cy.layout({ name: 'preset', animate: false }).run();
+      } else {
+        cy.endBatch();
+        cy.layout({ name: layoutName as any, animate: true }).run();
+      }
+
       applyHiddenToEdges(cy);
     }
-  }, [elements, layoutName]);
+  }, [elements, layoutName, /* NOTE: include key to re-apply when preset exists */ Object.keys(presetPositions || {}).join('|')]);
 
+  // apply hidden files
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
     cy.startBatch();
@@ -160,7 +204,20 @@ function GraphImpl(
     cy.endBatch();
   }, [hiddenFiles]);
 
-  // Live Share: apply/remove "remote-selected" class on nodes
+  // apply incoming remote positions incrementally
+  useEffect(() => {
+    const cy = cyRef.current; if (!cy) return;
+    if (!presetPositions) return;
+    cy.startBatch();
+    for (const [id, p] of Object.entries(presetPositions)) {
+      const n = cy.getElementById(id);
+      if (!n.empty()) n.position({ x: p.x, y: p.y });
+    }
+    cy.endBatch();
+    // no layout run here; we are directly positioning nodes
+  }, [presetPositions]);
+
+  // Live Share: highlight remote selections
   useEffect(() => {
     const cy = cyRef.current; if (!cy) return;
     cy.startBatch();

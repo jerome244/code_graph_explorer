@@ -19,6 +19,9 @@ import { buildFunctionIndex, buildFnHueMap } from './lib/functions';
 import { useLiveProject } from './lib/live';
 import { getTokens } from './lib/auth';
 
+type PosMap = Record<string, { x: number; y: number }>;
+type Move = { id: string; x: number; y: number };
+
 export default function CodeGraphPage() {
   const [files, setFiles] = useState<ParsedFile[]>([]);
   const [includeDeps, setIncludeDeps] = useState(true);
@@ -52,7 +55,9 @@ export default function CodeGraphPage() {
     projectId: activeProjectId,
     shareToken,
     jwt: access || null,
-    displayName: (typeof window !== 'undefined' && (localStorage.getItem('username') || localStorage.getItem('email') || 'Guest')) || undefined,
+    displayName:
+      (typeof window !== 'undefined' &&
+        (localStorage.getItem('username') || localStorage.getItem('email') || 'Guest')) || undefined,
   });
 
   // Derived
@@ -60,12 +65,9 @@ export default function CodeGraphPage() {
     () => buildElements(files, includeDeps),
     [files, includeDeps]
   );
-
   const fnIndex = useMemo(() => buildFunctionIndex(files), [files]);
   const fnHues  = useMemo(() => buildFnHueMap(fnIndex), [fnIndex]);
-
   const elements: ElementDefinition[] = useMemo(() => baseElements, [baseElements]);
-
   const tree: TreeNode = useMemo(() => buildTree(files), [files]);
   const filteredTree: TreeNode = useMemo(
     () => filterTree(tree, filter) || { ...tree, children: [] },
@@ -109,6 +111,9 @@ export default function CodeGraphPage() {
       if (first) tops.add(first);
     });
     setOpenFolders(tops);
+
+    // refit after load (Graph will emit a snapshot after layoutstop)
+    setTimeout(() => graphRef.current?.fit(), 300);
   }
 
   // Auto-load shared link ?share=<token>
@@ -129,9 +134,7 @@ export default function CodeGraphPage() {
         setFnMode(!!o.fnMode);
 
         // if backend includes project id in token response, use it to enter id-based room
-        if (typeof payload?.id === 'number') {
-          setActiveProjectId(payload.id);
-        }
+        if (typeof payload?.id === 'number') setActiveProjectId(payload.id);
 
         setHiddenFiles(new Set());
         setOpenPopups(new Set());
@@ -142,7 +145,7 @@ export default function CodeGraphPage() {
         });
         setOpenFolders(tops);
 
-        setTimeout(() => graphRef.current?.fit(), 0);
+        setTimeout(() => graphRef.current?.fit(), 300);
       })
       .catch(async (e) => {
         const msg = typeof e?.text === 'function' ? await e.text() : 'Failed to open shared project.';
@@ -164,7 +167,7 @@ export default function CodeGraphPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [includeDeps, layoutName, filter, fnMode]);
 
-  // (Optional) follow remote options (you can disable if you prefer independent views)
+  // Follow remote options (optional)
   useEffect(() => {
     const onOpts = (e: any) => {
       const d = e.detail || {};
@@ -173,10 +176,7 @@ export default function CodeGraphPage() {
       if (typeof d.layoutName === 'string') setLayoutName(d.layoutName);
       if (typeof d.fnMode === 'boolean') setFnMode(d.fnMode);
     };
-    const onUpdated = () => {
-      // Show toast or re-fetch project list/data if desired
-      // console.info('Project was updated by a collaborator');
-    };
+    const onUpdated = () => {};
     window.addEventListener('project:options', onOpts);
     window.addEventListener('project:updated', onUpdated);
     return () => {
@@ -185,8 +185,29 @@ export default function CodeGraphPage() {
     };
   }, []);
 
-  // Minimal escape for attribute selector values (quotes + backslashes)
-  const escAttr = (s: string) => s.replace(/["\\]/g, '\\$&');
+  // --- throttle for streaming model-coordinate moves ---
+  const movesRef = useRef<Map<string, Move>>(new Map());
+  const flushTimerRef = useRef<number | null>(null);
+
+  const queueMoves = (incoming: Move[]) => {
+    for (const m of incoming) movesRef.current.set(m.id, m); // keep latest per node
+    if (flushTimerRef.current == null) {
+      flushTimerRef.current = window.setTimeout(() => {
+        const batch = Array.from(movesRef.current.values());
+        movesRef.current.clear();
+        flushTimerRef.current = null;
+        if (live.canEdit && batch.length) {
+          live.sendPositionsUpdate(batch);
+        }
+      }, 60); // ~16fps
+    }
+  };
+
+  const sendSnapshot = (snap: PosMap) => {
+    if (live.canEdit) {
+      live.sendPositionsSnapshot(snap);
+    }
+  };
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
@@ -199,17 +220,14 @@ export default function CodeGraphPage() {
 
       {/* Project save/load/share bar */}
       <ProjectBar
-        current={{
-          files,
-          options: { includeDeps, layoutName, filter, fnMode },
-        }}
+        current={{ files, options: { includeDeps, layoutName, filter, fnMode } }}
         onLoad={({ files: f, options: o }) => {
           setFiles(f || []);
           setIncludeDeps(!!o?.includeDeps);
           setLayoutName(o?.layoutName || 'cose');
           setFilter(o?.filter || '');
           setFnMode(!!o?.fnMode);
-          // also reset UI state derived from files
+
           setHiddenFiles(new Set());
           setOpenPopups(new Set());
           const tops = new Set<string>(['__root__']);
@@ -218,8 +236,8 @@ export default function CodeGraphPage() {
             if (first) tops.add(first);
           });
           setOpenFolders(tops);
-          // refit graph after load
-          setTimeout(() => graphRef.current?.fit(), 0);
+
+          setTimeout(() => graphRef.current?.fit(), 300);
         }}
         // Live Share: tell page which project id is active (for ws auth room)
         onActiveChange={(id) => setActiveProjectId(id)}
@@ -301,7 +319,9 @@ export default function CodeGraphPage() {
           {/* Live presence chips */}
           <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 6, zIndex: 20 }}>
             {Array.from(live.peers.values()).map(p => (
-              <div key={p.id} title={p.name || p.id}
+              <div
+                key={p.id}
+                title={p.name || p.id}
                 style={{
                   padding: '4px 8px',
                   borderRadius: 999,
@@ -310,7 +330,8 @@ export default function CodeGraphPage() {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6
-                }}>
+                }}
+              >
                 <span style={{ width: 10, height: 10, borderRadius: 999, background: p.color || '#94A3B8' }} />
                 <span style={{ fontSize: 12 }}>{p.name || 'Guest'}</span>
               </div>
@@ -324,17 +345,24 @@ export default function CodeGraphPage() {
             hiddenFiles={hiddenFiles}
             openPopups={openPopups}
             onTogglePopup={handleTogglePopup}
+
+            // Popups overlay (rendered coords)
             onPositions={setPopupPositions}
-            // Live Share: combine all remote selections
+
+            // Live Share: highlight remote selections
             remoteSelectedIds={Array.from(
               new Set([].concat(...Array.from(live.remoteSelections.values())))
             ) as string[]}
+
+            // Live Share: apply server model positions + stream local changes
+            presetPositions={live.positions}
+            onModelDelta={(moves) => queueMoves(moves)}
+            onModelSnapshot={(snap) => sendSnapshot(snap)}
           />
 
           {/* Popup-to-popup links (Fn mode) */}
           {fnMode && (
             <svg
-              // depend on decorationVersion so we recompute right after popups decorate
               key={decorationVersion}
               width="100%"
               height="100%"
@@ -368,11 +396,13 @@ export default function CodeGraphPage() {
                   return { prev, self, next, rightSib, win };
                 };
 
+                // Minimal escape for attribute selector values (quotes + backslashes)
+                const escAttr = (s: string) => s.replace(/["\\]/g, '\\$&');
+
                 // Prefer:
                 // - CALLER: JS/PY/C -> "name("; HTML -> within class/id attribute
                 // - DECL:   PY       -> "def name("; CSS  -> selector token preceded by '.' or '#'
                 // Avoid Python import lines.
-                const escAttr = (s: string) => s.replace(/["\\]/g, '\\$&');
                 const pickAnchor = (filePath: string, fnName: string, kind: 'caller' | 'decl') => {
                   const popup = container.querySelector(
                     `[data-popup-file="${escAttr(filePath)}"]`
@@ -520,7 +550,13 @@ export default function CodeGraphPage() {
                   path={f.path}
                   content={f.content}
                   ext={f.ext}
-                  onClose={() => setOpenPopups(prev => { const next = new Set(prev); next.delete(id); return next; })}
+                  onClose={() =>
+                    setOpenPopups(prev => {
+                      const next = new Set(prev);
+                      next.delete(id);
+                      return next;
+                    })
+                  }
                   fnMode={fnMode}
                   fnHues={fnHues}
                   namesForFile={namesForFile}

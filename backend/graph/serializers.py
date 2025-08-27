@@ -17,6 +17,7 @@ class EdgeSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class ProjectSerializer(serializers.ModelSerializer):
+    owner = serializers.PrimaryKeyRelatedField(read_only=True)  # NEW
     files = FileSerializer(many=True, read_only=True)
     nodes = NodeSerializer(many=True, read_only=True)
     edges = EdgeSerializer(many=True, read_only=True)

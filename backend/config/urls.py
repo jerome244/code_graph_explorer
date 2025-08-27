@@ -12,4 +12,5 @@ router.register(r'edges', EdgeViewSet)
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include(router.urls)),
+    path('api/', include('users.urls')),  # <— NEW
 ]

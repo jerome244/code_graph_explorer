@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import chunk, entities, register_user, whoami, ProjectViewSet, project_by_token
+from .views import chunk, entities, register_user, whoami, ProjectViewSet, project_by_token, user_search
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from . import osint as osint_views
 
@@ -21,4 +21,5 @@ urlpatterns = [
     path("projects/shared/<str:token>/", project_by_token),
 
     path("", include(router.urls)),
+    path("users/search", user_search),
 ]

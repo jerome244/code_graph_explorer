@@ -1,13 +1,11 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import chunk, entities
+from .views import chunk, entities, register_user, whoami, ProjectViewSet, project_by_token
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from .views import register_user, whoami
-from .views import ProjectViewSet  # ← add this import
 from . import osint as osint_views
 
 router = DefaultRouter()
-router.register("projects", ProjectViewSet, basename="project")  # ← NEW
+router.register("projects", ProjectViewSet, basename="project")
 
 urlpatterns = [
     path("auth/register", register_user),
@@ -19,5 +17,8 @@ urlpatterns = [
     path("entities", entities),
     path("osint/scan", osint_views.osint_scan),
 
-    path("", include(router.urls)),  # ← make sure this line is present
+    # public share endpoint
+    path("projects/shared/<str:token>/", project_by_token),
+
+    path("", include(router.urls)),
 ]

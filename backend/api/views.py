@@ -352,19 +352,110 @@ def whoami(request):
     u = request.user
     return Response({"id": u.id, "username": u.username, "email": u.email})
 
+from rest_framework import viewsets, status
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.response import Response
+from django.contrib.auth import get_user_model
+from django.db.models import Q
 
-from rest_framework import viewsets
-from rest_framework.permissions import IsAuthenticated
-from .models import Project
-from .serializers import ProjectSerializer
+from .models import Project, ProjectCollaborator
+from .serializers import ProjectSerializer, ProjectCollaboratorSerializer
+from .permissions import IsOwnerOrCollaboratorCanEdit
+
+User = get_user_model()
 
 class ProjectViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated & IsOwnerOrCollaboratorCanEdit]
 
     def get_queryset(self):
-        return Project.objects.filter(owner=self.request.user).order_by("-updated_at")
+        u = self.request.user
+        # Owned OR shared-with-me
+        return Project.objects.filter(
+            Q(owner=u) | Q(collab_links__user=u)
+        ).distinct().order_by("-updated_at")
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
 
+    def destroy(self, request, *args, **kwargs):
+        obj = self.get_object()
+        if obj.owner_id != request.user.id:
+            return Response({"detail": "Only the owner can delete."}, status=403)
+        return super().destroy(request, *args, **kwargs)
+
+    # ----- SHARE LINK (read-only) -----
+    @action(detail=True, methods=["post"], url_path="share-link")
+    def create_share_link(self, request, pk=None):
+        proj = self.get_object()
+        if proj.owner_id != request.user.id:
+            return Response({"detail": "Only owner can create share link."}, status=403)
+        proj.ensure_share_token()
+        # Return token only here; not in normal serializer
+        return Response({"token": proj.share_token})
+
+    @action(detail=True, methods=["delete"], url_path="share-link")
+    def revoke_share_link(self, request, pk=None):
+        proj = self.get_object()
+        if proj.owner_id != request.user.id:
+            return Response({"detail": "Only owner can revoke share link."}, status=403)
+        proj.share_token = None
+        proj.save(update_fields=["share_token"])
+        return Response(status=204)
+
+    # ----- COLLABORATORS (add/remove/toggle) -----
+    @action(detail=True, methods=["get", "post", "patch", "delete"], url_path="collaborators")
+    def collaborators(self, request, pk=None):
+        proj = self.get_object()
+        if request.method == "GET":
+            ser = ProjectCollaboratorSerializer(proj.collab_links.select_related("user"), many=True)
+            return Response(ser.data)
+
+        # Only owner can manage collaborators
+        if proj.owner_id != request.user.id:
+            return Response({"detail": "Only owner can manage collaborators."}, status=403)
+
+        if request.method == "POST":
+            email = request.data.get("email", "").strip().lower()
+            can_edit = bool(request.data.get("can_edit"))
+            try:
+                user = User.objects.get(email__iexact=email)
+            except User.DoesNotExist:
+                return Response({"detail": "No user with that email."}, status=404)
+            link, _ = ProjectCollaborator.objects.get_or_create(project=proj, user=user)
+            if can_edit != link.can_edit:
+                link.can_edit = can_edit
+                link.save(update_fields=["can_edit"])
+            return Response(ProjectCollaboratorSerializer(link).data, status=201)
+
+        if request.method == "PATCH":
+            user_id = request.data.get("user_id")
+            can_edit = bool(request.data.get("can_edit"))
+            try:
+                link = ProjectCollaborator.objects.get(project=proj, user_id=user_id)
+            except ProjectCollaborator.DoesNotExist:
+                return Response({"detail": "Collaborator not found."}, status=404)
+            link.can_edit = can_edit
+            link.save(update_fields=["can_edit"])
+            return Response(ProjectCollaboratorSerializer(link).data)
+
+        if request.method == "DELETE":
+            user_id = request.data.get("user_id")
+            ProjectCollaborator.objects.filter(project=proj, user_id=user_id).delete()
+            return Response(status=204)
+
+# ----- Public read via token -----
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def project_by_token(request, token: str):
+    try:
+        proj = Project.objects.get(share_token=token)
+    except Project.DoesNotExist:
+        return Response({"detail": "Not found."}, status=404)
+    # Expose read-only data; no owner info or token echo
+    return Response({
+        "name": proj.name,
+        "data": proj.data,
+        "updated_at": proj.updated_at,
+    })

@@ -1,14 +1,15 @@
 'use client';
 
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ElementDefinition } from 'cytoscape';
+import { useSearchParams } from 'next/navigation';
 
 import { ZipDrop } from './components/ZipDrop';
 import { Controls } from './components/Controls';
 import { TreeView } from './components/TreeView';
 import { Graph, GraphHandle } from './components/Graph';
 import { CodePopup } from './components/CodePopup';
-import { ProjectBar } from './components/ProjectBar'; // ← NEW
+import { ProjectBar } from './components/ProjectBar';
 
 import { buildElements, buildTree, filterTree, humanBytes } from './lib/utils';
 import type { ParsedFile, TreeNode } from './lib/types';
@@ -27,13 +28,15 @@ export default function CodeGraphPage() {
 
   const [fnMode, setFnMode] = useState(false);
 
-  // NEW: rerender trigger after popups decorate anchors
+  // rerender trigger after popups decorate anchors
   const [decorationVersion, setDecorationVersion] = useState(0);
   const bumpDecoration = () => setDecorationVersion(v => v + 1);
 
   const [popupPositions, setPopupPositions] = useState<Record<string, { x: number; y: number }>>({});
   const graphRef = useRef<GraphHandle>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+
+  const searchParams = useSearchParams();
 
   // Derived
   const baseElements: ElementDefinition[] = useMemo(
@@ -91,6 +94,42 @@ export default function CodeGraphPage() {
     setOpenFolders(tops);
   }
 
+  // Auto-load shared link ?share=<token>
+  useEffect(() => {
+    const token = searchParams?.get('share');
+    if (!token) return;
+
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    fetch(`${API_BASE}/api/projects/shared/${encodeURIComponent(token)}/`)
+      .then(r => (r.ok ? r.json() : Promise.reject(r)))
+      .then(payload => {
+        const f: ParsedFile[] = payload?.data?.files ?? [];
+        const o = payload?.data?.options ?? {};
+        setFiles(f);
+        setIncludeDeps(!!o.includeDeps);
+        setLayoutName(o.layoutName || 'cose');
+        setFilter(o.filter || '');
+        setFnMode(!!o.fnMode);
+
+        setHiddenFiles(new Set());
+        setOpenPopups(new Set());
+        const tops = new Set<string>(['__root__']);
+        f.forEach((file: any) => {
+          const first = (file.dir || '').split('/').filter(Boolean)[0];
+          if (first) tops.add(first);
+        });
+        setOpenFolders(tops);
+
+        setTimeout(() => graphRef.current?.fit(), 0);
+      })
+      .catch(async (e) => {
+        const msg = typeof e?.text === 'function' ? await e.text() : 'Failed to open shared project.';
+        // eslint-disable-next-line no-alert
+        alert(msg);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once
+
   // Minimal escape for attribute selector values (quotes + backslashes)
   const escAttr = (s: string) => s.replace(/["\\]/g, '\\$&');
 
@@ -103,7 +142,7 @@ export default function CodeGraphPage() {
         <b>Fn links</b> connects function calls ↔ defs (code) and CSS selectors ↔ HTML uses (styles).
       </p>
 
-      {/* NEW: Project save/load bar */}
+      {/* Project save/load/share bar */}
       <ProjectBar
         current={{
           files,
@@ -405,7 +444,7 @@ export default function CodeGraphPage() {
                   fnMode={fnMode}
                   fnHues={fnHues}
                   namesForFile={namesForFile}
-                  onDecorated={bumpDecoration} // NEW: draw lines immediately after decoration
+                  onDecorated={bumpDecoration}
                 />
               );
             })}

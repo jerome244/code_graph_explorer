@@ -1,8 +1,16 @@
-import { cookies } from 'next/headers'
+import { NextResponse } from "next/server";
 
-export async function POST() {
-  const store = await cookies()
-  store.delete('access')
-  store.delete('refresh')
-  return Response.json({ ok: true })
+function clearAndRedirect(req: Request) {
+  const res = NextResponse.redirect(new URL("/", req.url));
+  res.cookies.set("access", "", { path: "/", maxAge: 0 });
+  res.cookies.set("refresh", "", { path: "/", maxAge: 0 });
+  return res;
+}
+
+export async function POST(req: Request) {
+  return clearAndRedirect(req);
+}
+
+export async function GET(req: Request) {
+  return clearAndRedirect(req);
 }

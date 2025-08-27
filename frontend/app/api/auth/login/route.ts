@@ -1,20 +1,33 @@
-import { cookies } from 'next/headers'
+import { NextResponse } from "next/server";
+
+const BACKEND = process.env.BACKEND_URL || "http://localhost:8000";
 
 export async function POST(req: Request) {
-  const { username, email, password } = await req.json()
-  const base = process.env.DJANGO_BASE_URL!
-
-  const r = await fetch(`${base}/auth/token/`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: username || email, password }),
-  })
-  if (!r.ok) return new Response(await r.text(), { status: r.status })
-  const tok = await r.json()
-
-  const store = await cookies()
-  store.set('access', tok.access, { httpOnly: true, sameSite: 'lax', path: '/' })
-  store.set('refresh', tok.refresh, { httpOnly: true, sameSite: 'lax', path: '/' })
-
-  return Response.json({ ok: true })
+  const { username, password } = await req.json();
+  const r = await fetch(`${BACKEND}/api/token/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  const data = await r.json();
+  if (!r.ok) {
+    return NextResponse.json({ error: data }, { status: r.status });
+  }
+  const res = NextResponse.json({ success: true });
+  // httpOnly cookies so the browser can't read them
+  res.cookies.set("access", data.access, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 5,
+  });
+  res.cookies.set("refresh", data.refresh, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 7,
+  });
+  return res;
 }

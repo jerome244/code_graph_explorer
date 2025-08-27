@@ -3,26 +3,22 @@ import micromatch from 'micromatch'
 import { parse as babelParse } from '@babel/parser'
 import traverseModule from '@babel/traverse'
 import dagre from 'dagre'
-import { cookies } from 'next/headers'
 
 const traverse: any = (traverseModule as any).default ?? traverseModule
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
 
-// --- helpers ---
 const exts = ['.c', '.h', '.py', '.js', '.css', '.html']
 const wanted = exts.map((e) => `**/*${e}`)
 
-function langFromPath(path: string) {
-  return path.split('.').pop()?.toLowerCase() || ''
-}
+function langFromPath(path: string) { return path.split('.').pop()?.toLowerCase() || '' }
 
 function textImports(lang: string, _path: string, text: string): string[] {
   const rels: string[] = []
-  if (['js', 'mjs', 'ts', 'jsx', 'tsx'].includes(lang)) {
+  if (['js','mjs','ts','jsx','tsx'].includes(lang)) {
     try {
-      const ast = babelParse(text, { sourceType: 'unambiguous', plugins: ['jsx', 'typescript', 'dynamicImport'] })
+      const ast = babelParse(text, { sourceType: 'unambiguous', plugins: ['jsx','typescript','dynamicImport'] })
       traverse(ast, {
         ImportDeclaration(p: any) { rels.push(p.node.source.value) },
         CallExpression(p: any) {
@@ -35,19 +31,15 @@ function textImports(lang: string, _path: string, text: string): string[] {
       })
     } catch {}
   } else if (lang === 'py') {
-    rels.push(
-      ...[...text.matchAll(/^\s*from\s+([^\s]+)\s+import\s+/gm)].map((m) => m[1]),
-      ...[...text.matchAll(/^\s*import\s+([^\s]+)\s*/gm)].map((m) => m[1]),
-    )
+    rels.push(...[...text.matchAll(/^\s*from\s+([^\s]+)\s+import\s+/gm)].map(m=>m[1]))
+    rels.push(...[...text.matchAll(/^\s*import\s+([^\s]+)\s*/gm)].map(m=>m[1]))
   } else if (lang === 'c' || lang === 'h') {
-    rels.push(...[...text.matchAll(/^\s*#\s*include\s+[<"]([^>"]+)[>"]/gm)].map((m) => m[1]))
+    rels.push(...[...text.matchAll(/^\s*#\s*include\s+[<"]([^>"]+)[>"]/gm)].map(m=>m[1]))
   } else if (lang === 'css') {
-    rels.push(...[...text.matchAll(/@import\s+["']([^"']+)["']/gm)].map((m) => m[1]))
+    rels.push(...[...text.matchAll(/@import\s+["']([^"']+)["']/gm)].map(m=>m[1]))
   } else if (lang === 'html') {
-    rels.push(
-      ...[...text.matchAll(/<script[^>]+src=["']([^"']+)["']/gmi)].map((m) => m[1]),
-      ...[...text.matchAll(/<link[^>]+href=["']([^"']+\.css)["']/gmi)].map((m) => m[1]),
-    )
+    rels.push(...[...text.matchAll(/<script[^>]+src=["']([^"']+)["']/gmi)].map(m=>m[1]))
+    rels.push(...[...text.matchAll(/<link[^>]+href=["']([^"']+\.css)["']/gmi)].map(m=>m[1]))
   }
   return rels
 }
@@ -62,8 +54,7 @@ function normalizeRef(_curPath: string, ref: string) {
 
 function resolveRelPath(from: string, ref: string) {
   if (!ref.startsWith('.')) return ref
-  const parts = from.split('/')
-  parts.pop()
+  const parts = from.split('/'); parts.pop()
   for (const s of ref.split('/')) {
     if (!s || s === '.') continue
     if (s === '..') parts.pop()
@@ -91,10 +82,7 @@ function layout(nodes: any[], edges: any[]) {
   return pos
 }
 
-async function safeJson(res: Response) {
-  const txt = await res.text()
-  try { return JSON.parse(txt) } catch { return { _raw: txt } }
-}
+async function safeJson(res: Response) { const t = await res.text(); try { return JSON.parse(t) } catch { return { _raw: t } } }
 
 export async function POST(req: Request) {
   try {
@@ -106,20 +94,16 @@ export async function POST(req: Request) {
     const buf = Buffer.from(await file.arrayBuffer())
     const zip = await JSZip.loadAsync(buf)
 
-    // collect files
     const fileEntries: { path: string; lang: string; size: number; text: string }[] = []
-    await Promise.all(
-      Object.keys(zip.files).map(async (p) => {
-        const zf = zip.files[p]
-        if (zf.dir) return
-        if (!micromatch.isMatch(p, wanted)) return
-        const lang = langFromPath(p)
-        const text = await zf.async('string')
-        fileEntries.push({ path: p, lang, size: text.length, text })
-      }),
-    )
+    await Promise.all(Object.keys(zip.files).map(async (p) => {
+      const zf = zip.files[p]
+      if (zf.dir) return
+      if (!micromatch.isMatch(p, wanted)) return
+      const lang = langFromPath(p)
+      const text = await zf.async('string')
+      fileEntries.push({ path: p, lang, size: text.length, text })
+    }))
 
-    // local nodes/edges
     const nodes = fileEntries.map((f, i) => ({
       id: String(i + 1),
       label: f.path.split('/').pop() || f.path,
@@ -146,38 +130,33 @@ export async function POST(req: Request) {
       }
     }
 
-    // positions
     const pos = layout(nodes, edges)
     const rfNodes = nodes.map((n) => ({ id: n.id, data: { label: n.label, path: n.path, lang: n.lang }, position: pos[n.id] || { x: 0, y: 0 } }))
     const rfEdges = edges.map((e) => ({ id: e.id, source: e.source, target: e.target, label: e.relation }))
 
-    // cytoscape elements
+    // cytoscape elements (preset)
     const cyNodes = rfNodes.map((n) => ({ data: { id: n.id, label: n.data.label, path: n.data.path, lang: n.data.lang }, position: n.position }))
     const cyEdges = rfEdges.map((e) => ({ data: { id: e.id, source: e.source, target: e.target, label: e.label } }))
 
-    // persist to Django with JWT (await cookies())
+    // persist to Django
     const base = process.env.DJANGO_BASE_URL || process.env.NEXT_PUBLIC_DJANGO_BASE_URL
     if (!base) return Response.json({ error: 'DJANGO_BASE_URL not set' }, { status: 500 })
 
-    const cookieStore = await cookies()
-    const token = cookieStore.get('access')?.value
-    const auth = token ? { Authorization: `Bearer ${token}` } : {}
-
-    // create project
+    // Create project
     let r = await fetch(`${base}/projects/`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...auth },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: projectName }),
     })
     if (!r.ok) return Response.json({ error: 'projects create failed', status: r.status, body: await safeJson(r) }, { status: 502 })
     const project = await r.json()
 
-    // files -> ids
+    // Insert files
     const fileIdByPath = new Map<string, number>()
     for (const f of fileEntries) {
       r = await fetch(`${base}/files/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...auth },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project: project.id, path: f.path, language: f.lang, size: f.size }),
       })
       if (!r.ok) return Response.json({ error: 'file save failed', path: f.path, status: r.status, body: await safeJson(r) }, { status: 502 })
@@ -185,37 +164,46 @@ export async function POST(req: Request) {
       fileIdByPath.set(f.path, saved.id)
     }
 
-    // nodes -> ids
-    const nodeIdByLocal = new Map<string, number>()
-    for (const n of nodes) {
-      const fileId = fileIdByPath.get(n.path); if (!fileId) continue
+    // Insert nodes (with initial positions)
+    const nodeIdByLocalId = new Map<string, number>()
+    for (const n of rfNodes) {
+      const fileId = fileIdByPath.get(n.data.path); if (!fileId) continue
       r = await fetch(`${base}/nodes/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...auth },
-        body: JSON.stringify({ project: project.id, file: fileId, label: n.label, kind: 'file' }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project: project.id,
+          file: fileId,
+          label: n.data.label,
+          kind: 'file',
+          pos_x: n.position.x,
+          pos_y: n.position.y,
+        }),
       })
-      if (!r.ok) return Response.json({ error: 'node save failed', node: n.path, status: r.status, body: await safeJson(r) }, { status: 502 })
+      if (!r.ok) return Response.json({ error: 'node save failed', node: n.data.path, status: r.status, body: await safeJson(r) }, { status: 502 })
       const saved = await r.json()
-      nodeIdByLocal.set(n.id, saved.id)
+      nodeIdByLocalId.set(n.id, saved.id)
     }
 
-    // edges
+    // Insert edges
     for (const e of edges) {
-      const s = nodeIdByLocal.get(e.source), t = nodeIdByLocal.get(e.target)
+      const s = nodeIdByLocalId.get(e.source), t = nodeIdByLocalId.get(e.target)
       if (!s || !t) continue
       r = await fetch(`${base}/edges/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...auth },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project: project.id, source: s, target: t, relation: e.relation }),
       })
       if (!r.ok) return Response.json({ error: 'edge save failed', edge: e.id, status: r.status, body: await safeJson(r) }, { status: 502 })
     }
 
+    // respond
     return Response.json({
       projectId: project.id,
       nodes: rfNodes,
       edges: rfEdges,
       elements: [...cyNodes, ...cyEdges],
+      nodeDbIds: Object.fromEntries(nodeIdByLocalId), // <-- map local -> DB id
     })
   } catch (err: any) {
     return Response.json({ error: String(err?.message || err) }, { status: 500 })

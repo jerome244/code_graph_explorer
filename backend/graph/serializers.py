@@ -7,9 +7,11 @@ class FileSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class NodeSerializer(serializers.ModelSerializer):
+    file_path = serializers.CharField(source='file.path', read_only=True)  # <- add path
+
     class Meta:
         model = Node
-        fields = '__all__'
+        fields = ['id','project','file','label','kind','pos_x','pos_y','file_path']
 
 class EdgeSerializer(serializers.ModelSerializer):
     class Meta:

@@ -1,8 +1,10 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import cytoscape, { Core, ElementsDefinition } from 'cytoscape'
 import SidebarTree, { RFNode } from './components/SidebarTree'
 import UploadBar from './components/UploadBar'
+import LoadProject from './components/LoadProject'
 
 type RFEdge = { id: string; source: string; target: string; label: string }
 
@@ -11,10 +13,17 @@ export default function GraphPage() {
   const cy = useRef<Core | null>(null)
 
   const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [projectName, setProjectName] = useState('My Project')
   const [rfNodes, setRfNodes] = useState<RFNode[]>([])
   const [rfEdges, setRfEdges] = useState<RFEdge[]>([])
   const [pathToId, setPathToId] = useState<Map<string, string>>(new Map())
+  const [projectId, setProjectId] = useState<number | null>(null)
+  const [nodeDbIds, setNodeDbIds] = useState<Record<string, number>>({})
+  const [showLoad, setShowLoad] = useState(false)
+
+  const searchParams = useSearchParams()
+  const projectParam = searchParams.get('project')
 
   function ensureCy() {
     if (cy.current || !cyEl.current) return
@@ -22,34 +31,15 @@ export default function GraphPage() {
       container: cyEl.current,
       layout: { name: 'preset' },
       style: [
-        {
-          selector: 'node',
-          style: {
-            label: 'data(label)',
-            'text-valign': 'center',
-            'text-halign': 'center',
-            padding: '6px 10px',
-            'background-color': '#ddd',
-            'border-color': '#999',
-            'border-width': 1,
-            'font-size': 12,
-          },
-        },
-        {
-          selector: 'edge',
-          style: {
-            'curve-style': 'bezier',
-            'target-arrow-shape': 'triangle',
-            width: 1.5,
-            'line-color': '#bbb',
-            'target-arrow-color': '#bbb',
-            label: 'data(label)',
-            'font-size': 9,
-            'text-background-color': '#fff',
-            'text-background-opacity': 0.8,
-            'text-background-padding': 2,
-          },
-        },
+        { selector: 'node', style: {
+            label: 'data(label)','text-valign': 'center','text-halign': 'center',
+            padding: '6px 10px','background-color': '#ddd','border-color': '#999','border-width': 1,'font-size': 12,
+        }},
+        { selector: 'edge', style: {
+            'curve-style': 'bezier','target-arrow-shape': 'triangle', width: 1.5,
+            'line-color': '#bbb','target-arrow-color': '#bbb', label: 'data(label)', 'font-size': 9,
+            'text-background-color': '#fff','text-background-opacity': 0.8,'text-background-padding': 2,
+        }},
         { selector: ':selected', style: { 'border-width': 2, 'border-color': '#555' } },
       ],
       wheelSensitivity: 0.2,
@@ -65,6 +55,38 @@ export default function GraphPage() {
       graph.elements().unselect()
       node.select()
       graph.animate({ fit: { eles: node, padding: 80 } }, { duration: 300 })
+    }
+  }
+
+  async function loadProject(id: string | number) {
+    setLoading(true)
+    try {
+      const r = await fetch(`/api/project/${id}/graph`, { cache: 'no-store' })
+      if (!r.ok) throw new Error(await r.text())
+      const data = await r.json()
+
+      ensureCy()
+      const graph = cy.current!
+      graph.elements().remove()
+      const elements: ElementsDefinition | any[] = data.elements
+      graph.add(elements as any)
+      graph.fit(undefined, 40)
+
+      setProjectId(data.projectId)
+      setProjectName(data.projectName || `Project ${data.projectId}`)
+      setRfNodes(data.nodes as RFNode[])
+      setRfEdges(data.edges as RFEdge[])
+      setNodeDbIds(data.nodeDbIds || {})
+
+      const map = new Map<string, string>()
+      ;(data.nodes as RFNode[]).forEach((n) => map.set(n.data.path, n.id))
+      setPathToId(map)
+    } catch (e: any) {
+      alert(e.message || 'Load failed')
+      console.error(e)
+    } finally {
+      setLoading(false)
+      setShowLoad(false)
     }
   }
 
@@ -101,6 +123,9 @@ export default function GraphPage() {
       const map = new Map<string, string>()
       ;(data.nodes as RFNode[]).forEach((n) => map.set(n.data.path, n.id))
       setPathToId(map)
+
+      setProjectId(data.projectId ?? null)
+      setNodeDbIds(data.nodeDbIds ?? {})
     } catch (err: any) {
       alert(err.message || String(err))
       console.error(err)
@@ -109,18 +134,57 @@ export default function GraphPage() {
     }
   }
 
-  useEffect(() => {
-    ensureCy()
-  }, [])
+  async function onSave() {
+    if (!cy.current || !projectId) return
+    setSaving(true)
+    try {
+      const nodes = cy.current.nodes().map((n) => {
+        const localId: string = n.data('id')
+        const dbId = nodeDbIds[localId]
+        const p = n.position()
+        return dbId ? { id: dbId, x: p.x, y: p.y } : null
+      }).filter(Boolean) as { id: number; x: number; y: number }[]
+
+      const r = await fetch(`/api/project/${projectId}/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodes }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      alert('Project saved!')
+    } catch (e: any) {
+      alert(e.message || 'Save failed')
+      console.error(e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  useEffect(() => { ensureCy() }, [])
+  useEffect(() => { if (projectParam) loadProject(projectParam) }, [projectParam])
 
   return (
     <div style={{ height: '100vh', display: 'grid', gridTemplateRows: 'auto 1fr' }}>
-      <UploadBar projectName={projectName} setProjectName={setProjectName} onUpload={onUpload} loading={loading} />
-
+      <UploadBar
+        projectName={projectName}
+        setProjectName={setProjectName}
+        onUpload={onUpload}
+        loading={loading}
+        onSave={onSave}
+        canSave={!!projectId && Object.keys(nodeDbIds).length > 0}
+        saving={saving}
+        onOpenLoad={() => setShowLoad(true)}  // 👈 opens the picker
+      />
       <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', minHeight: 0 }}>
         <SidebarTree nodes={rfNodes} onSelect={focusByPath} />
         <div ref={cyEl} style={{ width: '100%', height: '100%' }} />
       </div>
+
+      <LoadProject
+        open={showLoad}
+        onClose={() => setShowLoad(false)}
+        onSelect={(id) => loadProject(id)}
+      />
     </div>
   )
 }

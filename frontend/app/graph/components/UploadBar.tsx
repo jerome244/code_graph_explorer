@@ -5,11 +5,19 @@ export default function UploadBar({
   setProjectName,
   onUpload,
   loading,
+  onSave,
+  canSave,
+  saving,
+  onOpenLoad, // 👈 new
 }: {
   projectName: string
   setProjectName: (v: string) => void
   onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void
   loading: boolean
+  onSave: () => void
+  canSave: boolean
+  saving: boolean
+  onOpenLoad: () => void
 }) {
   return (
     <header
@@ -19,12 +27,31 @@ export default function UploadBar({
         display: 'flex',
         gap: 12,
         alignItems: 'center',
-        justifyContent: 'flex-start',
+        justifyContent: 'space-between',
       }}
     >
-      <input value={projectName} onChange={(e) => setProjectName(e.target.value)} placeholder="Project name" />
-      <input type="file" accept=".zip" onChange={onUpload} />
-      {loading && <span>Parsing…</span>}
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <input
+          value={projectName}
+          onChange={(e) => setProjectName(e.target.value)}
+          placeholder="Project name"
+        />
+        <input type="file" accept=".zip" onChange={onUpload} />
+        {loading && <span>Parsing…</span>}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={onOpenLoad} style={{ padding: '6px 10px', cursor: 'pointer' }}>
+          Load…
+        </button>
+        <button
+          disabled={!canSave || saving}
+          onClick={onSave}
+          style={{ padding: '6px 10px', cursor: !canSave || saving ? 'not-allowed' : 'pointer' }}
+        >
+          {saving ? 'Saving…' : 'Save Project'}
+        </button>
+      </div>
     </header>
   )
 }

@@ -96,3 +96,150 @@ class GameConsumer(AsyncJsonWebsocketConsumer):
 
     async def game_broadcast(self, event):
         await self.send_json(event["data"])
+
+
+# --- Project live share ---
+
+import json, time
+from collections import defaultdict
+from typing import Dict, Any, Optional
+from urllib.parse import parse_qs
+
+from channels.generic.websocket import AsyncJsonWebsocketConsumer
+from channels.db import database_sync_to_async
+from django.contrib.auth import get_user_model
+from rest_framework_simplejwt.tokens import AccessToken
+from .models import Project
+
+User = get_user_model()
+
+# in-memory presence per-process (fine for dev; swap to Redis for multi-proc)
+peers_by_project: Dict[int, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+
+@database_sync_to_async
+def _project_from_share_token(token: str) -> Optional[Project]:
+    try:
+        return Project.objects.get(share_token=token)
+    except Project.DoesNotExist:
+        return None
+
+@database_sync_to_async
+def _project_perm_from_jwt(project_id: int, jwt: str) -> tuple[Optional[Project], Optional[User], bool]:
+    try:
+        at = AccessToken(jwt)
+        uid = at.get("user_id")
+        if not uid:
+            return None, None, False
+        user = User.objects.get(id=uid)
+        proj = Project.objects.get(id=project_id)
+        can_edit = (proj.owner_id == user.id) or proj.collab_links.filter(user=user, can_edit=True).exists()
+        return proj, user, can_edit
+    except Exception:
+        return None, None, False
+
+class ProjectConsumer(AsyncJsonWebsocketConsumer):
+    """
+    Join with either:
+      ws://.../ws/projects/<project_id>/?token=<JWT>
+    or:
+      ws://.../ws/projects/shared/<share_token>/
+    """
+    async def connect(self):
+        self.user = None
+        self.can_edit = False
+        self.project = None
+        self.peer_id = f"p-{int(time.time()*1000)%10_000}-{self.channel_name[-6:]}"  # per-conn
+        self.group = None
+
+        # route kwargs: either {"project_id": "..."} or {"share_token": "..."}
+        kw = self.scope.get("url_route", {}).get("kwargs", {}) or {}
+        qs = parse_qs((self.scope.get("query_string") or b"").decode())
+        jwt = (qs.get("token") or [None])[0]
+
+        if kw.get("project_id"):
+            proj, user, can_edit = await _project_perm_from_jwt(int(kw["project_id"]), jwt or "")
+            if not proj:
+                await self.close()
+                return
+            self.project = proj
+            self.user = user
+            self.can_edit = bool(can_edit)
+        elif kw.get("share_token"):
+            proj = await _project_from_share_token(kw["share_token"])
+            if not proj:
+                await self.close()
+                return
+            self.project = proj
+            self.user = None        # guest
+            self.can_edit = False   # guests are read-only
+        else:
+            await self.close()
+            return
+
+        self.group = f"project_{self.project.id}"
+        await self.channel_layer.group_add(self.group, self.channel_name)
+        await self.accept()
+
+        # send current presence snapshot
+        existing = list(peers_by_project[self.project.id].values())
+        await self.send_json({"type": "welcome", "id": self.peer_id, "peers": existing, "can_edit": self.can_edit})
+
+        # announce join
+        meta = {
+            "id": self.peer_id,
+            "username": (self.user.username if self.user else None),
+            "color": None,  # client will send a "hello" to fill these in
+            "user_id": (self.user.id if self.user else None),
+        }
+        peers_by_project[self.project.id][self.peer_id] = meta
+        await self.channel_layer.group_send(self.group, {"type": "project.broadcast", "data": {"type": "join", **meta}})
+
+    async def disconnect(self, code):
+        try:
+            if self.group:
+                # announce leave
+                await self.channel_layer.group_send(self.group, {"type": "project.broadcast", "data": {"type": "leave", "id": self.peer_id}})
+                peers_by_project[self.project.id].pop(self.peer_id, None)
+                await self.channel_layer.group_discard(self.group, self.channel_name)
+        except Exception:
+            pass
+
+    async def receive_json(self, content, **kwargs):
+        t = content.get("type")
+
+        # identify self (name/color shown to others)
+        if t == "hello":
+            color = content.get("color")
+            name = content.get("name")
+            meta = peers_by_project[self.project.id].get(self.peer_id, {})
+            meta.update({"color": color, "name": name})
+            await self.channel_layer.group_send(self.group, {"type": "project.broadcast", "data": {"type": "hello", "id": self.peer_id, "name": name, "color": color}})
+            return
+
+        # live selections (array of file node ids)
+        if t == "select":
+            ids = content.get("ids", [])
+            await self.channel_layer.group_send(self.group, {"type": "project.broadcast", "data": {"type": "select", "id": self.peer_id, "ids": ids}})
+            return
+
+        # sync options (only editors)
+        if t == "options":
+            if not self.can_edit:
+                return
+            opts = {k: content.get(k) for k in ("filter", "includeDeps", "layoutName", "fnMode")}
+            await self.channel_layer.group_send(self.group, {"type": "project.broadcast", "data": {"type": "options", "id": self.peer_id, **opts}})
+            return
+
+        # lightweight chat (optional)
+        if t == "chat":
+            text = (content.get("text") or "").strip()[:500]
+            if text:
+                await self.channel_layer.group_send(self.group, {"type": "project.broadcast", "data": {"type": "chat", "id": self.peer_id, "text": text}})
+            return
+
+    async def project_broadcast(self, event):
+        await self.send_json(event["data"])
+
+    # server-side notifications (sent by REST when a project is saved)
+    async def project_event(self, event):
+        await self.send_json(event["data"])

@@ -25,9 +25,11 @@ export const Graph = forwardRef<GraphHandle, {
   openPopups: Set<string>;
   onTogglePopup: (id: string) => void;
   onPositions: (p: Record<string, { x: number; y: number }>) => void;
+  /** Live Share: remote-selected node ids to highlight */
+  remoteSelectedIds?: string[];
 }>(
 function GraphImpl(
-  { elements, layoutName, hiddenFiles, openPopups, onTogglePopup, onPositions },
+  { elements, layoutName, hiddenFiles, openPopups, onTogglePopup, onPositions, remoteSelectedIds },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -67,6 +69,7 @@ function GraphImpl(
           'target-arrow-shape': 'triangle', 'target-arrow-color': '#f472b6', 'line-style': 'dashed',
           'arrow-scale': 0.95,
         }},
+        { selector: 'node.remote-selected', style: { 'border-width': 3, 'border-color': '#60A5FA' } }, // Live Share highlight
         { selector: 'node.hidden-file', style: { 'display': 'none' } },
       ],
       layout: { name: 'cose', animate: true } as LayoutOptions,
@@ -156,6 +159,18 @@ function GraphImpl(
     applyHiddenToEdges(cy);
     cy.endBatch();
   }, [hiddenFiles]);
+
+  // Live Share: apply/remove "remote-selected" class on nodes
+  useEffect(() => {
+    const cy = cyRef.current; if (!cy) return;
+    cy.startBatch();
+    cy.nodes('.file').removeClass('remote-selected');
+    for (const id of (remoteSelectedIds || [])) {
+      const n = cy.getElementById(id);
+      if (!n.empty()) n.addClass('remote-selected');
+    }
+    cy.endBatch();
+  }, [remoteSelectedIds]);
 
   useImperativeHandle(ref, () => ({ fit: () => cyRef.current?.fit(undefined, 20) }), []);
 

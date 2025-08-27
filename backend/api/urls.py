@@ -13,13 +13,14 @@ urlpatterns = [
     path("auth/refresh", TokenRefreshView.as_view()),
     path("auth/me", whoami),
 
+    # ↓ add this alias so the frontend’s /api/whoami doesn’t 404
+    path("whoami", whoami),
+
     path("chunk", chunk),
     path("entities", entities),
     path("osint/scan", osint_views.osint_scan),
-
-    # public share endpoint
     path("projects/shared/<str:token>/", project_by_token),
-
     path("", include(router.urls)),
     path("users/search", user_search),
 ]
+

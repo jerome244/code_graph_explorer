@@ -33,9 +33,11 @@ const LAST_PROJECT_KEY = 'lastProjectId';
 export function ProjectBar({
   current,
   onLoad,
+  onActiveChange, // NEW (optional)
 }: {
   current: { files: ParsedFile[]; options: Options };
   onLoad: (payload: { files: ParsedFile[]; options: Options }) => void;
+  onActiveChange?: (id: number | null) => void;
 }) {
   const [access, setAccess] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
@@ -80,6 +82,7 @@ export function ProjectBar({
   const setActiveProject = (p: ProjectRecord | null) => {
     if (!p) return;
     setActiveId(p.id);
+    onActiveChange?.(p.id); // notify page (Live Share, etc.)
     setName(p.name);
     try { localStorage.setItem(LAST_PROJECT_KEY, String(p.id)); } catch {}
   };
@@ -100,6 +103,7 @@ export function ProjectBar({
         const stillThere = data.find(p => p.id === activeId);
         if (!stillThere) {
           setActiveId(null);
+          onActiveChange?.(null); // project disappeared
           try { localStorage.removeItem(LAST_PROJECT_KEY); } catch {}
         }
       }
@@ -161,6 +165,7 @@ export function ProjectBar({
       if (!res.ok) throw new Error(await res.text());
       if (activeId === id) {
         setActiveId(null);
+        onActiveChange?.(null); // cleared selection
         try { localStorage.removeItem(LAST_PROJECT_KEY); } catch {}
       }
       await refreshList();
@@ -331,7 +336,7 @@ export function ProjectBar({
         style={{
           padding: '8px 12px',
           borderRadius: 8,
-          border: '1px solid #6366F1',   // fixed quote issue
+          border: '1px solid #6366F1',
           background: '#EEF2FF',
           cursor: busy || !signedIn ? 'not-allowed' : 'pointer',
         }}

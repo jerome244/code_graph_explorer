@@ -15,6 +15,10 @@ import { buildElements, buildTree, filterTree, humanBytes } from './lib/utils';
 import type { ParsedFile, TreeNode } from './lib/types';
 import { buildFunctionIndex, buildFnHueMap } from './lib/functions';
 
+// Live Share
+import { useLiveProject } from './lib/live';
+import { getTokens } from './lib/auth';
+
 export default function CodeGraphPage() {
   const [files, setFiles] = useState<ParsedFile[]>([]);
   const [includeDeps, setIncludeDeps] = useState(true);
@@ -37,6 +41,19 @@ export default function CodeGraphPage() {
   const overlayRef = useRef<HTMLDivElement | null>(null);
 
   const searchParams = useSearchParams();
+
+  // Track which project is active (for Live Share auth room)
+  const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
+
+  // Live Share connection (either by projectId + JWT, or by share token)
+  const shareToken = searchParams?.get('share') || null;
+  const { access } = getTokens();
+  const live = useLiveProject({
+    projectId: activeProjectId,
+    shareToken,
+    jwt: access || null,
+    displayName: (typeof window !== 'undefined' && (localStorage.getItem('username') || localStorage.getItem('email') || 'Guest')) || undefined,
+  });
 
   // Derived
   const baseElements: ElementDefinition[] = useMemo(
@@ -111,6 +128,11 @@ export default function CodeGraphPage() {
         setFilter(o.filter || '');
         setFnMode(!!o.fnMode);
 
+        // if backend includes project id in token response, use it to enter id-based room
+        if (typeof payload?.id === 'number') {
+          setActiveProjectId(payload.id);
+        }
+
         setHiddenFiles(new Set());
         setOpenPopups(new Set());
         const tops = new Set<string>(['__root__']);
@@ -129,6 +151,39 @@ export default function CodeGraphPage() {
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // run once
+
+  // Live Share: broadcast my open popups as "selections"
+  useEffect(() => {
+    live.sendSelections(Array.from(openPopups));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPopups]);
+
+  // Live Share: broadcast option changes
+  useEffect(() => {
+    live.sendOptions({ includeDeps, layoutName, filter, fnMode });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [includeDeps, layoutName, filter, fnMode]);
+
+  // (Optional) follow remote options (you can disable if you prefer independent views)
+  useEffect(() => {
+    const onOpts = (e: any) => {
+      const d = e.detail || {};
+      if (typeof d.filter === 'string') setFilter(d.filter);
+      if (typeof d.includeDeps === 'boolean') setIncludeDeps(d.includeDeps);
+      if (typeof d.layoutName === 'string') setLayoutName(d.layoutName);
+      if (typeof d.fnMode === 'boolean') setFnMode(d.fnMode);
+    };
+    const onUpdated = () => {
+      // Show toast or re-fetch project list/data if desired
+      // console.info('Project was updated by a collaborator');
+    };
+    window.addEventListener('project:options', onOpts);
+    window.addEventListener('project:updated', onUpdated);
+    return () => {
+      window.removeEventListener('project:options', onOpts);
+      window.removeEventListener('project:updated', onUpdated);
+    };
+  }, []);
 
   // Minimal escape for attribute selector values (quotes + backslashes)
   const escAttr = (s: string) => s.replace(/["\\]/g, '\\$&');
@@ -166,6 +221,8 @@ export default function CodeGraphPage() {
           // refit graph after load
           setTimeout(() => graphRef.current?.fit(), 0);
         }}
+        // Live Share: tell page which project id is active (for ws auth room)
+        onActiveChange={(id) => setActiveProjectId(id)}
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -241,6 +298,25 @@ export default function CodeGraphPage() {
             overflow: 'hidden',
           }}
         >
+          {/* Live presence chips */}
+          <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 6, zIndex: 20 }}>
+            {Array.from(live.peers.values()).map(p => (
+              <div key={p.id} title={p.name || p.id}
+                style={{
+                  padding: '4px 8px',
+                  borderRadius: 999,
+                  background: '#F1F5F9',
+                  border: '1px solid #CBD5E1',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6
+                }}>
+                <span style={{ width: 10, height: 10, borderRadius: 999, background: p.color || '#94A3B8' }} />
+                <span style={{ fontSize: 12 }}>{p.name || 'Guest'}</span>
+              </div>
+            ))}
+          </div>
+
           <Graph
             ref={graphRef}
             elements={elements}
@@ -249,6 +325,10 @@ export default function CodeGraphPage() {
             openPopups={openPopups}
             onTogglePopup={handleTogglePopup}
             onPositions={setPopupPositions}
+            // Live Share: combine all remote selections
+            remoteSelectedIds={Array.from(
+              new Set([].concat(...Array.from(live.remoteSelections.values())))
+            ) as string[]}
           />
 
           {/* Popup-to-popup links (Fn mode) */}

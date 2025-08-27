@@ -12,7 +12,16 @@ export default function UploadBar({
   loading: boolean
 }) {
   return (
-    <header style={{ padding: '12px', borderBottom: '1px solid #eee', display: 'flex', gap: 12 }}>
+    <header
+      style={{
+        padding: '12px',
+        borderBottom: '1px solid #eee',
+        display: 'flex',
+        gap: 12,
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+      }}
+    >
       <input value={projectName} onChange={(e) => setProjectName(e.target.value)} placeholder="Project name" />
       <input type="file" accept=".zip" onChange={onUpload} />
       {loading && <span>Parsing…</span>}

@@ -2,8 +2,7 @@ from rest_framework import viewsets, permissions
 from .models import Project, File, Node, Edge
 from .serializers import ProjectSerializer, FileSerializer, NodeSerializer, EdgeSerializer
 
-# PUBLIC: expose everything, no auth required
-
+# PUBLIC endpoints so visitors can use the app without logging in
 class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all().order_by('-created_at')
     serializer_class = ProjectSerializer

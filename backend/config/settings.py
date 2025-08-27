@@ -19,7 +19,8 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "graph",
-    # "users",  # keep if you already created it; not required for anonymous mode
+    "users",
+    "rest_framework_simplejwt",
 ]
 
 MIDDLEWARE = [
@@ -83,8 +84,12 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
 ]
 
-# DRF: PUBLIC MODE (no auth required)
+# PUBLIC by default (visitors can upload without auth)
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": [],  # ← no JWT / session auth
-    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],  # ← public
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",  # enable JWT
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.AllowAny",                        # public endpoints by default
+    ],
 }

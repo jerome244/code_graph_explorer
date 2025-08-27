@@ -1,20 +1,16 @@
-from django.contrib.auth.models import User
+from rest_framework import generics, permissions, response
 from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status, permissions
+from django.contrib.auth import get_user_model
 from .serializers import RegisterSerializer
 
-class RegisterView(APIView):
+User = get_user_model()
+
+class RegisterView(generics.CreateAPIView):
+    serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
-    def post(self, request):
-        s = RegisterSerializer(data=request.data)
-        if s.is_valid():
-            s.save()
-            return Response({"ok": True}, status=status.HTTP_201_CREATED)
-        return Response(s.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class MeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
-        u: User = request.user
-        return Response({"id": u.id, "username": u.username, "email": u.email})
+        u = request.user
+        return response.Response({"id": u.id, "username": u.username, "email": u.email})

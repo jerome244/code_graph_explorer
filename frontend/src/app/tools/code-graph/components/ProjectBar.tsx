@@ -17,7 +17,15 @@ type ProjectRecord = {
   can_edit: boolean;
 };
 
-type Collaborator = { user_id: number; email: string; can_edit: boolean; created_at: string };
+// Make username/email optional to handle older payloads gracefully
+type Collaborator = {
+  user_id: number;
+  username?: string;
+  email?: string;
+  can_edit: boolean;
+  created_at: string;
+};
+
 type UserSuggestion = { id: number; username: string; email: string };
 
 const LAST_PROJECT_KEY = 'lastProjectId';
@@ -34,6 +42,9 @@ export function ProjectBar({
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState('');
   const [activeId, setActiveId] = useState<number | null>(null);
+
+  // me (for “Leave project” and labels)
+  const [me, setMe] = useState<{ id: number; username: string; email: string } | null>(null);
 
   // share state
   const [shareOpen, setShareOpen] = useState(false);
@@ -55,6 +66,17 @@ export function ProjectBar({
 
   const signedIn = useMemo(() => !!access, [access]);
 
+  useEffect(() => {
+    const loadMe = async () => {
+      if (!signedIn) { setMe(null); return; }
+      try {
+        const res = await apiFetch(`${API_BASE}/api/whoami`);
+        if (res.ok) setMe(await res.json());
+      } catch {}
+    };
+    loadMe();
+  }, [signedIn]);
+
   const setActiveProject = (p: ProjectRecord | null) => {
     if (!p) return;
     setActiveId(p.id);
@@ -62,21 +84,9 @@ export function ProjectBar({
     try { localStorage.setItem(LAST_PROJECT_KEY, String(p.id)); } catch {}
   };
 
-  const rehydrateSelection = (list: ProjectRecord[]) => {
-    try {
-      const lastId = Number(localStorage.getItem(LAST_PROJECT_KEY) || '');
-      if (lastId && Number.isFinite(lastId)) {
-        const found = list.find(p => p.id === lastId);
-        if (found) { setActiveProject(found); return; }
-      }
-    } catch {}
-    const trimmed = name.trim();
-    if (trimmed) {
-      const match = list.find(p => p.name === trimmed);
-      if (match) setActiveProject(match);
-    }
-  };
-
+  // NOTE: We intentionally DO NOT auto-select a project on first load anymore.
+  // This prevents showing a previous project (“f”) and the Delete button
+  // when the user just arrived on the page.
   const refreshList = async () => {
     if (!signedIn) return;
     try {
@@ -85,12 +95,15 @@ export function ProjectBar({
       if (!res.ok) throw new Error(await res.text());
       const data = (await res.json()) as ProjectRecord[];
       setProjects(data);
+
       if (activeId) {
         const stillThere = data.find(p => p.id === activeId);
-        if (!stillThere) setActiveId(null);
-      } else {
-        rehydrateSelection(data);
+        if (!stillThere) {
+          setActiveId(null);
+          try { localStorage.removeItem(LAST_PROJECT_KEY); } catch {}
+        }
       }
+      // else: do nothing — no auto rehydrate here
     } catch (e) {
       console.error(e);
     }
@@ -171,6 +184,7 @@ export function ProjectBar({
 
   const openShare = async () => {
     if (!activeId) {
+      // Allow typing the exact name and then opening Share (keeps previous behavior)
       const trimmed = name.trim();
       if (trimmed) {
         const byName = projects.find(p => p.name === trimmed);
@@ -267,6 +281,12 @@ export function ProjectBar({
 
   const removeCollaborator = async (c: Collaborator) => {
     if (!activeId) return;
+    const isOwner = !!projects.find(p => p.id === activeId)?.is_owner;
+    // Best-effort label
+    const uname = (c.username || '').trim();
+    const label = uname ? `@${uname}` : (c.email || `user#${c.user_id}`);
+    if (!confirm(isOwner && !me ? `Remove ${label}?` : (isOwner && me && c.user_id !== me.id ? `Remove ${label}?` : `Leave this project?`))) return;
+
     const res = await apiFetch(`${API_BASE}/api/projects/${activeId}/collaborators/`, {
       method: 'DELETE',
       body: JSON.stringify({ user_id: c.user_id }),
@@ -279,6 +299,7 @@ export function ProjectBar({
     : '';
 
   const activeProject = activeId ? projects.find(p => p.id === activeId) : null;
+  const isOwner = !!activeProject?.is_owner;
 
   return (
     <div
@@ -307,7 +328,13 @@ export function ProjectBar({
         onClick={onSave}
         disabled={busy || !signedIn}
         title={signedIn ? '' : 'Sign in to save'}
-        style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #6366F1', background: '#EEF2FF', cursor: busy || !signedIn ? 'not-allowed' : 'pointer' }}
+        style={{
+          padding: '8px 12px',
+          borderRadius: 8,
+          border: '1px solid #6366F1',   // fixed quote issue
+          background: '#EEF2FF',
+          cursor: busy || !signedIn ? 'not-allowed' : 'pointer',
+        }}
       >
         {busy ? 'Saving…' : 'Save'}
       </button>
@@ -451,18 +478,40 @@ export function ProjectBar({
                 {/* Current collaborators */}
                 <div style={{ marginTop: 10 }}>
                   {collabList.length === 0 && <div style={{ color: '#64748B', fontSize: 13 }}>No collaborators yet.</div>}
-                  {collabList.map(c => (
-                    <div key={c.user_id} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '6px 0' }}>
-                      <div style={{ minWidth: 260 }}>{c.email}</div>
-                      <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        <input type="checkbox" checked={c.can_edit} onChange={e => toggleCollabEdit(c, e.target.checked)} />
-                        can edit
-                      </label>
-                      <button onClick={() => removeCollaborator(c)} style={{ marginLeft: 'auto', padding: '6px 10px', borderRadius: 8, border: '1px solid #EF4444', background: '#FEF2F2' }}>
-                        Remove
-                      </button>
-                    </div>
-                  ))}
+                  {collabList.map(c => {
+                    const uname = (c.username || '').trim();
+                    const primaryLabel = uname ? `@${uname}` : (c.email || `user#${c.user_id}`);
+                    const isMe = !!(me && c.user_id === me.id);
+                    return (
+                      <div key={c.user_id} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '6px 0' }}>
+                        <div style={{ minWidth: 260 }}>
+                          <span style={{ fontWeight: 600 }}>{primaryLabel}</span>
+                          {c.email && uname && <span style={{ color: '#64748B', marginLeft: 8 }}>{c.email}</span>}
+                        </div>
+                        <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={c.can_edit}
+                            disabled={!isOwner || isMe}
+                            onChange={e => toggleCollabEdit(c, e.target.checked)}
+                          />
+                          can edit
+                        </label>
+                        <div style={{ marginLeft: 'auto' }}>
+                          {isOwner && !isMe && (
+                            <button onClick={() => removeCollaborator(c)} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #EF4444', background: '#FEF2F2' }}>
+                              Remove
+                            </button>
+                          )}
+                          {!isOwner && isMe && (
+                            <button onClick={() => removeCollaborator(c)} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #EF4444', background: '#FEF2F2' }}>
+                              Leave project
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 

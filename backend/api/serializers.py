@@ -15,21 +15,26 @@ class BlockSerializer(serializers.ModelSerializer):
         fields = ("id", "world", "x", "y", "z", "material")
 
 class ProjectCollaboratorSerializer(serializers.ModelSerializer):
-    email = serializers.EmailField(source="user.email", read_only=True)
-    user_id = serializers.IntegerField(source="user.id", read_only=True)
+    user_id  = serializers.IntegerField(source="user.id", read_only=True)
+    username = serializers.CharField(source="user.username", read_only=True)
+    email    = serializers.EmailField(source="user.email", read_only=True, allow_null=True)
+
     class Meta:
-        model = ProjectCollaborator
-        fields = ("user_id", "email", "can_edit", "created_at")
+        model  = ProjectCollaborator
+        fields = ("user_id", "username", "email", "can_edit", "created_at")
 
 class ProjectSerializer(serializers.ModelSerializer):
     is_owner = serializers.SerializerMethodField()
     can_edit = serializers.SerializerMethodField()
+
     class Meta:
-        model = Project
+        model  = Project
         fields = ("id", "name", "data", "created_at", "updated_at", "is_owner", "can_edit")
+
     def get_is_owner(self, obj):
         req = self.context.get("request")
         return bool(req and req.user.is_authenticated and obj.owner_id == req.user.id)
+
     def get_can_edit(self, obj):
         req = self.context.get("request")
         if not (req and req.user.is_authenticated):
@@ -41,5 +46,5 @@ class ProjectSerializer(serializers.ModelSerializer):
 
 class UserPublicSerializer(serializers.ModelSerializer):
     class Meta:
-        model = User
+        model  = User
         fields = ("id", "username", "email")

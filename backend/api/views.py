@@ -5,21 +5,18 @@ import random
 from typing import List, Dict, Tuple
 
 # ==== WORLD GEN SETTINGS ====
-
 SEED = 1337
 WATER_LEVEL = 8
 CHUNK_SIZE_DEFAULT = 16
 
 # ---- helpers ----
 def h2(x: int, z: int, seed: int = SEED) -> int:
-    """Stable hash for (x,z)."""
     return (x * 73856093) ^ (z * 19349663) ^ (seed * 83492791)
 
 def rng_for(cx: int, cz: int) -> random.Random:
     return random.Random(h2(cx, cz))
 
 def fbm2(x: float, z: float, scale=0.035, octaves=5, lacunarity=2.0, gain=0.52, seed=SEED) -> float:
-    """Fractal Brownian motion over 2D Perlin in roughly [-1,1]."""
     amp = 1.0
     freq = 1.0
     value = 0.0
@@ -36,25 +33,21 @@ def fbm2(x: float, z: float, scale=0.035, octaves=5, lacunarity=2.0, gain=0.52, 
     return value
 
 def height_at(wx: int, wz: int) -> int:
-    """Terrain surface y for world coords (x,z)."""
     base = fbm2(wx, wz, scale=0.035, octaves=5, gain=0.52)
     m = max(0.0, fbm2(wx + 1000, wz - 1000, scale=0.01, octaves=3, gain=0.5))
-    y = 10 + int(10 * base) + int(18 * m * m)  # gentle base + squared mountains
+    y = 10 + int(10 * base) + int(18 * m * m)
     return max(1, y)
 
 def is_cave(wx: int, wy: int, wz: int) -> bool:
-    """3D noise carve inside ground -> caves/tunnels."""
     n = pnoise3(wx * 0.08, wy * 0.08, wz * 0.08, base=SEED + 42)
     return n > 0.38
 
 def climate(wx: int, wz: int) -> Tuple[float, float]:
-    """Returns (temp, moist) each in ~[0,1] for desert/biome selection."""
     t = pnoise2(wx * 0.005, wz * 0.005, base=SEED + 300) * 0.5 + 0.5
     m = pnoise2(wx * 0.004, wz * 0.004, base=SEED + 700) * 0.5 + 0.5
     return (t, m)
 
 def top_material(y_top: int, temp: float, moist: float) -> str:
-    """Decide the top surface material given local climate and height."""
     if y_top >= WATER_LEVEL + 24:
         return "snow"
     if y_top >= WATER_LEVEL + 16:
@@ -104,7 +97,7 @@ def build_hut(blocks: List[Dict], wx: int, wy: int, wz: int):
             for z in range(w):
                 if not (x in (0, w - 1) or z in (0, w - 1)):
                     continue
-                if x == w // 2 and z == 0 and y in (1, 2):  # door
+                if x == w // 2 and z == 0 and y in (1, 2):
                     continue
                 blocks.append({"x": wx + x, "y": wy + y, "z": wz + z, "material": "wood"})
     for x in range(-1, w + 1):
@@ -135,9 +128,6 @@ def build_castle(blocks: List[Dict], minx: int, minz: int, base_y: int):
 # ---- endpoints ----
 @require_GET
 def chunk(request):
-    """
-    Procedural chunk. Query: cx, cy, cz (chunk coords), size (default 16)
-    """
     try:
         size = int(request.GET.get("size", CHUNK_SIZE_DEFAULT))
         cx = int(request.GET.get("cx", 0))
@@ -199,9 +189,6 @@ def chunk(request):
 
 @require_GET
 def entities(request):
-    """
-    ?cx=?&cz=?&size=16 — Returns simple NPCs/animals for this chunk.
-    """
     try:
         cx = int(request.GET.get("cx", 0))
         cz = int(request.GET.get("cz", 0))
@@ -240,9 +227,7 @@ def entities(request):
 
     return JsonResponse({"entities": ents})
 
-
-# ==== AUTH (JWT) ====
-
+# ==== AUTH + PROJECTS ====
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -267,7 +252,6 @@ User = get_user_model()
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def register_user(request):
-    """Create a new user and return JWT tokens: { id, username, email, access, refresh }."""
     data = request.data or {}
     username = (data.get("username") or "").strip()
     email = (data.get("email") or "").strip()
@@ -275,7 +259,6 @@ def register_user(request):
 
     if not username or not password:
         return Response({"detail": "username and password are required"}, status=status.HTTP_400_BAD_REQUEST)
-
     if User.objects.filter(username__iexact=username).exists():
         return Response({"detail": "username already exists"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -303,7 +286,6 @@ def whoami(request):
     u = request.user
     return Response({"id": u.id, "username": u.username, "email": u.email})
 
-
 class ProjectViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectSerializer
     permission_classes = [IsAuthenticated, IsOwnerOrCollaboratorCanEdit]
@@ -323,7 +305,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Only the owner can delete."}, status=403)
         return super().destroy(request, *args, **kwargs)
 
-    # ----- SHARE LINK (read-only) -----
+    # Share link (read-only)
     @action(detail=True, methods=["post"], url_path="share-link")
     def create_share_link(self, request, pk=None):
         proj = self.get_object()
@@ -341,12 +323,15 @@ class ProjectViewSet(viewsets.ModelViewSet):
         proj.save(update_fields=["share_token"])
         return Response(status=204)
 
-    # ----- COLLABORATORS (add/remove/toggle) -----
+    # Collaborators (add/remove/toggle)
     @action(detail=True, methods=["get", "post", "patch", "delete"], url_path="collaborators")
     def collaborators(self, request, pk=None):
         proj = self.get_object()
+
         if request.method == "GET":
-            ser = ProjectCollaboratorSerializer(proj.collab_links.select_related("user"), many=True)
+            ser = ProjectCollaboratorSerializer(
+                proj.collab_links.select_related("user"), many=True
+            )
             return Response(ser.data)
 
         # Only owner can manage collaborators
@@ -354,7 +339,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Only owner can manage collaborators."}, status=403)
 
         if request.method == "POST":
-            # Accept user_id OR username OR email
             user_id = request.data.get("user_id")
             username = (request.data.get("username") or "").strip()
             email = (request.data.get("email") or "").strip().lower()
@@ -394,9 +378,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             ProjectCollaborator.objects.filter(project=proj, user_id=user_id).delete()
             return Response(status=204)
 
-# ----- Public read via share token -----
-from rest_framework.permissions import AllowAny
-
+# Public read via share token
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def project_by_token(request, token: str):
@@ -410,12 +392,14 @@ def project_by_token(request, token: str):
         "updated_at": proj.updated_at,
     })
 
-# ----- User search for invitations -----
+# User search for invitations
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def user_search(request):
     q = (request.query_params.get("q") or request.query_params.get("query") or "").strip()
     if not q:
         return Response([])
-    qs = User.objects.filter(Q(username__icontains=q) | Q(email__icontains=q)).order_by("username")[:10]
+    qs = User.objects.filter(
+        Q(username__icontains=q) | Q(email__icontains=q)
+    ).order_by("username")[:10]
     return Response(UserPublicSerializer(qs, many=True).data)

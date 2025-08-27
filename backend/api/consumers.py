@@ -133,6 +133,26 @@ def _project_perm_from_jwt(project_id: int, jwt: str) -> tuple[Optional[Project]
         return None, None, False
 
 
+
+# --- DB helpers for persisted snapshots ---
+@database_sync_to_async
+def _load_positions_from_db(project_id: int) -> Dict[str, Dict[str, float]]:
+    try:
+        from .models import Project
+        val = Project.objects.filter(id=project_id).values_list("node_positions", flat=True).first()
+        return val or {}
+    except Exception:
+        return {}
+
+@database_sync_to_async
+def _save_positions_to_db(project_id: int, snapshot: Dict[str, Dict[str, float]]) -> None:
+    try:
+        from .models import Project
+        Project.objects.filter(id=project_id).update(node_positions=snapshot)
+    except Exception:
+        # best-effort; avoid crashing on DB write errors
+        pass
+
 class ProjectConsumer(AsyncJsonWebsocketConsumer):
     """
     Join with either:
@@ -180,6 +200,16 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
 
         # send welcome with current positions + presence
         pos = positions_by_project[self.project.id]
+        if not pos:
+            saved = await _load_positions_from_db(self.project.id)
+            if isinstance(saved, dict):
+                for nid, p in saved.items():
+                    try:
+                        x = float(p.get("x"))
+                        y = float(p.get("y"))
+                    except Exception:
+                        continue
+                    pos[str(nid)] = (x, y)
         await self.send_json({
             "type": "welcome",
             "id": self.peer_id,
@@ -256,9 +286,36 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
         # --- Node position sync ---
 
         # Full snapshot push (host/editor publishes the full layout)
+        
         if t == "positions_snapshot":
             if not self.can_edit:
                 return
+            snapshot = content.get("positions") or {}
+            if not isinstance(snapshot, dict):
+                return
+            store = positions_by_project[self.project.id]
+            store.clear()
+            for nid, p in snapshot.items():
+                try:
+                    x = float(p.get("x"))
+                    y = float(p.get("y"))
+                except Exception:
+                    continue
+                store[str(nid)] = (x, y)
+            # Broadcast authoritative snapshot
+            await self.channel_layer.group_send(
+                self.group,
+                {"type": "project.broadcast",
+                 "data": {"type": "positions_snapshot", "id": self.peer_id,
+                          "positions": {k: {"x": x, "y": y} for k, (x, y) in store.items()}}}
+            )
+            # Persist authoritative snapshot to DB
+            await _save_positions_to_db(
+                self.project.id,
+                {k: {"x": x, "y": y} for k, (x, y) in store.items()}
+            )
+            return
+
             snapshot = content.get("positions") or {}
             if not isinstance(snapshot, dict):
                 return

@@ -43,6 +43,9 @@ class Project(models.Model):
     # NEW: optional read-only share link
     share_token = models.CharField(max_length=48, unique=True, null=True, blank=True)
 
+    # Authoritative graph layout persisted server-side
+    node_positions = models.JSONField(default=dict, blank=True)
+
     class Meta:
         unique_together = ("owner", "name")
         ordering = ["-updated_at"]

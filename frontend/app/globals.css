@@ -224,3 +224,11 @@ code, pre, kbd, samp {
 }
 
 /* Reuse existing .card and .btn from earlier */
+
+
+/* ----- Auth menu in header ----- */
+.auth { display: inline-flex; align-items: center; gap: .5rem; position: relative; }
+.auth-popover { position: absolute; right: 0; top: 110%; width: 340px; z-index: 100; }
+.auth-tabs { display: flex; gap: .25rem; margin-bottom: .5rem; }
+.auth-tab { flex: 1; border: 1px solid var(--border); background: transparent; padding: .45rem; border-radius: 10px; }
+.auth-tab.active { background: color-mix(in srgb, var(--fg) 8%, transparent); }

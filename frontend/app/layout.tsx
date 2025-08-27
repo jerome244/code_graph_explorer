@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
+import AuthMenu from "@/components/AuthMenu";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -24,12 +25,8 @@ export const metadata: Metadata = {
   ],
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{ children: React.ReactNode }>) {
-  return {
-    /* Using variables from next/font and applying global shell */
-  } && (
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <header className="site-header">
@@ -42,6 +39,7 @@ export default function RootLayout({
               <Link href="/">Home</Link>
               <Link href="/graph">Graph Explorer</Link>
             </nav>
+            <AuthMenu />
           </div>
         </header>
 
@@ -49,9 +47,7 @@ export default function RootLayout({
 
         <footer className="site-footer">
           <div className="container footer-inner">
-            <p>
-              Built with Django · Next.js · Cytoscape
-            </p>
+            <p>Built with Django · Next.js · Cytoscape</p>
           </div>
         </footer>
       </body>

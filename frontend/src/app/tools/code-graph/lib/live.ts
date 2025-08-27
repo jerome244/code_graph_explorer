@@ -30,13 +30,8 @@ export function useLiveProject(opts: {
   jwt?: string | null;
   displayName?: string;
 
-  /** Called once on join (and on explicit state requests) with all node positions. */
   onPositions?: (snapshot: Record<string, { x: number; y: number }>) => void;
-
-  /** Called whenever remote users move nodes. */
   onNodesPos?: (updates: NodePos[]) => void;
-
-  /** Optional hook for UI; fires when canEdit changes. */
   onCanEditChange?: (can: boolean) => void;
 }) {
   const { projectId, shareToken, jwt, displayName, onPositions, onNodesPos, onCanEditChange } = opts;
@@ -55,7 +50,7 @@ export function useLiveProject(opts: {
   const myIdRef = useRef<string | null>(null);
   const canEditRef = useRef<boolean>(false);
 
-  // ---- batched outgoing node moves (~30 fps) --------------------------
+  // ---- batched outgoing node moves (~30 fps)
   const pendingRef = useRef<Map<string, NodePos>>(new Map());
   const tickingRef = useRef(false);
 
@@ -64,10 +59,8 @@ export function useLiveProject(opts: {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (!canEditRef.current) return;
-
     const pending = pendingRef.current;
     if (pending.size === 0) return;
-
     const positions = Array.from(pending.values());
     pending.clear();
     try {
@@ -75,20 +68,31 @@ export function useLiveProject(opts: {
     } catch {}
   }, []);
 
-  /** Call this while dragging a node locally. */
+  /** Call while dragging a node locally. */
   const queueNodeMove = useCallback((id: string, x: number, y: number) => {
     if (!canEditRef.current) return;
     pendingRef.current.set(id, { id, x, y });
     if (!tickingRef.current) {
       tickingRef.current = true;
-      setTimeout(flushPositions, 33); // ~30 Hz
+      setTimeout(flushPositions, 33);
     }
   }, [flushPositions]);
 
-  /** Optionally force-send any queued moves now. */
+  /** Force send whatever is queued. */
   const publishPositionsNow = useCallback(() => flushPositions(), [flushPositions]);
 
-  // ---- connect --------------------------------------------------------
+  /** Publish a full snapshot (host can call once on connect). */
+  const publishAllPositions = useCallback((all: Record<string, { x: number; y: number }>) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!canEditRef.current) return;
+    const positions = Object.entries(all).map(([id, p]) => ({ id, x: p.x, y: p.y }));
+    if (positions.length) {
+      try { ws.send(JSON.stringify({ type: 'nodes_pos', positions })); } catch {}
+    }
+  }, []);
+
+  // ---- connect
   useEffect(() => {
     const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
     if (!projectId && !shareToken) return;
@@ -106,10 +110,8 @@ export function useLiveProject(opts: {
 
     socket.onopen = () => {
       setConnected(true);
-      // identify self
       try {
         socket.send(JSON.stringify({ type: 'hello', name: displayName || 'Guest', color }));
-        // ask for a fresh state (redundant with welcome but safe on reconnects)
         socket.send(JSON.stringify({ type: 'request_state' }));
       } catch {}
     };
@@ -118,7 +120,6 @@ export function useLiveProject(opts: {
     socket.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
 
-      // initial snapshots
       if (msg?.type === 'welcome' || msg?.type === 'state') {
         const w = msg as WireWelcomeOrState;
         if ('id' in w && w.type === 'welcome') {
@@ -127,18 +128,13 @@ export function useLiveProject(opts: {
           (w.peers || []).forEach((p: Peer) => m.set(p.id, p));
           setPeers(m);
         }
-
         canEditRef.current = !!w.can_edit;
         setCanEdit(canEditRef.current);
         onCanEditChange?.(canEditRef.current);
-
-        if (w.positions) {
-          onPositions?.(w.positions);
-        }
+        if (w.positions) onPositions?.(w.positions);
         return;
       }
 
-      // presence
       if (msg.type === 'join' || msg.type === 'hello') {
         setPeers((prev) => {
           const next = new Map(prev);
@@ -149,20 +145,10 @@ export function useLiveProject(opts: {
         return;
       }
       if (msg.type === 'leave') {
-        setPeers((prev) => {
-          const next = new Map(prev);
-          next.delete(msg.id);
-          return next;
-        });
-        setRemoteSelections((prev) => {
-          const next = new Map(prev);
-          next.delete(msg.id);
-          return next;
-        });
+        setPeers((prev) => { const next = new Map(prev); next.delete(msg.id); return next; });
+        setRemoteSelections((prev) => { const next = new Map(prev); next.delete(msg.id); return next; });
         return;
       }
-
-      // selections
       if (msg.type === 'select') {
         if (msg.id === myIdRef.current) return;
         setRemoteSelections((prev) => {
@@ -172,20 +158,14 @@ export function useLiveProject(opts: {
         });
         return;
       }
-
-      // options -> bubble to UI (if you want auto-follow)
       if (msg.type === 'options') {
         window.dispatchEvent(new CustomEvent('project:options', { detail: msg }));
         return;
       }
-
-      // server-side "saved" ping
       if (msg.type === 'project_updated') {
         window.dispatchEvent(new CustomEvent('project:updated', { detail: msg }));
         return;
       }
-
-      // realtime node positions from others
       if (msg.type === 'nodes_pos') {
         const arr = (msg.positions || []) as NodePos[];
         if (arr.length) onNodesPos?.(arr);
@@ -206,7 +186,6 @@ export function useLiveProject(opts: {
     };
   }, [projectId, shareToken, jwt, displayName, color, onPositions, onNodesPos, onCanEditChange]);
 
-  // ---- small API ------------------------------------------------------
   const sendSelections = (ids: string[]) => {
     const s = wsRef.current;
     if (!s || s.readyState !== WebSocket.OPEN) return;
@@ -227,9 +206,10 @@ export function useLiveProject(opts: {
     sendSelections,
     sendOptions,
 
-    // NEW: call this in your graph’s drag handler
+    // positions API
     queueNodeMove,
     publishPositionsNow,
+    publishAllPositions,
 
     myColor: color,
   };

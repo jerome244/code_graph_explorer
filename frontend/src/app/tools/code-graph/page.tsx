@@ -8,6 +8,7 @@ import { Controls } from './components/Controls';
 import { TreeView } from './components/TreeView';
 import { Graph, GraphHandle } from './components/Graph';
 import { CodePopup } from './components/CodePopup';
+import { ProjectBar } from './components/ProjectBar'; // ← NEW
 
 import { buildElements, buildTree, filterTree, humanBytes } from './lib/utils';
 import type { ParsedFile, TreeNode } from './lib/types';
@@ -101,6 +102,32 @@ export default function CodeGraphPage() {
         Tree: click files to show/hide nodes. Graph: click nodes to open code popups.{' '}
         <b>Fn links</b> connects function calls ↔ defs (code) and CSS selectors ↔ HTML uses (styles).
       </p>
+
+      {/* NEW: Project save/load bar */}
+      <ProjectBar
+        current={{
+          files,
+          options: { includeDeps, layoutName, filter, fnMode },
+        }}
+        onLoad={({ files: f, options: o }) => {
+          setFiles(f || []);
+          setIncludeDeps(!!o?.includeDeps);
+          setLayoutName(o?.layoutName || 'cose');
+          setFilter(o?.filter || '');
+          setFnMode(!!o?.fnMode);
+          // also reset UI state derived from files
+          setHiddenFiles(new Set());
+          setOpenPopups(new Set());
+          const tops = new Set<string>(['__root__']);
+          (f || []).forEach(file => {
+            const first = file.dir.split('/').filter(Boolean)[0];
+            if (first) tops.add(first);
+          });
+          setOpenFolders(tops);
+          // refit graph after load
+          setTimeout(() => graphRef.current?.fit(), 0);
+        }}
+      />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <ZipDrop onLoaded={onZipLoaded} />

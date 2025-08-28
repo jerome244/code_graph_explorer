@@ -1,8 +1,22 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import ShareButton from "@/components/ShareButton";
 
-type P = { id: number; name: string; created_at: string; updated_at: string; file_count: number };
+type Role = "owner" | "viewer" | "editor" | null;
+
+type P = {
+  id: number;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  file_count: number;
+
+  // NEW meta from backend serializer
+  is_owner?: boolean;
+  role?: Role;
+  owner?: { id: number; username: string };
+};
 
 export default function ProjectsPage() {
   const [items, setItems] = useState<P[]>([]);
@@ -18,7 +32,8 @@ export default function ProjectsPage() {
         return;
       }
       const data = await r.json();
-      setItems((Array.isArray(data) ? data : []) as P[]);
+      // keep whatever fields backend sends (incl. is_owner/role/owner)
+      setItems(Array.isArray(data) ? (data as P[]) : []);
     })();
   }, []);
 
@@ -30,15 +45,27 @@ export default function ProjectsPage() {
       {!loading && !error && (
         <div style={{ display: "grid", gap: ".75rem" }}>
           {items.length === 0 ? (
-            <p className="dz-sub">No projects yet. Go to <Link href="/graph" className="underline">Graph Explorer</Link> to create one.</p>
+            <p className="dz-sub">
+              No projects yet. Go to <Link href="/graph" className="underline">Graph Explorer</Link> to create one.
+            </p>
           ) : (
             items.map((p) => (
-              <div key={p.id} className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".5rem" }}>
+              <div
+                key={p.id}
+                className="card"
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".5rem" }}
+              >
                 <div style={{ display: "grid", gap: ".2rem" }}>
                   <strong>{p.name}</strong>
-                  <span className="dz-sub">Files: {p.file_count} · Saved {new Date(p.created_at).toLocaleString()}</span>
+                  <span className="dz-sub">
+                    Files: {p.file_count} · Saved {new Date(p.created_at).toLocaleString()}
+                    {p.is_owner === false && p.owner?.username ? <> · Shared by {p.owner.username}</> : null}
+                    {p.is_owner === false && p.role ? <> · Access: {p.role}</> : null}
+                  </span>
                 </div>
-                <div style={{ display: "flex", gap: ".5rem" }}>
+                <div style={{ display: "flex", gap: ".5rem", alignItems: "center" }}>
+                  {/* Owners get Share button right here */}
+                  {p.is_owner ? <ShareButton projectId={p.id} isOwner={true} /> : null}
                   <Link className="btn" href={`/graph?id=${p.id}`}>Open in Graph</Link>
                 </div>
               </div>

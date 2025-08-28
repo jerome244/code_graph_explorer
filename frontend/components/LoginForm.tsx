@@ -3,49 +3,54 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 export default function LoginForm() {
+  const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const router = useRouter();
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  async function onSubmit(e: React.FormEvent) {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
+    setErr(null);
+    setLoading(true);
     const r = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     });
-    if (r.ok) {
-      router.push("/");
-    } else {
+    setLoading(false);
+    if (!r.ok) {
       const data = await r.json().catch(() => ({}));
-      setError(data?.error?.detail || "Login failed");
+      setErr(data?.detail || "Login failed");
+      return;
     }
-  }
+    // Tell header to re-check auth
+    window.dispatchEvent(new Event("auth:changed"));
+    // Refresh server components / data that depend on cookies
+    router.refresh();
+    // Optional: navigate somewhere
+    // router.push("/projects");
+  };
 
   return (
-    <form onSubmit={onSubmit} className="max-w-sm space-y-3">
-      <h2 className="text-xl font-semibold">Login</h2>
+    <form onSubmit={onSubmit} className="grid gap-2">
       <input
-        className="w-full border rounded p-2"
-        placeholder="Username"
         value={username}
         onChange={(e) => setUsername(e.target.value)}
-        required
+        placeholder="Username"
+        autoComplete="username"
       />
       <input
-        className="w-full border rounded p-2"
-        placeholder="Password"
-        type="password"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
-        required
+        placeholder="Password"
+        type="password"
+        autoComplete="current-password"
       />
-      {error && <p className="text-red-600 text-sm">{error}</p>}
-      <button className="w-full border rounded p-2" type="submit">
-        Sign in
+      <button className="btn primary" type="submit" disabled={loading}>
+        {loading ? "Signing in…" : "Sign in"}
       </button>
+      {err && <p className="dz-sub" style={{ color: "crimson" }}>{err}</p>}
     </form>
   );
 }

@@ -9,19 +9,45 @@ export default function AuthMenu() {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"login" | "register">("login");
   const [authed, setAuthed] = useState(false);
+  const [ready, setReady] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    fetch("/api/auth/me", { cache: "no-store" }).then((r) => setAuthed(r.ok));
-  }, []);
+  const check = async () => {
+    try {
+      const r = await fetch("/api/auth/me", { cache: "no-store" });
+      setAuthed(r.ok);
+    } finally {
+      setReady(true);
+    }
+  };
 
   useEffect(() => {
+    // initial check
+    check();
+
+    // close popover on outside click
     const onClick = (e: MouseEvent) => {
       if (!ref.current?.contains(e.target as Node)) setOpen(false);
     };
     document.addEventListener("mousedown", onClick);
-    return () => document.removeEventListener("mousedown", onClick);
+
+    // re-check on auth changes and when tab regains focus
+    const onAuthChanged = () => check();
+    const onFocus = () => check();
+    window.addEventListener("auth:changed", onAuthChanged);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) check();
+    });
+
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      window.removeEventListener("auth:changed", onAuthChanged);
+      window.removeEventListener("focus", onFocus);
+    };
   }, []);
+
+  if (!ready) return null;
 
   if (authed) {
     return (

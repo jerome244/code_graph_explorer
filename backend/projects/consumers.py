@@ -1,4 +1,3 @@
-# backend/projects/consumers.py
 import json
 import time
 from collections import defaultdict
@@ -14,9 +13,9 @@ from .models import Project, ProjectShare
 SIGN_SALT = "ws.ticket"
 TICKET_MAX_AGE = 60  # seconds
 
-# In-memory presence & positions (dev/single-process)
-PRESENCE = defaultdict(set)          # { project_id: {user_id, ...} }
-POSITIONS = defaultdict(dict)        # { project_id: { nodeId: {"x": float, "y": float, "ts": int, "by": uid} } }
+# In-memory (per process)
+PRESENCE = defaultdict(set)   # { project_id: {user_id, ...} }
+POSITIONS = defaultdict(dict) # { project_id: { nodeId: {"x": float, "y": float, "ts": int, "by": uid} } }
 
 
 class ProjectCollabConsumer(AsyncJsonWebsocketConsumer):
@@ -66,7 +65,6 @@ class ProjectCollabConsumer(AsyncJsonWebsocketConsumer):
 
         # 2) send current positions snapshot to this client
         pos_map = POSITIONS.get(self.project_id, {})
-        # only x,y to keep payload small
         snapshot = {str(nid): {"x": float(v["x"]), "y": float(v["y"])} for nid, v in pos_map.items()}
         await self.send_json({"event": "positions_state", "positions": snapshot})
 
@@ -146,7 +144,7 @@ class ProjectCollabConsumer(AsyncJsonWebsocketConsumer):
     async def broadcast_message(self, event):
         await self.send_json(event)
 
-    # ---------------- DB helpers (sync ORM wrapped) ----------------
+    # ---------------- DB helpers ----------------
     async def _verify_ticket(self, ticket: str | None) -> int | None:
         if not ticket:
             return None

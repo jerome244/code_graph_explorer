@@ -107,7 +107,9 @@ export default function GraphPage() {
     refreshAuthAndProjects();
     const onAuthChanged = () => refreshAuthAndProjects();
     const onFocus = () => refreshAuthAndProjects();
-    const onVisible = () => { if (!document.hidden) refreshAuthAndProjects(); };
+    const onVisible = () => {
+      if (!document.hidden) refreshAuthAndProjects();
+    };
     window.addEventListener("auth:changed", onAuthChanged);
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisible);
@@ -157,7 +159,9 @@ export default function GraphPage() {
       return;
     }
     setSaveMsg(`Saved ✓ — Project #${(data as any).id} "${(data as any).name}"`);
-    const list: P[] = await fetch("/api/projects/list", { cache: "no-store" }).then((x) => (x.ok ? x.json() : []));
+    const list: P[] = await fetch("/api/projects/list", { cache: "no-store" }).then((x) =>
+      x.ok ? x.json() : []
+    );
     setProjects(list);
     setSelectedId(String((data as any).id));
     setCurrentProject({ id: (data as any).id, name: (data as any).name, is_owner: true, role: "owner" });
@@ -295,7 +299,9 @@ export default function GraphPage() {
           }
 
           if (msg.event === "presence_state" && Array.isArray(msg.users)) {
-            setPresence(msg.users.map((u: any) => ({ id: Number(u.id), username: String(u.username) })));
+            setPresence(
+              msg.users.map((u: any) => ({ id: Number(u.id), username: String(u.username) }))
+            );
             return;
           }
 
@@ -313,7 +319,7 @@ export default function GraphPage() {
 
           if (msg.event === "node_move") {
             if (msg.clientId && msg.clientId === clientId) return; // ignore our echo
-            applyRemoteMove(msg.nodeId, msg.x, msg.y);
+            applyRemoteMove(msg.nodeId, Number(msg.x), Number(msg.y));
             return;
           }
         } catch {
@@ -326,7 +332,9 @@ export default function GraphPage() {
     })();
 
     return () => {
-      try { wsRef.current?.close(); } catch {}
+      try {
+        wsRef.current?.close();
+      } catch {}
       wsRef.current = null;
       setWsStatus("closed");
     };
@@ -347,26 +355,49 @@ export default function GraphPage() {
       <aside className="graph-sidebar">
         <div className="sidebar-header">
           <h2>Project Tree</h2>
-          <Link href="/" className="underline">Home</Link>
         </div>
-        {tree ? <FileTree node={tree} /> : <p className="dz-sub">Upload or load a project to see the tree.</p>}
+        {tree ? (
+          <FileTree node={tree} />
+        ) : (
+          <p className="dz-sub">Upload or load a project to see the tree.</p>
+        )}
       </aside>
 
       <main className="graph-main">
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".75rem" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: ".75rem",
+          }}
+        >
           <h1 className="page-title">Graph Explorer</h1>
           <div style={{ display: "flex", alignItems: "center", gap: ".5rem" }}>
             {currentProject?.id ? (
               <div
                 className="dz-sub"
                 title={presence.map((u) => u.username).join(", ") || "Only you"}
-                style={{ border: "1px solid var(--border)", borderRadius: "999px", padding: ".2rem .6rem", opacity: wsStatus === "open" ? 1 : 0.6 }}
+                style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: "999px",
+                  padding: ".2rem .6rem",
+                  opacity: wsStatus === "open" ? 1 : 0.6,
+                }}
               >
-                {wsStatus === "open" ? "Live" : wsStatus === "connecting" ? "Connecting…" : "Offline"} • {presenceText}
+                {wsStatus === "open"
+                  ? "Live"
+                  : wsStatus === "connecting"
+                  ? "Connecting…"
+                  : "Offline"}{" "}
+                • {presenceText}
               </div>
             ) : null}
             {isAuthed && currentProject?.id ? (
-              <ShareButton projectId={currentProject.id} isOwner={Boolean(currentProject.is_owner)} />
+              <ShareButton
+                projectId={currentProject.id}
+                isOwner={Boolean(currentProject.is_owner)}
+              />
             ) : null}
           </div>
         </div>
@@ -374,7 +405,12 @@ export default function GraphPage() {
         {currentProject && !currentProject.is_owner && (
           <div className="dz-sub" style={{ marginTop: "-.5rem", marginBottom: ".5rem" }}>
             Access: <strong>{currentProject.role ?? "viewer"}</strong>
-            {currentProject.owner?.username ? <> · Shared by <strong>{currentProject.owner.username}</strong></> : null}
+            {currentProject.owner?.username ? (
+              <>
+                {" "}
+                · Shared by <strong>{currentProject.owner.username}</strong>
+              </>
+            ) : null}
           </div>
         )}
 
@@ -402,7 +438,13 @@ export default function GraphPage() {
                 placeholder="Project name"
                 value={projectName}
                 onChange={(e) => setProjectName(e.target.value)}
-                style={{ flex: 1, border: "1px solid var(--border)", borderRadius: "12px", padding: ".6rem .8rem", background: "transparent" }}
+                style={{
+                  flex: 1,
+                  border: "1px solid var(--border)",
+                  borderRadius: "12px",
+                  padding: ".6rem .8rem",
+                  background: "transparent",
+                }}
               />
               <button className="btn primary" onClick={saveProject} disabled={saving}>
                 {saving ? "Saving…" : "Save project"}
@@ -415,7 +457,13 @@ export default function GraphPage() {
               <select
                 value={selectedId}
                 onChange={(e) => setSelectedId(e.target.value)}
-                style={{ flex: 1, border: "1px solid var(--border)", borderRadius: "12px", padding: ".6rem .8rem", background: "transparent" }}
+                style={{
+                  flex: 1,
+                  border: "1px solid var(--border)",
+                  borderRadius: "12px",
+                  padding: ".6rem .8rem",
+                  background: "transparent",
+                }}
               >
                 <option value="" disabled>
                   {projects.length ? "Choose a project to load" : "No saved projects yet"}
@@ -423,11 +471,17 @@ export default function GraphPage() {
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name} — {new Date(p.created_at).toLocaleString()}
-                    {p.is_owner === false && p.owner?.username ? ` — shared by ${p.owner.username}` : ""}
+                    {p.is_owner === false && p.owner?.username
+                      ? ` — shared by ${p.owner.username}`
+                      : ""}
                   </option>
                 ))}
               </select>
-              <button className="btn" onClick={() => selectedId && loadById(selectedId)} disabled={!selectedId}>
+              <button
+                className="btn"
+                onClick={() => selectedId && loadById(selectedId)}
+                disabled={!selectedId}
+              >
                 Load
               </button>
               {selectedId && (

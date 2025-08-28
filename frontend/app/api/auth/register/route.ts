@@ -1,16 +1,10 @@
-import { NextResponse } from "next/server";
-const BACKEND = process.env.BACKEND_URL || "http://localhost:8000";
-
 export async function POST(req: Request) {
-  const payload = await req.json();
-  const r = await fetch(`${BACKEND}/api/register/`, {
+  const body = await req.json();
+  const resp = await fetch(`${process.env.DJANGO_API_BASE}/api/auth/register/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    return NextResponse.json({ error: data }, { status: r.status });
-  }
-  return NextResponse.json({ success: true }, { status: 201 });
+  if (!resp.ok) return new Response(await resp.text(), { status: resp.status });
+  return new Response(await resp.text(), { status: 201 });
 }

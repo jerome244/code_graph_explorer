@@ -1,27 +1,21 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-const BACKEND = process.env.BACKEND_URL || "http://localhost:8000";
-
 export async function POST() {
   const refresh = cookies().get("refresh")?.value;
-  if (!refresh) return NextResponse.json({ detail: "No refresh token" }, { status: 401 });
+  if (!refresh) return new NextResponse("No refresh token", { status: 401 });
 
-  const r = await fetch(`${BACKEND}/api/token/refresh/`, {
+  const resp = await fetch(`${process.env.DJANGO_API_BASE}/api/auth/token/refresh/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refresh }),
   });
-  const data = await r.json();
-  if (!r.ok) return NextResponse.json(data, { status: r.status });
+  if (!resp.ok) return new NextResponse(await resp.text(), { status: 401 });
 
-  const res = NextResponse.json({ success: true });
-  res.cookies.set("access", data.access, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 5,
-  });
+  const { access } = await resp.json();
+  const secure = process.env.COOKIE_SECURE === "true";
+
+  const res = NextResponse.json({ ok: true });
+  res.cookies.set("access", access, { httpOnly: true, sameSite: "lax", secure, path: "/", maxAge: 60 * 30 });
   return res;
 }

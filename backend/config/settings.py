@@ -26,6 +26,25 @@ INSTALLED_APPS = [
     "projects",
 ]
 
+ASGI_APPLICATION = "backend.asgi.application"
+
+# Dev: in-memory layer (single process). For prod, see the Redis config below (commented).
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+    }
+}
+
+# --- PROD EXAMPLE (uncomment and configure Redis) ---
+# CHANNEL_LAYERS = {
+#     "default": {
+#         "BACKEND": "channels_redis.core.RedisChannelLayer",
+#         "CONFIG": {
+#             "hosts": [("127.0.0.1", 6379)],
+#         },
+#     }
+# }
+
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",

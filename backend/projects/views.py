@@ -128,3 +128,35 @@ class ProjectShareDetailView(APIView):
         if not deleted:
             return Response({"detail": "Share not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# in projects/views.py
+import json, time
+from django.core.signing import TimestampSigner
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import permissions, status
+from django.shortcuts import get_object_or_404
+from .models import Project, ProjectShare
+
+class ProjectWSTicketView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk: int):
+        project = get_object_or_404(Project, pk=pk)
+
+        user = request.user
+        is_owner = project.owner_id == user.id
+        is_shared = ProjectShare.objects.filter(project=project, user=user).exists()
+        if not (is_owner or is_shared):
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+        signer = TimestampSigner(salt="ws.ticket")
+        payload = json.dumps({"uid": user.id, "pid": project.id, "iat": int(time.time())}, separators=(",", ":"))
+        ticket = signer.sign(payload)
+
+        scheme = "wss" if request.is_secure() else "ws"
+        host = request.get_host()  # backend host:port
+        ws_url = f"{scheme}://{host}/ws/projects/{project.id}/"
+
+        return Response({"ticket": ticket, "ws_url": ws_url})

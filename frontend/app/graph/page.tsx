@@ -1,11 +1,11 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { TreeNode } from "@/app/api/graph/upload/route";
 import UploadDropzone from "./components/UploadDropzone";
 import FileTree from "./components/FileTree";
 import GraphView from "./components/GraphView";
-import ShareButton from "./components/ShareButton";
+import ShareButton from "@/components/ShareButton"; // ← using the shim
 import Link from "next/link";
 
 type Role = "owner" | "viewer" | "editor" | null;
@@ -17,6 +17,8 @@ type ProjectMeta = {
   role: Role;
   owner?: { id: number; username: string };
 };
+
+type PresenceUser = { id: number; username: string };
 
 export default function GraphPage() {
   const [tree, setTree] = useState<TreeNode | null>(null);
@@ -45,8 +47,21 @@ export default function GraphPage() {
   const [selectedId, setSelectedId] = useState<string>("");
   const [loadMsg, setLoadMsg] = useState<string | null>(null);
 
-  // For Share button + badges
+  // Current project meta
   const [currentProject, setCurrentProject] = useState<ProjectMeta | null>(null);
+
+  // --- REALTIME (WebSocket) ---
+  const wsRef = useRef<WebSocket | null>(null);
+  const [wsStatus, setWsStatus] = useState<"idle" | "connecting" | "open" | "closed">("idle");
+  const [presence, setPresence] = useState<PresenceUser[]>([]);
+  const clientId = useMemo(
+    () =>
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? (crypto as any).randomUUID()
+        : Math.random().toString(36).slice(2),
+    []
+  );
+  // -----------------------------
 
   const params = useSearchParams();
   const paramId = useMemo(() => params.get("id"), [params]);
@@ -55,7 +70,6 @@ export default function GraphPage() {
     fetch("/api/auth/me", { cache: "no-store" }).then((r) => setIsAuthed(r.ok));
   }, []);
 
-  // helper: derive ProjectMeta from the list when detail lacks fields
   function metaFromList(id: string | number): ProjectMeta | null {
     const p = projects.find((x) => String(x.id) === String(id));
     if (!p) return null;
@@ -68,7 +82,6 @@ export default function GraphPage() {
     };
   }
 
-  // Load list; if ?id= provided, set meta early and then fetch detail
   useEffect(() => {
     if (!isAuthed) return;
     (async () => {
@@ -80,7 +93,7 @@ export default function GraphPage() {
       if (paramId && list.some((p) => String(p.id) === paramId)) {
         setSelectedId(paramId);
         const m = metaFromList(paramId);
-        if (m) setCurrentProject(m); // lets the Share button decide visibility immediately
+        if (m) setCurrentProject(m);
         loadById(paramId);
       }
     })();
@@ -106,19 +119,10 @@ export default function GraphPage() {
       return;
     }
     setSaveMsg(`Saved ✓ — Project #${(data as any).id} "${(data as any).name}"`);
-
-    // refresh list
     const list: P[] = await fetch("/api/projects/list", { cache: "no-store" }).then((x) => (x.ok ? x.json() : []));
     setProjects(list);
     setSelectedId(String((data as any).id));
-
-    // you are owner of a freshly saved project → Share visible
-    setCurrentProject({
-      id: (data as any).id,
-      name: (data as any).name,
-      is_owner: true,
-      role: "owner",
-    });
+    setCurrentProject({ id: (data as any).id, name: (data as any).name, is_owner: true, role: "owner" });
   }
 
   async function loadById(id: string) {
@@ -129,7 +133,7 @@ export default function GraphPage() {
       setLoadMsg(typeof (data as any)?.error === "string" ? (data as any).error : "Load failed");
       return;
     }
-    const payload = (data as any)?.data || data; // accept either shape
+    const payload = (data as any)?.data || data;
     if (!payload?.tree || !payload?.nodes) {
       setLoadMsg("Project data missing");
       return;
@@ -139,7 +143,6 @@ export default function GraphPage() {
     setEdges(payload.edges || []);
     setLoadMsg(`Loaded ✓ — ${(data as any).name ?? "Project"}`);
 
-    // prefer detail meta; fallback to list
     const isOwner = (data as any).is_owner;
     const role = (data as any).role;
     const owner = (data as any).owner;
@@ -159,18 +162,107 @@ export default function GraphPage() {
     }
   }
 
-  // keep meta in sync when user changes dropdown before pressing "Load"
   useEffect(() => {
     if (!selectedId) return;
     const m = metaFromList(selectedId);
     if (m) setCurrentProject(m);
   }, [selectedId, projects]);
 
+  // --- REALTIME: connect WS when we have a project + auth ---
+  useEffect(() => {
+    const pid = currentProject?.id;
+    if (!pid || !isAuthed) return;
+
+    setWsStatus("connecting");
+    setPresence([]); // reset on project switch
+
+    (async () => {
+      const t = await fetch(`/api/projects/${pid}/ws-ticket`, { method: "POST" });
+      if (!t.ok) {
+        setWsStatus("closed");
+        return;
+      }
+      const { ticket, ws_url } = await t.json();
+      const ws = new WebSocket(`${ws_url}?ticket=${encodeURIComponent(ticket)}`);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setWsStatus("open");
+        ws.send(JSON.stringify({ type: "hello", clientId }));
+      };
+
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+
+          if (msg.event === "presence_state" && Array.isArray(msg.users)) {
+            setPresence(msg.users.map((u: any) => ({ id: Number(u.id), username: String(u.username) })));
+            return;
+          }
+
+          if (msg.event === "presence") {
+            setPresence((prev) => {
+              if (msg.action === "join") {
+                const exists = prev.some((u) => u.id === msg.userId);
+                return exists ? prev : [...prev, { id: msg.userId, username: msg.username }];
+              }
+              if (msg.action === "leave") return prev.filter((u) => u.id !== msg.userId);
+              return prev;
+            });
+            return;
+          }
+
+          if (msg.event === "node_move") {
+            if (msg.clientId && msg.clientId === clientId) return; // ignore our echo
+            applyRemoteMove(msg.nodeId, msg.x, msg.y);
+            return;
+          }
+        } catch {
+          // ignore
+        }
+      };
+
+      ws.onclose = () => setWsStatus("closed");
+      ws.onerror = () => setWsStatus("closed");
+    })();
+
+    return () => {
+      try { wsRef.current?.close(); } catch {}
+      wsRef.current = null;
+      setWsStatus("closed");
+    };
+  }, [currentProject?.id, isAuthed, clientId]);
+
+  // --- REALTIME helpers ---
+  function sendNodeMove(nodeId: string, x: number, y: number) {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== ws.OPEN) return;
+    ws.send(JSON.stringify({ type: "node_move", clientId, nodeId, x, y }));
+  }
+
+  function applyRemoteMove(nodeId: string, x: number, y: number) {
+    setNodes((prev) =>
+      prev.map((n) =>
+        String(n.id) === String(nodeId) ? { ...n, position: { ...(n.position || {}), x, y } } : n
+      )
+    );
+  }
+  // ------------------------
+
+  // --- Presence pill text ---
+  const presenceText =
+    presence.length === 0 ? "Just you" :
+    presence.length === 1 ? presence[0].username :
+    presence.length === 2 ? `${presence[0].username}, ${presence[1].username}` :
+    `${presence[0].username}, ${presence[1].username} +${presence.length - 2}`;
+  // ---------------------------
+
   return (
     <div className="graph-layout">
       <aside className="graph-sidebar">
         <div className="sidebar-header">
           <h2>Project Tree</h2>
+          <Link href="/" className="underline">Home</Link>
         </div>
         {tree ? <FileTree node={tree} /> : <p className="dz-sub">Upload or load a project to see the tree.</p>}
       </aside>
@@ -178,9 +270,25 @@ export default function GraphPage() {
       <main className="graph-main">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".75rem" }}>
           <h1 className="page-title">Graph Explorer</h1>
-          {isAuthed && currentProject?.id ? (
-            <ShareButton projectId={currentProject.id} isOwner={Boolean(currentProject.is_owner)} />
-          ) : null}
+          <div style={{ display: "flex", alignItems: "center", gap: ".5rem" }}>
+            {currentProject?.id ? (
+              <div
+                className="dz-sub"
+                title={presence.map((u) => u.username).join(", ") || "Only you"}
+                style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: "999px",
+                  padding: ".2rem .6rem",
+                  opacity: wsStatus === "open" ? 1 : 0.6,
+                }}
+              >
+                {wsStatus === "open" ? "Live" : wsStatus === "connecting" ? "Connecting…" : "Offline"} • {presenceText}
+              </div>
+            ) : null}
+            {isAuthed && currentProject?.id ? (
+              <ShareButton projectId={currentProject.id} isOwner={Boolean(currentProject.is_owner)} />
+            ) : null}
+          </div>
         </div>
 
         {currentProject && !currentProject.is_owner && (
@@ -197,7 +305,6 @@ export default function GraphPage() {
             setEdges(data.edges);
             setSaveMsg(null);
             setLoadMsg(null);
-            // fresh upload → not tied to an existing project until saved
             setCurrentProject(null);
             setSelectedId("");
           }}
@@ -265,7 +372,13 @@ export default function GraphPage() {
         )}
 
         <div className="card" style={{ height: "70vh", padding: 0 }}>
-          <GraphView nodes={nodes} edges={edges} />
+          {/* forward node moves to the socket */}
+          {/* @ts-ignore */}
+          <GraphView
+            nodes={nodes}
+            edges={edges}
+            onNodeMove={(id: string, pos: { x: number; y: number }) => sendNodeMove(id, pos.x, pos.y)}
+          />
         </div>
       </main>
     </div>

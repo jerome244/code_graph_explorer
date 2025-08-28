@@ -34,18 +34,26 @@ export default function AuthMenu() {
     // re-check on auth changes and when tab regains focus
     const onAuthChanged = () => check();
     const onFocus = () => check();
+    const onVisible = () => { if (!document.hidden) check(); };
+
     window.addEventListener("auth:changed", onAuthChanged);
     window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) check();
-    });
+    document.addEventListener("visibilitychange", onVisible);
 
     return () => {
       document.removeEventListener("mousedown", onClick);
       window.removeEventListener("auth:changed", onAuthChanged);
       window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
+
+  async function handleLogout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    // notify app immediately
+    window.dispatchEvent(new Event("auth:changed"));
+    setOpen(false);
+  }
 
   if (!ready) return null;
 
@@ -53,9 +61,9 @@ export default function AuthMenu() {
     return (
       <div className="auth" ref={ref}>
         <Link href="/projects" className="btn">My Projects</Link>
-        <form action="/api/auth/logout" method="post" style={{ display: "inline" }}>
-          <button className="btn" type="submit">Logout</button>
-        </form>
+        <button className="btn" type="button" onClick={handleLogout}>
+          Logout
+        </button>
       </div>
     );
   }

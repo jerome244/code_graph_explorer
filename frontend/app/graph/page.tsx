@@ -1,3 +1,4 @@
+// frontend/app/graph/page.tsx
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -19,6 +20,17 @@ type ProjectMeta = {
 };
 
 type PresenceUser = { id: number; username: string };
+type P = {
+  id: number;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  file_count: number;
+  is_owner?: boolean;
+  role?: Role;
+  owner?: { id: number; username: string };
+  data?: any;
+};
 
 export default function GraphPage() {
   const [tree, setTree] = useState<TreeNode | null>(null);
@@ -26,24 +38,18 @@ export default function GraphPage() {
   const [edges, setEdges] = useState<any[]>([]);
   const [isAuthed, setIsAuthed] = useState(false);
 
-  // Save
+  // Save / Load UI
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [projectName, setProjectName] = useState("");
-
-  // Load
-  type P = {
-    id: number; name: string; created_at: string; updated_at: string; file_count: number;
-    is_owner?: boolean; role?: Role; owner?: { id: number; username: string }; data?: any;
-  };
   const [projects, setProjects] = useState<P[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [loadMsg, setLoadMsg] = useState<string | null>(null);
 
-  // Current project meta
+  // Current project (for sharing/presence)
   const [currentProject, setCurrentProject] = useState<ProjectMeta | null>(null);
 
-  // --- REALTIME (WebSocket) ---
+  // --- REALTIME ---
   const wsRef = useRef<WebSocket | null>(null);
   const [wsStatus, setWsStatus] = useState<"idle" | "connecting" | "open" | "closed">("idle");
   const [presence, setPresence] = useState<PresenceUser[]>([]);
@@ -54,22 +60,64 @@ export default function GraphPage() {
         : Math.random().toString(36).slice(2),
     []
   );
-  // GraphView API to apply remote moves directly
   const graphApiRef = useRef<{ moveNode: (id: string, x: number, y: number) => void } | null>(null);
-  // -----------------------------
+
+  // Authoritative latest positions from WS (for this project)
+  const positionsRef = useRef<Record<string, { x: number; y: number }>>({});
 
   const params = useSearchParams();
   const paramId = useMemo(() => params.get("id"), [params]);
 
-  useEffect(() => {
-    fetch("/api/auth/me", { cache: "no-store" }).then((r) => setIsAuthed(r.ok));
-  }, []);
-
-  function metaFromList(id: string | number): ProjectMeta | null {
-    const p = projects.find((x) => String(x.id) === String(id));
+  // ---------- Auth + Projects ----------
+  function metaFromList(list: P[], id: string | number): ProjectMeta | null {
+    const p = list.find((x) => String(x.id) === String(id));
     if (!p) return null;
-    return { id: p.id, name: p.name, is_owner: Boolean(p.is_owner), role: (p.role ?? (p.is_owner ? "owner" : null)) as Role, owner: p.owner };
+    return {
+      id: p.id,
+      name: p.name,
+      is_owner: !!p.is_owner,
+      role: (p.role ?? (p.is_owner ? "owner" : null)) as Role,
+      owner: p.owner,
+    };
   }
+
+  const refreshAuthAndProjects = async () => {
+    const r = await fetch("/api/auth/me", { cache: "no-store" });
+    const authed = r.ok;
+    setIsAuthed(authed);
+    if (authed) {
+      const rr = await fetch("/api/projects/list", { cache: "no-store" });
+      if (rr.ok) {
+        const list: P[] = await rr.json();
+        setProjects(list);
+        if (paramId && list.some((p) => String(p.id) === paramId)) {
+          setSelectedId(paramId);
+          const m = metaFromList(list, paramId);
+          if (m) setCurrentProject(m);
+        }
+      }
+    } else {
+      setProjects([]);
+      setSelectedId("");
+      setCurrentProject(null);
+    }
+  };
+
+  useEffect(() => {
+    refreshAuthAndProjects();
+    const onAuthChanged = () => refreshAuthAndProjects();
+    const onFocus = () => refreshAuthAndProjects();
+    const onVisible = () => { if (!document.hidden) refreshAuthAndProjects(); };
+    window.addEventListener("auth:changed", onAuthChanged);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("auth:changed", onAuthChanged);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paramId]);
 
   useEffect(() => {
     if (!isAuthed) return;
@@ -81,13 +129,14 @@ export default function GraphPage() {
 
       if (paramId && list.some((p) => String(p.id) === paramId)) {
         setSelectedId(paramId);
-        const m = metaFromList(paramId);
+        const m = metaFromList(list, paramId);
         if (m) setCurrentProject(m);
         loadById(paramId);
       }
     })();
   }, [isAuthed, paramId]);
 
+  // ---------- Save / Load ----------
   async function saveProject() {
     setSaveMsg(null);
     if (!tree || nodes.length === 0) {
@@ -114,6 +163,18 @@ export default function GraphPage() {
     setCurrentProject({ id: (data as any).id, name: (data as any).name, is_owner: true, role: "owner" });
   }
 
+  // Merge helper: overlay positionsRef on any nodes array
+  function withLivePositions(baseNodes: any[]) {
+    const pos = positionsRef.current;
+    if (!pos || Object.keys(pos).length === 0) return baseNodes;
+    return baseNodes.map((n) => {
+      const nid = String(n?.data?.id ?? n?.id);
+      const p = pos[nid];
+      if (!p) return n;
+      return { ...n, position: { ...(n.position || {}), x: Number(p.x), y: Number(p.y) } };
+    });
+  }
+
   async function loadById(id: string) {
     setLoadMsg(null);
     const r = await fetch(`/api/projects/${id}`, { cache: "no-store" });
@@ -127,8 +188,12 @@ export default function GraphPage() {
       setLoadMsg("Project data missing");
       return;
     }
+
+    // IMPORTANT: apply live WS positions (if any) over loaded nodes
+    const mergedNodes = withLivePositions(payload.nodes);
+
     setTree(payload.tree);
-    setNodes(payload.nodes);
+    setNodes(mergedNodes);
     setEdges(payload.edges || []);
     setLoadMsg(`Loaded ✓ — ${(data as any).name ?? "Project"}`);
 
@@ -138,26 +203,72 @@ export default function GraphPage() {
     const name = (data as any).name;
 
     if (typeof isOwner === "boolean" || role || owner || name) {
-      setCurrentProject({ id: Number(id), name: name ?? `Project #${id}`, is_owner: Boolean(isOwner), role: (role ?? (isOwner ? "owner" : null)) as Role, owner });
+      setCurrentProject({
+        id: Number(id),
+        name: name ?? `Project #${id}`,
+        is_owner: !!isOwner,
+        role: (role ?? (isOwner ? "owner" : null)) as Role,
+        owner,
+      });
     } else {
-      const m = metaFromList(id);
+      const m = metaFromList(projects, id);
       if (m) setCurrentProject(m);
     }
   }
 
   useEffect(() => {
     if (!selectedId) return;
-    const m = metaFromList(selectedId);
+    const m = metaFromList(projects, selectedId);
     if (m) setCurrentProject(m);
   }, [selectedId, projects]);
 
-  // --- REALTIME: connect WS when we have a project + auth ---
+  // ---------- Realtime helpers ----------
+  function updateNodePos(list: any[], nodeId: string, x: number, y: number) {
+    return list.map((n) => {
+      const nid = n?.data?.id ?? n?.id;
+      if (String(nid) !== String(nodeId)) return n;
+      return { ...n, position: { ...(n.position || {}), x, y } };
+    });
+  }
+
+  // Apply full snapshot from server on join + remember it
+  function applyPositionsSnapshot(positions: Record<string, { x: number; y: number }>) {
+    positionsRef.current = { ...positions };
+    // visually update Cytoscape now
+    Object.entries(positions || {}).forEach(([id, p]) => {
+      graphApiRef.current?.moveNode(String(id), Number(p.x), Number(p.y));
+    });
+    // mirror into React so future rebuilds keep positions
+    setNodes((prev) => withLivePositions(prev));
+  }
+
+  function sendNodeMove(nodeId: string, x: number, y: number) {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({ type: "node_move", clientId, nodeId, x, y }));
+    }
+  }
+
+  function commitNodeMove(nodeId: string, x: number, y: number) {
+    // update local authoritative map too
+    positionsRef.current[nodeId] = { x, y };
+    setNodes((prev) => updateNodePos(prev, nodeId, x, y));
+  }
+
+  function applyRemoteMove(nodeId: string, x: number, y: number) {
+    positionsRef.current[nodeId] = { x, y };
+    graphApiRef.current?.moveNode(nodeId, x, y);
+    setNodes((prev) => updateNodePos(prev, nodeId, x, y));
+  }
+
+  // ---------- WebSocket lifecycle ----------
   useEffect(() => {
     const pid = currentProject?.id;
     if (!pid || !isAuthed) return;
 
     setWsStatus("connecting");
-    setPresence([]); // reset on project switch
+    setPresence([]);
+    positionsRef.current = {}; // clear previous project's positions
 
     (async () => {
       const t = await fetch(`/api/projects/${pid}/ws-ticket`, { method: "POST" });
@@ -177,6 +288,11 @@ export default function GraphPage() {
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
+
+          if (msg.event === "positions_state" && msg.positions) {
+            applyPositionsSnapshot(msg.positions);
+            return;
+          }
 
           if (msg.event === "presence_state" && Array.isArray(msg.users)) {
             setPresence(msg.users.map((u: any) => ({ id: Number(u.id), username: String(u.username) })));
@@ -201,7 +317,7 @@ export default function GraphPage() {
             return;
           }
         } catch {
-          // ignore
+          // ignore parse errors
         }
       };
 
@@ -216,41 +332,15 @@ export default function GraphPage() {
     };
   }, [currentProject?.id, isAuthed, clientId]);
 
-  // --- REALTIME helpers (Cytoscape uses data.id) ---
-  function updateNodePos(list: any[], nodeId: string, x: number, y: number) {
-    return list.map((n) => {
-      const nid = n?.data?.id ?? n?.id;
-      if (String(nid) !== String(nodeId)) return n;
-      return { ...n, position: { ...(n.position || {}), x, y } };
-    });
-  }
-
-  // live: only WS + view update (no React re-render to keep dragging smooth)
-  function sendNodeMove(nodeId: string, x: number, y: number) {
-    const ws = wsRef.current;
-    if (ws && ws.readyState === ws.OPEN) {
-      ws.send(JSON.stringify({ type: "node_move", clientId, nodeId, x, y }));
-    }
-  }
-
-  // commit after drag end: update React state so Save includes final positions
-  function commitNodeMove(nodeId: string, x: number, y: number) {
-    setNodes((prev) => updateNodePos(prev, nodeId, x, y));
-  }
-
-  // remote: move directly in Cytoscape (smooth), also mirror to state so a later save persists it
-  function applyRemoteMove(nodeId: string, x: number, y: number) {
-    graphApiRef.current?.moveNode(nodeId, x, y);
-    setNodes((prev) => updateNodePos(prev, nodeId, x, y));
-  }
-  // --------------------------------------------------
-
-  // Presence pill text
+  // ---------- Presence pill ----------
   const presenceText =
-    presence.length === 0 ? "Just you" :
-    presence.length === 1 ? presence[0].username :
-    presence.length === 2 ? `${presence[0].username}, ${presence[1].username}` :
-    `${presence[0].username}, ${presence[1].username} +${presence.length - 2}`;
+    presence.length === 0
+      ? "Just you"
+      : presence.length === 1
+      ? presence[0].username
+      : presence.length === 2
+      ? `${presence[0].username}, ${presence[1].username}`
+      : `${presence[0].username}, ${presence[1].username} +${presence.length - 2}`;
 
   return (
     <div className="graph-layout">
@@ -290,6 +380,7 @@ export default function GraphPage() {
 
         <UploadDropzone
           onResult={(data) => {
+            positionsRef.current = {}; // new upload isn't tied to live session yet
             setTree(data.tree);
             setNodes(data.nodes);
             setEdges(data.edges);
@@ -336,8 +427,14 @@ export default function GraphPage() {
                   </option>
                 ))}
               </select>
-              <button className="btn" onClick={() => selectedId && loadById(selectedId)} disabled={!selectedId}>Load</button>
-              {selectedId && <Link className="btn" href={`/graph?id=${selectedId}`}>Open link</Link>}
+              <button className="btn" onClick={() => selectedId && loadById(selectedId)} disabled={!selectedId}>
+                Load
+              </button>
+              {selectedId && (
+                <Link className="btn" href={`/graph?id=${selectedId}`}>
+                  Open link
+                </Link>
+              )}
             </div>
             {loadMsg && <p className="dz-sub">{loadMsg}</p>}
           </div>
@@ -347,9 +444,9 @@ export default function GraphPage() {
           <GraphView
             nodes={nodes}
             edges={edges}
-            onNodeMove={(id, pos) => sendNodeMove(id, pos.x, pos.y)}          // live WS
-            onNodeMoveEnd={(id, pos) => commitNodeMove(id, pos.x, pos.y)}      // commit to state
-            onReady={(api) => (graphApiRef.current = api)}                     // to apply remote moves
+            onNodeMove={(id, pos) => sendNodeMove(id, pos.x, pos.y)}
+            onNodeMoveEnd={(id, pos) => commitNodeMove(id, pos.x, pos.y)}
+            onReady={(api) => (graphApiRef.current = api)}
           />
         </div>
       </main>

@@ -1,3 +1,4 @@
+// frontend/components/LoginForm.tsx
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -24,12 +25,11 @@ export default function LoginForm() {
       setErr(data?.detail || "Login failed");
       return;
     }
-    // Tell header to re-check auth
+    // Tell header & pages to re-check auth immediately
     window.dispatchEvent(new Event("auth:changed"));
     // Refresh server components / data that depend on cookies
     router.refresh();
-    // Optional: navigate somewhere
-    // router.push("/projects");
+    // Optional: router.push("/projects");
   };
 
   return (

@@ -1,10 +1,8 @@
 from django.urls import path
 from .views import (
-    ProjectListCreateView,
-    ProjectDetailView,
-    ProjectShareListCreateView,
-    ProjectShareDetailView,
-    ProjectWSTicketView,   # if you added the WS ticket view
+    ProjectListCreateView, ProjectDetailView,
+    ProjectShareListCreateView, ProjectShareDetailView,
+    ProjectWSTicketView,
 )
 
 urlpatterns = [

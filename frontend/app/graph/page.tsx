@@ -5,7 +5,7 @@ import type { TreeNode } from "@/app/api/graph/upload/route";
 import UploadDropzone from "./components/UploadDropzone";
 import FileTree from "./components/FileTree";
 import GraphView from "./components/GraphView";
-import ShareButton from "@/components/ShareButton"; // ← using the shim
+import ShareButton from "@/components/ShareButton";
 import Link from "next/link";
 
 type Role = "owner" | "viewer" | "editor" | null;
@@ -33,15 +33,8 @@ export default function GraphPage() {
 
   // Load
   type P = {
-    id: number;
-    name: string;
-    created_at: string;
-    updated_at: string;
-    file_count: number;
-    is_owner?: boolean;
-    role?: Role;
-    owner?: { id: number; username: string };
-    data?: any;
+    id: number; name: string; created_at: string; updated_at: string; file_count: number;
+    is_owner?: boolean; role?: Role; owner?: { id: number; username: string }; data?: any;
   };
   const [projects, setProjects] = useState<P[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
@@ -61,6 +54,8 @@ export default function GraphPage() {
         : Math.random().toString(36).slice(2),
     []
   );
+  // GraphView API to apply remote moves directly
+  const graphApiRef = useRef<{ moveNode: (id: string, x: number, y: number) => void } | null>(null);
   // -----------------------------
 
   const params = useSearchParams();
@@ -73,13 +68,7 @@ export default function GraphPage() {
   function metaFromList(id: string | number): ProjectMeta | null {
     const p = projects.find((x) => String(x.id) === String(id));
     if (!p) return null;
-    return {
-      id: p.id,
-      name: p.name,
-      is_owner: Boolean(p.is_owner),
-      role: (p.role ?? (p.is_owner ? "owner" : null)) as Role,
-      owner: p.owner,
-    };
+    return { id: p.id, name: p.name, is_owner: Boolean(p.is_owner), role: (p.role ?? (p.is_owner ? "owner" : null)) as Role, owner: p.owner };
   }
 
   useEffect(() => {
@@ -149,13 +138,7 @@ export default function GraphPage() {
     const name = (data as any).name;
 
     if (typeof isOwner === "boolean" || role || owner || name) {
-      setCurrentProject({
-        id: Number(id),
-        name: name ?? `Project #${id}`,
-        is_owner: Boolean(isOwner),
-        role: (role ?? (isOwner ? "owner" : null)) as Role,
-        owner,
-      });
+      setCurrentProject({ id: Number(id), name: name ?? `Project #${id}`, is_owner: Boolean(isOwner), role: (role ?? (isOwner ? "owner" : null)) as Role, owner });
     } else {
       const m = metaFromList(id);
       if (m) setCurrentProject(m);
@@ -233,29 +216,41 @@ export default function GraphPage() {
     };
   }, [currentProject?.id, isAuthed, clientId]);
 
-  // --- REALTIME helpers ---
+  // --- REALTIME helpers (Cytoscape uses data.id) ---
+  function updateNodePos(list: any[], nodeId: string, x: number, y: number) {
+    return list.map((n) => {
+      const nid = n?.data?.id ?? n?.id;
+      if (String(nid) !== String(nodeId)) return n;
+      return { ...n, position: { ...(n.position || {}), x, y } };
+    });
+  }
+
+  // live: only WS + view update (no React re-render to keep dragging smooth)
   function sendNodeMove(nodeId: string, x: number, y: number) {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== ws.OPEN) return;
-    ws.send(JSON.stringify({ type: "node_move", clientId, nodeId, x, y }));
+    if (ws && ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({ type: "node_move", clientId, nodeId, x, y }));
+    }
   }
 
+  // commit after drag end: update React state so Save includes final positions
+  function commitNodeMove(nodeId: string, x: number, y: number) {
+    setNodes((prev) => updateNodePos(prev, nodeId, x, y));
+  }
+
+  // remote: move directly in Cytoscape (smooth), also mirror to state so a later save persists it
   function applyRemoteMove(nodeId: string, x: number, y: number) {
-    setNodes((prev) =>
-      prev.map((n) =>
-        String(n.id) === String(nodeId) ? { ...n, position: { ...(n.position || {}), x, y } } : n
-      )
-    );
+    graphApiRef.current?.moveNode(nodeId, x, y);
+    setNodes((prev) => updateNodePos(prev, nodeId, x, y));
   }
-  // ------------------------
+  // --------------------------------------------------
 
-  // --- Presence pill text ---
+  // Presence pill text
   const presenceText =
     presence.length === 0 ? "Just you" :
     presence.length === 1 ? presence[0].username :
     presence.length === 2 ? `${presence[0].username}, ${presence[1].username}` :
     `${presence[0].username}, ${presence[1].username} +${presence.length - 2}`;
-  // ---------------------------
 
   return (
     <div className="graph-layout">
@@ -275,12 +270,7 @@ export default function GraphPage() {
               <div
                 className="dz-sub"
                 title={presence.map((u) => u.username).join(", ") || "Only you"}
-                style={{
-                  border: "1px solid var(--border)",
-                  borderRadius: "999px",
-                  padding: ".2rem .6rem",
-                  opacity: wsStatus === "open" ? 1 : 0.6,
-                }}
+                style={{ border: "1px solid var(--border)", borderRadius: "999px", padding: ".2rem .6rem", opacity: wsStatus === "open" ? 1 : 0.6 }}
               >
                 {wsStatus === "open" ? "Live" : wsStatus === "connecting" ? "Connecting…" : "Offline"} • {presenceText}
               </div>
@@ -321,13 +311,7 @@ export default function GraphPage() {
                 placeholder="Project name"
                 value={projectName}
                 onChange={(e) => setProjectName(e.target.value)}
-                style={{
-                  flex: 1,
-                  border: "1px solid var(--border)",
-                  borderRadius: "12px",
-                  padding: ".6rem .8rem",
-                  background: "transparent",
-                }}
+                style={{ flex: 1, border: "1px solid var(--border)", borderRadius: "12px", padding: ".6rem .8rem", background: "transparent" }}
               />
               <button className="btn primary" onClick={saveProject} disabled={saving}>
                 {saving ? "Saving…" : "Save project"}
@@ -340,13 +324,7 @@ export default function GraphPage() {
               <select
                 value={selectedId}
                 onChange={(e) => setSelectedId(e.target.value)}
-                style={{
-                  flex: 1,
-                  border: "1px solid var(--border)",
-                  borderRadius: "12px",
-                  padding: ".6rem .8rem",
-                  background: "transparent",
-                }}
+                style={{ flex: 1, border: "1px solid var(--border)", borderRadius: "12px", padding: ".6rem .8rem", background: "transparent" }}
               >
                 <option value="" disabled>
                   {projects.length ? "Choose a project to load" : "No saved projects yet"}
@@ -358,26 +336,20 @@ export default function GraphPage() {
                   </option>
                 ))}
               </select>
-              <button className="btn" onClick={() => selectedId && loadById(selectedId)} disabled={!selectedId}>
-                Load
-              </button>
-              {selectedId && (
-                <Link className="btn" href={`/graph?id=${selectedId}`}>
-                  Open link
-                </Link>
-              )}
+              <button className="btn" onClick={() => selectedId && loadById(selectedId)} disabled={!selectedId}>Load</button>
+              {selectedId && <Link className="btn" href={`/graph?id=${selectedId}`}>Open link</Link>}
             </div>
             {loadMsg && <p className="dz-sub">{loadMsg}</p>}
           </div>
         )}
 
         <div className="card" style={{ height: "70vh", padding: 0 }}>
-          {/* forward node moves to the socket */}
-          {/* @ts-ignore */}
           <GraphView
             nodes={nodes}
             edges={edges}
-            onNodeMove={(id: string, pos: { x: number; y: number }) => sendNodeMove(id, pos.x, pos.y)}
+            onNodeMove={(id, pos) => sendNodeMove(id, pos.x, pos.y)}          // live WS
+            onNodeMoveEnd={(id, pos) => commitNodeMove(id, pos.x, pos.y)}      // commit to state
+            onReady={(api) => (graphApiRef.current = api)}                     // to apply remote moves
           />
         </div>
       </main>

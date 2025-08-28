@@ -26,7 +26,7 @@ INSTALLED_APPS = [
     "projects",
 ]
 
-ASGI_APPLICATION = "backend.asgi.application"
+ASGI_APPLICATION = "asgi.application"
 
 # Dev: in-memory layer (single process). For prod, see the Redis config below (commented).
 CHANNEL_LAYERS = {

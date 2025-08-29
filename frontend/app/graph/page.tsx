@@ -325,6 +325,27 @@ export default function GraphPage() {
     popupsRef.current = popups;
   }, [popups]);
 
+  // Per-popup line toggles + global toggle
+  const [showLinesGlobal, setShowLinesGlobal] = useState(false);
+  const [popupLinesEnabled, setPopupLinesEnabled] = useState<Record<string, boolean>>({});
+  const anyPopupLineOn = Object.values(popupLinesEnabled).some(Boolean);
+  const overlayEnabled = showLinesGlobal || anyPopupLineOn;
+
+  // keep popupLinesEnabled keys pruned to open popups
+  useEffect(() => {
+    setPopupLinesEnabled((prev) => {
+      const open = new Set(popups.map((p) => p.path));
+      const next: Record<string, boolean> = {};
+      for (const k of Object.keys(prev)) if (open.has(k)) next[k] = prev[k];
+      return next;
+    });
+  }, [popups]);
+
+  const togglePopupLines = (path: string) => {
+    if (popups.length < 2) return; // nothing to link
+    setPopupLinesEnabled((prev) => ({ ...prev, [path]: !prev[path] }));
+  };
+
   // Cytoscape refs
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
@@ -466,6 +487,11 @@ export default function GraphPage() {
             node.connectedEdges().hide();
             setPopups((cur) => cur.filter((pp) => pp.path !== path));
             setSelected((sel) => (sel === path ? null : sel));
+            // clear per-popup toggle
+            setPopupLinesEnabled((prev) => {
+              if (!(path in prev)) return prev;
+              const n = { ...prev }; delete n[path]; return n;
+            });
           } else {
             node.show();
             node.connectedEdges().forEach((e) => {
@@ -488,6 +514,7 @@ export default function GraphPage() {
           if (!path || by === me?.id) return;
           setPopups((cur) => cur.filter((p) => p.path !== path));
           setSelected((sel) => (sel === path ? null : sel));
+          setPopupLinesEnabled((prev) => { if (!(path in prev)) return prev; const n = { ...prev }; delete n[path]; return n; });
         } else if (msg.type === "popup_resize") {
           const { path, w, h, by } = msg.data || {};
           if (!path || by === me?.id) return;
@@ -539,6 +566,7 @@ export default function GraphPage() {
       if (existing) {
         if (existing.dirty) savePopup(id);
         setPopups((cur) => cur.filter((p) => p.path !== id));
+        setPopupLinesEnabled((prev) => { if (!(id in prev)) return prev; const n = { ...prev }; delete n[id]; return n; });
         if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_close", path: id }));
         return;
       }
@@ -761,6 +789,8 @@ export default function GraphPage() {
     setInfo(`Loaded project "${proj.name}" (${files.length} files${Object.keys(positionsRef.current).length ? ", layout restored" : ""})`);
     setPopups([]);
     setSelected(null);
+    setPopupLinesEnabled({}); // clear per-popup toggles when switching projects
+    setShowLinesGlobal(false);
   }
 
   // Save popup contents: update fileMap + surgically update edges and function facts in cy (no relayout)
@@ -875,6 +905,7 @@ export default function GraphPage() {
       const popped = popupsRef.current.find((pp) => pp.path === id);
       if (popped && popped.dirty) savePopup(id);
       setPopups((cur) => cur.filter((pp) => pp.path !== id));
+      setPopupLinesEnabled((prev) => { if (!(id in prev)) return prev; const n = { ...prev }; delete n[id]; return n; });
       if (selected === id) setSelected(null);
 
       if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "node_visibility", path: id, hidden: true }));
@@ -949,6 +980,8 @@ export default function GraphPage() {
     setPopups([]); // clear old popups
     setProjectId(null);
     setProjectName(file.name.replace(/\.zip$/i, "") || "My Project");
+    setPopupLinesEnabled({});
+    setShowLinesGlobal(false);
   }, []);
 
   // ------------------------------ Realtime: broadcast drags + cursors ------------------------------
@@ -1081,8 +1114,7 @@ export default function GraphPage() {
 
   // ------------------------------ CALLER⇢DECLARER POPUP LINK OVERLAY ------------------------------
 
-  // global toggle + portal mount guard
-  const [showLinks, setShowLinks] = useState(false);
+  // portal mount guard
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
@@ -1096,7 +1128,7 @@ export default function GraphPage() {
   const [popupLinks, setPopupLinks] = useState<PopupLink[]>([]);
 
   useEffect(() => {
-    if (!showLinks) { setPopupLinks([]); return; }
+    if (!overlayEnabled) { setPopupLinks([]); return; }
 
     let raf = 0;
 
@@ -1169,6 +1201,8 @@ export default function GraphPage() {
         const anchorRight = (r: DOMRect) => ({ x: r.left + r.width - 8, y: r.top + r.height / 2 });
         const anchorLeft  = (r: DOMRect) => ({ x: r.left + 8,           y: r.top + r.height / 2 });
 
+        const isOn = (path: string) => !!popupLinesEnabled[path];
+
         // for each ordered pair (A calls → B declares)
         for (let i = 0; i < popupsRef.current.length; i++) {
           const A = popupsRef.current[i];
@@ -1182,6 +1216,9 @@ export default function GraphPage() {
             const rectB = rects.get(B.path);
             if (!rectB) continue;
             const factsB = byFile[B.path] || { declared: [], called: [] };
+
+            // respect toggles: include pair only if global OR either popup is toggled on
+            if (!showLinesGlobal && !isOn(A.path) && !isOn(B.path)) continue;
 
             const match = new Set(factsA.called.filter((n) => factsB.declared.includes(n)));
             if (match.size === 0) continue;
@@ -1215,7 +1252,7 @@ export default function GraphPage() {
 
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [funcIndex, popups, showLinks]);
+  }, [funcIndex, popups, showLinesGlobal, popupLinesEnabled, overlayEnabled]);
 
   // ------------------------------ Render ------------------------------
 
@@ -1427,7 +1464,7 @@ export default function GraphPage() {
 
       {/* Graph area */}
       <section style={{ position: "relative", overflow: "hidden" }}>
-        {/* Selection badge */}
+        {/* Selection + global lines toggle */}
         <div
           style={{
             position: "absolute",
@@ -1444,21 +1481,20 @@ export default function GraphPage() {
           }}
         >
           {selected ? <strong>{selected}</strong> : <span>Select a file from the tree or graph</span>}
-          {/* Global toggle, disabled if fewer than 2 popups */}
           <button
-            onClick={() => setShowLinks((v) => !v)}
+            onClick={() => setShowLinesGlobal((v) => !v)}
             disabled={popups.length < 2}
-            title={popups.length < 2 ? "Open two popups to link calls to declarations" : (showLinks ? "Hide lines" : "Show lines")}
+            title={popups.length < 2 ? "Open two popups to link calls to declarations" : (showLinesGlobal ? "Hide all lines" : "Show all lines")}
             style={{
               fontSize: 11,
               padding: "4px 6px",
               borderRadius: 6,
               border: "1px solid #e5e7eb",
-              background: showLinks ? "#eef2ff" : "white",
+              background: showLinesGlobal ? "#eef2ff" : "white",
               cursor: popups.length < 2 ? "not-allowed" : "pointer",
             }}
           >
-            {showLinks ? "Hide lines" : "Show lines"}
+            {showLinesGlobal ? "All lines: on" : "All lines: off"}
           </button>
         </div>
 
@@ -1495,103 +1531,106 @@ export default function GraphPage() {
           ))}
         </div>
 
-        {/* Editable popups (resizable + synced) */}
-        {popups.map((pp) => (
-          <div
-            key={pp.path}
-            data-popup-path={pp.path}
-            style={{
-              position: "absolute",
-              left: Math.max(8, pp.x) + "px",
-              top: Math.max(8, pp.y) + "px",
-              transform: "translate(-50%, -110%)",
-              background: "white",
-              border: "1px solid #e5e7eb",
-              borderRadius: 8,
-              boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-              width: pp.w ? pp.w : "clamp(240px, 26vw, 520px)",
-              height: pp.h ? pp.h : undefined,
-              minHeight: 140,
-              maxHeight: pp.h ? undefined : "40vh",
-              display: "flex",
-              flexDirection: "column",
-              overflow: "hidden",
-              zIndex: 20,
-              resize: "both",
-              boxSizing: "border-box",
-            }}
-            onWheel={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
+        {/* Editable popups (resizable + synced) with per-popup line toggle */}
+        {popups.map((pp) => {
+          const linesOn = !!popupLinesEnabled[pp.path];
+          return (
             <div
+              key={pp.path}
+              data-popup-path={pp.path}
               style={{
+                position: "absolute",
+                left: Math.max(8, pp.x) + "px",
+                top: Math.max(8, pp.y) + "px",
+                transform: "translate(-50%, -110%)",
+                background: "white",
+                border: "1px solid #e5e7eb",
+                borderRadius: 8,
+                boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
+                width: pp.w ? pp.w : "clamp(240px, 26vw, 520px)",
+                height: pp.h ? pp.h : undefined,
+                minHeight: 140,
+                maxHeight: pp.h ? undefined : "40vh",
                 display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                padding: "6px 10px",
-                borderBottom: "1px solid #e5e7eb",
-                background: "#f9fafb",
-                borderTopLeftRadius: 8,
-                borderTopRightRadius: 8,
-                fontSize: 12,
-                flex: "0 0 auto",
-                gap: 8,
+                flexDirection: "column",
+                overflow: "hidden",
+                zIndex: 20,
+                resize: "both",
+                boxSizing: "border-box",
               }}
+              onWheel={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
             >
-              <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "30vw" }}>
-                {basename(pp.path)}
-              </strong>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                {/* Per-popup button controlling global toggle for convenience */}
-                <button
-                  onClick={() => setShowLinks((v) => !v)}
-                  disabled={popups.length < 2}
-                  title={popups.length < 2 ? "Open two popups to link calls to declarations" : (showLinks ? "Hide lines" : "Show lines")}
-                  style={{
-                    border: "1px solid #ddd",
-                    background: showLinks ? "#eef2ff" : "white",
-                    padding: "4px 6px",
-                    borderRadius: 6,
-                    fontSize: 11,
-                    cursor: popups.length < 2 ? "not-allowed" : "pointer",
-                  }}
-                >
-                  {showLinks ? "Lines on" : "Lines off"}
-                </button>
-                {pp.dirty && <span style={{ fontSize: 11, color: "#9a3412" }}>● unsaved</span>}
-                <button
-                  onClick={() => {
-                    if (pp.dirty) savePopup(pp.path);
-                    setPopups((cur) => cur.filter((p) => p.path !== pp.path));
-                    const ws = wsRef.current;
-                    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_close", path: pp.path }));
-                  }}
-                  style={{ background: "none", border: 0, cursor: "pointer", fontSize: 16, lineHeight: 1 }}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ×
-                </button>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "6px 10px",
+                  borderBottom: "1px solid #e5e7eb",
+                  background: "#f9fafb",
+                  borderTopLeftRadius: 8,
+                  borderTopRightRadius: 8,
+                  fontSize: 12,
+                  flex: "0 0 auto",
+                  gap: 8,
+                }}
+              >
+                <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "30vw" }}>
+                  {basename(pp.path)}
+                </strong>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button
+                    onClick={() => togglePopupLines(pp.path)}
+                    disabled={popups.length < 2}
+                    title={popups.length < 2 ? "Open another popup to link" : (linesOn ? "Hide lines for this popup" : "Show lines for this popup")}
+                    style={{
+                      border: "1px solid #ddd",
+                      background: linesOn ? "#eef2ff" : "white",
+                      padding: "4px 6px",
+                      borderRadius: 6,
+                      fontSize: 11,
+                      cursor: popups.length < 2 ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    {linesOn ? "Lines: on" : "Lines: off"}
+                  </button>
+                  {pp.dirty && <span style={{ fontSize: 11, color: "#9a3412" }}>● unsaved</span>}
+                  <button
+                    onClick={() => {
+                      if (pp.dirty) savePopup(pp.path);
+                      setPopups((cur) => cur.filter((p) => p.path !== pp.path));
+                      setPopupLinesEnabled((prev) => { if (!(pp.path in prev)) return prev; const n = { ...prev }; delete n[pp.path]; return n; });
+                      const ws = wsRef.current;
+                      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_close", path: pp.path }));
+                    }}
+                    style={{ background: "none", border: 0, cursor: "pointer", fontSize: 16, lineHeight: 1 }}
+                    aria-label="Close"
+                    title="Close"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+
+              {/* Inline colorized code editor */}
+              <div style={{ display: "block", width: "100%", flex: "1 1 auto", height: "auto" }}>
+                <InlineEditor
+                  path={pp.path}
+                  value={pp.draft}
+                  funcIndex={funcIndex}
+                  onChange={(v) =>
+                    setPopups((cur) => cur.map((p) => (p.path === pp.path ? { ...p, draft: v, dirty: true } : p)))
+                  }
+                  onBlur={() => savePopup(pp.path)}
+                />
               </div>
             </div>
-
-            {/* Inline colorized code editor */}
-            <div style={{ display: "block", width: "100%", flex: "1 1 auto", height: "auto" }}>
-              <InlineEditor
-                path={pp.path}
-                value={pp.draft}
-                funcIndex={funcIndex}
-                onChange={(v) =>
-                  setPopups((cur) => cur.map((p) => (p.path === pp.path ? { ...p, draft: v, dirty: true } : p)))
-                }
-                onBlur={() => savePopup(pp.path)}
-              />
-            </div>
-          </div>
-        ))}
+          );
+        })}
 
         {/* Link overlay (caller → declarer) — TOP layer via portal; plain lines, no arrow heads */}
-        {mounted && showLinks && createPortal(
+        {mounted && overlayEnabled && createPortal(
           <svg
             style={{
               position: "fixed",

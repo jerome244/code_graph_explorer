@@ -12,11 +12,10 @@ import {
   CANDIDATE_RESOLVE_EXTS,
   TreeNode,
   extname,
-  dirname,
   basename,
-  normalize,
   resolveRelative,
   inferEdges,
+  buildFunctionIndex,
   buildTree,
 } from "./parsing";
 
@@ -76,6 +75,126 @@ type ProjectDetail = {
   my_role?: Role;
 };
 
+// ------------------------------ Inline code highlighter ------------------------------
+
+function htmlEscape(s: string) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function regexEscape(lit: string) {
+  return lit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function highlightWithFunctions(
+  path: string,
+  code: string,
+  funcIndex: { byFile?: Record<string, { declared: string[]; called: string[] }>; index?: any }
+): string {
+  const facts = funcIndex.byFile?.[path];
+  const index = funcIndex.index || {};
+  if (!facts) return htmlEscape(code);
+
+  const declaredSet = new Set(facts.declared);
+  const names = Array.from(new Set([...facts.declared, ...facts.called].filter((n) => index[n])));
+  if (names.length === 0) return htmlEscape(code);
+
+  // Build a single regex of all names, word-boundary matched
+  const re = new RegExp(`\\b(${names.map(regexEscape).join("|")})\\b`, "g");
+  const escaped = htmlEscape(code);
+
+  return escaped.replace(re, (m) => {
+    const color = index[m]?.color || "#111827";
+    const isDecl = declaredSet.has(m);
+    const deco = isDecl ? " text-decoration: underline dotted;" : "";
+    return `<span style="color:${color};${deco}">${m}</span>`;
+  });
+}
+
+function InlineEditor({
+  path,
+  value,
+  onChange,
+  onBlur,
+  funcIndex,
+}: {
+  path: string;
+  value: string;
+  onChange: (v: string) => void;
+  onBlur: () => void;
+  funcIndex: any;
+}) {
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
+  const preRef = useRef<HTMLPreElement | null>(null);
+
+  const html = useMemo(() => highlightWithFunctions(path, value, funcIndex), [path, value, funcIndex]);
+
+  const onScroll = () => {
+    const ta = taRef.current,
+      pre = preRef.current;
+    if (ta && pre) {
+      pre.scrollTop = ta.scrollTop;
+      pre.scrollLeft = ta.scrollLeft;
+    }
+  };
+
+  useEffect(() => {
+    const ta = taRef.current,
+      pre = preRef.current;
+    if (!ta || !pre) return;
+    const sync = () => {
+      pre.style.height = `${ta.clientHeight}px`;
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(ta);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      <pre
+        ref={preRef}
+        aria-hidden
+        style={{
+          position: "absolute",
+          inset: 0,
+          margin: 0,
+          padding: 8,
+          overflow: "auto",
+          whiteSpace: "pre",
+          pointerEvents: "none",
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontSize: 11,
+          lineHeight: 1.35,
+        }}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+      <textarea
+        ref={taRef}
+        value={value}
+        spellCheck={false}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
+        onScroll={onScroll}
+        style={{
+          position: "absolute",
+          inset: 0,
+          padding: 8,
+          border: 0,
+          outline: "none",
+          resize: "none",
+          background: "transparent",
+          color: "transparent", // invisible text; caret still visible:
+          caretColor: "#111827",
+          whiteSpace: "pre",
+          overflow: "auto",
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontSize: 11,
+          lineHeight: 1.35,
+        }}
+      />
+    </div>
+  );
+}
+
 // ------------------------------ Page ------------------------------
 
 export default function GraphPage() {
@@ -87,6 +206,7 @@ export default function GraphPage() {
 
   // File contents (editable) + ref (handlers see latest)
   const [fileMap, setFileMap] = useState<Record<string, string>>({});
+  const [funcIndex, setFuncIndex] = useState<any>({ byFile: {}, index: {} });
   const fileMapRef = useRef<Record<string, string>>({});
   useEffect(() => {
     fileMapRef.current = fileMap;
@@ -595,10 +715,17 @@ export default function GraphPage() {
 
     const files = Object.entries(newMap).map(([path, content]) => ({ path, content }));
 
-    // nodes: attach saved x/y if present (hidden applied after render)
-    const nodes = files.map(({ path }) => {
+    // compute function facts/index for loaded project
+    const built = buildFunctionIndex(files);
+
+    // nodes: attach saved x/y if present (hidden applied after render) + declared/called
+    const nodes: CyElement[] = files.map(({ path }) => {
       const pos = positionsRef.current[path];
-      const el: any = { data: { id: path, label: basename(path), ext: extname(path) }, group: "nodes" as const };
+      const facts = built.byFile[path] || { declared: [], called: [] };
+      const el: any = {
+        data: { id: path, label: basename(path), ext: extname(path), declared: facts.declared, called: facts.called },
+        group: "nodes" as const,
+      };
       if (pos && typeof pos.x === "number" && typeof pos.y === "number") el.position = { x: pos.x, y: pos.y };
       return el;
     });
@@ -625,12 +752,13 @@ export default function GraphPage() {
 
     setElements([...nodes, ...edges]);
     setTree(buildTree(files.map((f) => f.path)));
+    setFuncIndex(built); // keep both byFile + index
     setInfo(`Loaded project "${proj.name}" (${files.length} files${Object.keys(positionsRef.current).length ? ", layout restored" : ""})`);
     setPopups([]);
     setSelected(null);
   }
 
-  // Save popup contents: update fileMap + surgically update edges in cy (no relayout)
+  // Save popup contents: update fileMap + surgically update edges and function facts in cy (no relayout)
   const savePopup = useCallback(
     (path: string) => {
       const cy = cyRef.current;
@@ -643,6 +771,21 @@ export default function GraphPage() {
         const newMap = { ...fileMapRef.current, [path]: draft };
         fileMapRef.current = newMap;
         setFileMap(newMap);
+
+        // --- recompute function index across all files (so colors stay correct)
+        const filesAll = Object.entries(newMap).map(([p, content]) => ({ path: p, content }));
+        const built = buildFunctionIndex(filesAll);
+        setFuncIndex(built);
+
+        // update node data for declared/called
+        if (cy) {
+          cy.nodes().forEach((n) => {
+            const pth = n.id();
+            const facts = built.byFile[pth] || { declared: [], called: [] };
+            n.data("declared", facts.declared);
+            n.data("called", facts.called);
+          });
+        }
 
         // recompute edges from this file
         const refs = inferEdges(path, draft);
@@ -759,11 +902,18 @@ export default function GraphPage() {
     // reset positions for a fresh upload (not a saved project)
     positionsRef.current = {};
 
-    // nodes
-    const nodes: CyElement[] = files.map(({ path }) => ({
-      data: { id: path, label: basename(path), ext: extname(path) },
-      group: "nodes",
-    }));
+    // build function index
+    const built = buildFunctionIndex(files);
+    setFuncIndex(built);
+
+    // nodes with declared/called
+    const nodes: CyElement[] = files.map(({ path }) => {
+      const facts = built.byFile[path] || { declared: [], called: [] };
+      return {
+        data: { id: path, label: basename(path), ext: extname(path), declared: facts.declared, called: facts.called },
+        group: "nodes",
+      };
+    });
 
     // edges
     const pathSet = new Set(files.map((f) => f.path));
@@ -1240,29 +1390,19 @@ export default function GraphPage() {
                 </button>
               </div>
             </div>
-            <textarea
-              value={pp.draft}
-              spellCheck={false}
-              onChange={(e) =>
-                setPopups((cur) => cur.map((p) => (p.path === pp.path ? { ...p, draft: e.target.value, dirty: true } : p)))
-              }
-              onBlur={() => savePopup(pp.path)}
-              style={{
-                display: "block",
-                width: "100%",
-                flex: "1 1 auto",
-                height: "auto",
-                padding: "8px",
-                border: 0,
-                outline: "none",
-                resize: "none",
-                whiteSpace: "pre",
-                overflow: "auto",
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                fontSize: 11,
-                lineHeight: 1.35,
-              }}
-            />
+
+            {/* Inline colorized code editor */}
+            <div style={{ display: "block", width: "100%", flex: "1 1 auto", height: "auto" }}>
+              <InlineEditor
+                path={pp.path}
+                value={pp.draft}
+                funcIndex={funcIndex}
+                onChange={(v) =>
+                  setPopups((cur) => cur.map((p) => (p.path === pp.path ? { ...p, draft: v, dirty: true } : p)))
+                }
+                onBlur={() => savePopup(pp.path)}
+              />
+            </div>
           </div>
         ))}
       </section>

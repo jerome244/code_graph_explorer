@@ -8,6 +8,7 @@ const cytoscape = (cytoscapeImport as any).default ?? (cytoscapeImport as any);
 // ------------------------------ Types & utils ------------------------------
 
 type CyElement = cytoscape.ElementDefinition;
+type PositionsMap = Record<string, { x: number; y: number }>;
 
 const ALLOWED_EXTS = new Set([
   ".c",
@@ -171,6 +172,20 @@ export default function GraphPage() {
   useEffect(() => {
     fileMapRef.current = fileMap;
   }, [fileMap]);
+
+  // Positions (persisted on save)
+  const positionsRef = useRef<PositionsMap>({});
+
+  function snapshotPositions(): PositionsMap {
+    const cy = cyRef.current;
+    const out: PositionsMap = {};
+    if (!cy) return out;
+    cy.nodes().forEach((n) => {
+      const p = n.position();
+      out[n.id()] = { x: p.x, y: p.y };
+    });
+    return out;
+  }
 
   // Auth/persistence
   const [authed, setAuthed] = useState(false);
@@ -338,9 +353,17 @@ export default function GraphPage() {
     } finally {
       cy.endBatch();
     }
+
     if (elements.length) {
-      cy.layout({ name: "cose" }).run();
-      cy.fit(undefined, 20);
+      const hasAnyPositions = elements.some((el: any) => (el as any).position);
+      if (hasAnyPositions) {
+        // We already have explicit node positions → do not run layout
+        cy.fit(undefined, 20);
+      } else {
+        // No positions → run auto-layout once
+        cy.layout({ name: "cose" }).run();
+        cy.fit(undefined, 20);
+      }
     }
 
     // prune popups for removed nodes
@@ -373,10 +396,11 @@ export default function GraphPage() {
       alert("Give your project a name first");
       return;
     }
+    const positions = snapshotPositions();
     const r = await fetch("/api/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: projectName.trim(), files }),
+      body: JSON.stringify({ name: projectName.trim(), files, positions }),
     });
     if (!r.ok) {
       alert("Failed to create project");
@@ -385,18 +409,28 @@ export default function GraphPage() {
     const data = await r.json();
     setProjectId(data.id);
     setMyProjects((cur) => [{ id: data.id, name: data.name }, ...cur.filter((p) => p.id !== data.id)]);
-    setInfo(`Saved as project #${data.id}`);
+    setInfo(`Saved as project #${data.id} (layout included)`);
   }
 
   async function saveAllToExisting() {
     if (!projectId) return saveAsNewProject();
     const files = Object.entries(fileMapRef.current).map(([path, content]) => ({ path, content }));
+
+    // Save files
     const r = await fetch(`/api/projects/${projectId}/files/bulk`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ files }),
     });
-    setInfo(r.ok ? "All changes saved" : "Bulk save failed");
+
+    // Save current node positions on the project
+    const rp = await fetch(`/api/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ positions: snapshotPositions() }),
+    });
+
+    setInfo(r.ok && rp.ok ? "All changes & layout saved" : "Save failed (files or layout)");
   }
 
   async function loadProject(id: number) {
@@ -409,19 +443,30 @@ export default function GraphPage() {
     setProjectId(proj.id);
     setProjectName(proj.name);
 
+    // positions
+    positionsRef.current = (proj.positions ?? {}) as PositionsMap;
+
     const newMap: Record<string, string> = {};
     for (const f of proj.files || []) newMap[f.path] = f.content ?? "";
     fileMapRef.current = newMap;
     setFileMap(newMap);
 
     const files = Object.entries(newMap).map(([path, content]) => ({ path, content }));
-    const nodes = files.map(({ path }) => ({ data: { id: path, label: basename(path), ext: extname(path) }, group: "nodes" as const }));
+
+    // nodes: attach saved position if present
+    const nodes = files.map(({ path }) => {
+      const pos = positionsRef.current[path];
+      const el: any = { data: { id: path, label: basename(path), ext: extname(path) }, group: "nodes" as const };
+      if (pos && typeof pos.x === "number" && typeof pos.y === "number") el.position = pos;
+      return el;
+    });
+
     const pathSet = new Set(files.map((f) => f.path));
     const edges: CyElement[] = [];
     for (const f of files) {
       const refs = inferEdges(f.path, f.content || "");
-      for (const r of refs) {
-        const resolved = resolveRelative(f.path, r);
+      for (const rr of refs) {
+        const resolved = resolveRelative(f.path, rr);
         if (!resolved) continue;
         if (pathSet.has(resolved)) edges.push({ data: { id: `${f.path}=>${resolved}`, source: f.path, target: resolved }, group: "edges" });
         else {
@@ -435,9 +480,10 @@ export default function GraphPage() {
         }
       }
     }
+
     setElements([...nodes, ...edges]);
     setTree(buildTree(files.map((f) => f.path)));
-    setInfo(`Loaded project "${proj.name}" (${files.length} files)`);
+    setInfo(`Loaded project "${proj.name}" (${files.length} files${Object.keys(positionsRef.current).length ? ", layout restored" : ""})`);
     setPopups([]);
     setSelected(null);
   }
@@ -558,6 +604,9 @@ export default function GraphPage() {
     for (const f of files) map[f.path] = f.content;
     fileMapRef.current = map;
     setFileMap(map);
+
+    // reset positions for a fresh upload (not a saved project)
+    positionsRef.current = {};
 
     // nodes
     const nodes: CyElement[] = files.map(({ path }) => ({

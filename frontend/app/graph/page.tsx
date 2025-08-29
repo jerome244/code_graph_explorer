@@ -13,6 +13,9 @@ type PositionsMap = Record<string, NodeState>;
 
 type CyElement = cytoscape.ElementDefinition;
 
+// >>> Realtime peers for presence + cursors
+type Peer = { id: number; username: string; color: string; x?: number; y?: number };
+
 const ALLOWED_EXTS = new Set([
   ".c",
   ".h",
@@ -342,6 +345,92 @@ export default function GraphPage() {
       }
     })();
   }, []);
+
+  // ------------------------------ Realtime: state & connection ------------------------------
+  const [me, setMe] = useState<{ id: number; username: string } | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const wsReadyRef = useRef(false);
+  const applyingRemoteRef = useRef(false);
+  const peersRef = useRef<Map<number, Peer>>(new Map());
+  const [peers, setPeers] = useState<Peer[]>([]);
+
+  // who am I (for ignoring echoes)
+  useEffect(() => {
+    (async () => {
+      if (!authed) { setMe(null); return; }
+      try {
+        const r = await fetch("/api/auth/me", { cache: "no-store" });
+        if (r.ok) {
+          const u = await r.json();
+          setMe({ id: u.id, username: u.username });
+        } else {
+          setMe(null);
+        }
+      } catch { setMe(null); }
+    })();
+  }, [authed]);
+
+  // Open WebSocket for this project
+  useEffect(() => {
+    if (!authed || !projectId) {
+      if (wsRef.current) try { wsRef.current.close(); } catch {};
+      wsRef.current = null; wsReadyRef.current = false;
+      peersRef.current.clear(); setPeers([]);
+      return;
+    }
+
+    const proto = (typeof location !== "undefined" && location.protocol === "https:") ? "wss" : "ws";
+    const base = (process.env.NEXT_PUBLIC_DJANGO_WS_BASE as string | undefined) || `${proto}://${location.host}`;
+    const url = `${base}/ws/projects/${projectId}/`;
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    ws.onopen = () => { wsReadyRef.current = true; };
+    ws.onclose = () => { wsReadyRef.current = false; peersRef.current.clear(); setPeers([]); };
+    ws.onerror = () => { /* noop */ };
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "presence_state") {
+          const map = new Map<number, Peer>();
+          for (const p of msg.peers as Peer[]) map.set(p.id, p);
+          peersRef.current = map;
+          setPeers(Array.from(map.values()));
+        } else if (msg.type === "presence_join") {
+          const p: Peer = msg.peer;
+          peersRef.current.set(p.id, p);
+          setPeers(Array.from(peersRef.current.values()));
+        } else if (msg.type === "presence_leave") {
+          const id: number = msg.peer?.id;
+          peersRef.current.delete(id);
+          setPeers(Array.from(peersRef.current.values()));
+        } else if (msg.type === "cursor") {
+          const id: number | null = msg.peer_id ?? null;
+          const data = msg.data || {};
+          if (id != null) {
+            const prev = peersRef.current.get(id);
+            if (prev) {
+              peersRef.current.set(id, { ...prev, x: data.x, y: data.y });
+              setPeers(Array.from(peersRef.current.values()));
+            }
+          }
+        } else if (msg.type === "node_move") {
+          const { path, x, y, by } = msg.data || {};
+          if (!path || by === me?.id) return; // ignore own echoes
+          const cy = cyRef.current;
+          if (!cy) return;
+          const node = cy.getElementById(path);
+          if (node && (node as any).length) {
+            applyingRemoteRef.current = true;
+            node.position({ x, y });
+            applyingRemoteRef.current = false;
+          }
+        }
+      } catch {}
+    };
+
+    return () => { try { ws.close(); } catch {}; wsRef.current = null; wsReadyRef.current = false; };
+  }, [authed, projectId, me?.id]);
 
   // Create cy once (strict-mode safe)
   useEffect(() => {
@@ -753,6 +842,72 @@ export default function GraphPage() {
     setProjectName(file.name.replace(/\.zip$/i, "") || "My Project");
   }, []);
 
+  // ------------------------------ Realtime: broadcast drags + cursors ------------------------------
+  // Hook node drag events to broadcast positions
+  useEffect(() => {
+    const cy = cyRef.current;
+    const ws = wsRef.current;
+    if (!cy || !ws) return;
+
+    let raf = 0;
+    const send = (id: string, pos: {x:number; y:number}) => {
+      if (!wsRef.current || wsRef.current.readyState !== 1) return;
+      wsRef.current.send(JSON.stringify({ type: "node_move", path: id, x: pos.x, y: pos.y }));
+    };
+
+    const onDrag = (evt: any) => {
+      if (applyingRemoteRef.current) return;
+      const id = evt.target.id();
+      const p = evt.target.position();
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; send(id, p); });
+    };
+    const onDragfree = (evt: any) => {
+      if (applyingRemoteRef.current) return;
+      const id = evt.target.id();
+      const p = evt.target.position();
+      send(id, p);
+    };
+
+    cy.on("drag", "node", onDrag);
+    cy.on("dragfree", "node", onDragfree);
+
+    return () => {
+      try {
+        cy.off("drag", "node", onDrag);
+        cy.off("dragfree", "node", onDragfree);
+      } catch {}
+      cancelAnimationFrame(raf);
+    };
+  }, [projectId, wsRef.current]);
+
+  // Send cursor positions over WS
+  useEffect(() => {
+    const root = containerRef.current;
+    const ws = wsRef.current;
+    if (!root || !ws) return;
+
+    let raf = 0;
+    let last = { x: 0, y: 0 };
+    const onMove = (e: MouseEvent) => {
+      const rect = root.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      last = { x, y };
+      if (!raf) {
+        raf = requestAnimationFrame(() => {
+          raf = 0;
+          if (wsRef.current && wsRef.current.readyState === 1) {
+            wsRef.current.send(JSON.stringify({ type: "cursor", x: last.x, y: last.y }));
+          }
+        });
+      }
+    };
+
+    root.addEventListener("mousemove", onMove);
+    return () => { root.removeEventListener("mousemove", onMove); cancelAnimationFrame(raf); };
+  }, [projectId, wsRef.current]);
+
   // ------------------------------ Render ------------------------------
 
   return (
@@ -835,7 +990,7 @@ export default function GraphPage() {
             onClick={() => setShareOpen((o) => !o)}
             disabled={!authed || !projectId}
             style={{ fontSize: 12, border: "1px solid #ddd", padding: "4px 8px", borderRadius: 8, background: "white" }}
-            title={projectId ? "Share this project" : "Save or load a project to share"}
+            title={projectId ? "Share this project" : "Save or load a project to share" }
           >
             {shareOpen ? "Close sharing" : "Share…"}
           </button>
@@ -847,7 +1002,7 @@ export default function GraphPage() {
           </p>
         )}
 
-        {/* Share panel */}
+        {/* Share panel (unchanged UI; calls your /api/projects/:id/share/ proxy) */}
         {shareOpen && projectId && (
           <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -980,7 +1135,37 @@ export default function GraphPage() {
         </div>
 
         {/* Cytoscape canvas */}
-        <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+        <div ref={containerRef} style={{ position: "relative", width: "100%", height: "100%" }} />
+
+        {/* Presence avatars */}
+        {peers.length > 0 && (
+          <div style={{ position: "absolute", right: 12, top: 12, display: "flex", gap: 6, zIndex: 30 }}>
+            {peers.map(p => (
+              <div
+                key={p.id}
+                title={p.username}
+                style={{
+                  width: 24, height: 24, borderRadius: 9999, background: p.color, color: "white",
+                  display: "grid", placeItems: "center", fontSize: 12, boxShadow: "0 0 0 2px white"
+                }}
+              >
+                {p.username[0]?.toUpperCase()}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Remote cursors */}
+        <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 25 }}>
+          {peers.filter(p => p.x != null && p.y != null).map(p => (
+            <div key={"cursor-"+p.id} style={{ position:"absolute", left: (p.x||0) + "px", top: (p.y||0)+"px", transform:"translate(-50%, -50%)" }}>
+              <div style={{ width: 8, height: 8, borderRadius: 9999, background: p.color }} />
+              <div style={{ position: "absolute", top: 10, left: 8, background: "rgba(255,255,255,0.9)", border: "1px solid #e5e7eb", borderRadius: 6, padding: "2px 6px", fontSize: 10 }}>
+                {p.username}
+              </div>
+            </div>
+          ))}
+        </div>
 
         {/* Editable popups (smaller, resizable, follow nodes) */}
         {popups.map((pp) => (

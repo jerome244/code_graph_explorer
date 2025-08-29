@@ -8,6 +8,11 @@ DEBUG = os.environ.get("DEBUG", "1") == "1"
 ALLOWED_HOSTS = ["*"]
 
 INSTALLED_APPS = [
+    # --- Channels realtime apps (must come before contrib apps or after — order doesn't matter) ---
+    "channels",
+    "realtime",
+
+    # --- Django & third-party ---
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -16,6 +21,8 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "corsheaders",
+
+    # --- Project apps ---
     "users",
     "projects",
 ]
@@ -47,6 +54,8 @@ TEMPLATES = [
         },
     },
 ]
+
+# WSGI is still fine to keep for any WSGI hosting; ASGI below is used for websockets:
 WSGI_APPLICATION = "config.wsgi.application"
 
 # DB: default SQLite for quick start; swap to Postgres via env vars when ready
@@ -83,7 +92,7 @@ REST_FRAMEWORK = {
     ),
 }
 
-from rest_framework.settings import api_settings
+from rest_framework.settings import api_settings  # noqa
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
@@ -93,3 +102,13 @@ SIMPLE_JWT = {
 }
 
 CORS_ALLOW_ALL_ORIGINS = True  # for dev; tighten in prod
+
+# ---------- Channels / ASGI ----------
+ASGI_APPLICATION = "config.asgi.application"
+
+# In-memory layer is fine for local/dev. Use Redis in production (channels_redis).
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+    }
+}

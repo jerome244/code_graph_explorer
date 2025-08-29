@@ -292,7 +292,7 @@ export default function GraphPage() {
   }
 
   // multi-popups that follow nodes; editable
-  type Popup = { path: string; x: number; y: number; draft: string; dirty: boolean };
+  type Popup = { path: string; x: number; y: number; draft: string; dirty: boolean; w?: number; h?: number };
   const [popups, setPopups] = useState<Popup[]>([]);
   const popupsRef = useRef<Popup[]>([]);
   useEffect(() => {
@@ -351,6 +351,7 @@ export default function GraphPage() {
   const wsRef = useRef<WebSocket | null>(null);
   const wsReadyRef = useRef(false);
   const applyingRemoteRef = useRef(false);
+  const applyingRemotePopupRef = useRef(false);
   const peersRef = useRef<Map<number, Peer>>(new Map());
   const [peers, setPeers] = useState<Peer[]>([]);
 
@@ -461,6 +462,17 @@ export default function GraphPage() {
           if (!path || by === me?.id) return;
           setPopups((cur) => cur.filter((p) => p.path !== path));
           setSelected((sel) => (sel === path ? null : sel));
+        } else if (msg.type === "popup_resize") {
+          const { path, w, h, by } = msg.data || {};
+          if (!path || by === me?.id) return;
+          applyingRemotePopupRef.current = true;
+          setPopups((cur) =>
+            cur.map((p) => (p.path === path ? { ...p, w: Number(w) || undefined, h: Number(h) || undefined } : p))
+          );
+          // keep guard for two RAFs to avoid echo
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => { applyingRemotePopupRef.current = false; });
+          });
         }
       } catch {}
     };
@@ -532,7 +544,7 @@ export default function GraphPage() {
           if (prev.length !== next.length) return next;
           for (let i = 0; i < prev.length; i++) {
             const a = prev[i], b = next[i];
-            if (a.path !== b.path || a.x !== b.x || a.y !== b.y || a.draft !== b.draft || a.dirty !== b.dirty) return next;
+            if (a.path !== b.path || a.x !== b.x || a.y !== b.y || a.draft !== b.draft || a.dirty !== b.dirty || a.w !== b.w || a.h !== b.h) return next;
           }
           return prev;
         });
@@ -949,6 +961,63 @@ export default function GraphPage() {
     return () => { root.removeEventListener("mousemove", onMove); cancelAnimationFrame(raf); };
   }, [projectId]);
 
+  // ------------------------------ Popup Resize Sync ------------------------------
+  const resizeObserversRef = useRef<Map<string, ResizeObserver>>(new Map());
+  const resizeRAFRef = useRef<Map<string, number>>(new Map());
+
+  useEffect(() => {
+    // Detach observers for closed popups
+    for (const [path, obs] of resizeObserversRef.current) {
+      if (!popupsRef.current.some((p) => p.path === path)) {
+        obs.disconnect();
+        resizeObserversRef.current.delete(path);
+      }
+    }
+
+    // Attach observers for open popups
+    for (const p of popupsRef.current) {
+      if (resizeObserversRef.current.has(p.path)) continue;
+      const el = document.querySelector<HTMLElement>(`[data-popup-path="${p.path}"]`);
+      if (!el) continue;
+
+      const obs = new ResizeObserver(() => {
+        if (applyingRemotePopupRef.current) return; // don't echo remote changes
+
+        const rect = el.getBoundingClientRect(); // border-box size
+        const w = Math.round(rect.width);
+        const h = Math.round(rect.height);
+
+        const cur = popupsRef.current.find((x) => x.path === p.path);
+        if (!cur) return;
+
+        const dw = Math.abs((cur.w ?? 0) - w);
+        const dh = Math.abs((cur.h ?? 0) - h);
+        if ((cur.w != null && dw < 1) && (cur.h != null && dh < 1)) return; // ignore jitter
+
+        const prevId = resizeRAFRef.current.get(p.path);
+        if (prevId) cancelAnimationFrame(prevId);
+        const rafId = requestAnimationFrame(() => {
+          setPopups((list) => list.map((x) => (x.path === p.path ? { ...x, w, h } : x)));
+          const ws = wsRef.current;
+          if (ws && ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: "popup_resize", path: p.path, w, h }));
+          }
+        });
+        resizeRAFRef.current.set(p.path, rafId);
+      });
+
+      obs.observe(el);
+      resizeObserversRef.current.set(p.path, obs);
+    }
+
+    return () => {
+      for (const [, obs] of resizeObserversRef.current) obs.disconnect();
+      resizeObserversRef.current.clear();
+      for (const [, id] of resizeRAFRef.current) cancelAnimationFrame(id);
+      resizeRAFRef.current.clear();
+    };
+  }, [popups]);
+
   // ------------------------------ Render ------------------------------
 
   return (
@@ -1208,7 +1277,7 @@ export default function GraphPage() {
           ))}
         </div>
 
-        {/* Editable popups (smaller, resizable, follow nodes) */}
+        {/* Editable popups (resizable + synced) */}
         {popups.map((pp) => (
           <div
             key={pp.path}
@@ -1222,14 +1291,16 @@ export default function GraphPage() {
               border: "1px solid #e5e7eb",
               borderRadius: 8,
               boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-              width: "clamp(240px, 26vw, 520px)",
+              width: pp.w ? pp.w : "clamp(240px, 26vw, 520px)",
+              height: pp.h ? pp.h : undefined,
               minHeight: 140,
-              maxHeight: "40vh",
+              maxHeight: pp.h ? undefined : "40vh",
               display: "flex",
               flexDirection: "column",
               overflow: "hidden",
               zIndex: 20,
               resize: "both",
+              boxSizing: "border-box",
             }}
             onWheel={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}

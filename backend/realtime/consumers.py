@@ -1,11 +1,10 @@
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
-from channels.db import database_sync_to_async
 from django.contrib.auth.models import AnonymousUser
-import secrets
 
 # Very light in-memory presence just for demo/dev
 # { group_name: { user_id: {"id": int, "username": str, "color": str} } }
 PRESENCE = {}
+
 
 def _color_for_user(uid: int) -> str:
     # stable pastel-ish color by uid
@@ -14,6 +13,7 @@ def _color_for_user(uid: int) -> str:
     g = 120 + ((rng >> 6) & 0x3F)
     b = 120 + ((rng >> 12) & 0x3F)
     return f"rgb({r},{g},{b})"
+
 
 class ProjectConsumer(AsyncJsonWebsocketConsumer):
     """
@@ -48,7 +48,7 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
         # Announce my join to others
         await self.channel_layer.group_send(
             self.group_name,
-            {"type": "broadcast", "payload": {"type": "presence_join", "peer": me}}
+            {"type": "broadcast", "payload": {"type": "presence_join", "peer": me}},
         )
 
     async def disconnect(self, code):
@@ -66,7 +66,7 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
             peer = peers.pop(user.id)
             await self.channel_layer.group_send(
                 self.group_name,
-                {"type": "broadcast", "payload": {"type": "presence_leave", "peer": {"id": peer["id"]}}}
+                {"type": "broadcast", "payload": {"type": "presence_leave", "peer": {"id": peer["id"]}}},
             )
         if not peers:
             PRESENCE.pop(self.group_name, None)
@@ -98,7 +98,12 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
                     "type": "broadcast",
                     "payload": {
                         "type": "node_move",
-                        "data": {"path": content.get("path"), "x": content.get("x"), "y": content.get("y"), "by": user.id},
+                        "data": {
+                            "path": content.get("path"),
+                            "x": content.get("x"),
+                            "y": content.get("y"),
+                            "by": user.id,
+                        },
                     },
                 },
             )
@@ -111,21 +116,22 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
                     "type": "broadcast",
                     "payload": {
                         "type": "node_visibility",
-                        "data": {"path": content.get("path"), "hidden": bool(content.get("hidden")), "by": user.id},
+                        "data": {
+                            "path": content.get("path"),
+                            "hidden": bool(content.get("hidden")),
+                            "by": user.id,
+                        },
                     },
                 },
             )
 
-        # >>> NEW: Popup open/close <<<
+        # Popup open/close
         elif t == "popup_open":
             await self.channel_layer.group_send(
                 self.group_name,
                 {
                     "type": "broadcast",
-                    "payload": {
-                        "type": "popup_open",
-                        "data": {"path": content.get("path"), "by": user.id},
-                    },
+                    "payload": {"type": "popup_open", "data": {"path": content.get("path"), "by": user.id}},
                 },
             )
 
@@ -134,9 +140,24 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
                 self.group_name,
                 {
                     "type": "broadcast",
+                    "payload": {"type": "popup_close", "data": {"path": content.get("path"), "by": user.id}},
+                },
+            )
+
+        # >>> Popup resize (added)
+        elif t == "popup_resize":
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "broadcast",
                     "payload": {
-                        "type": "popup_close",
-                        "data": {"path": content.get("path"), "by": user.id},
+                        "type": "popup_resize",
+                        "data": {
+                            "path": content.get("path"),
+                            "w": content.get("w"),
+                            "h": content.get("h"),
+                            "by": user.id,
+                        },
                     },
                 },
             )

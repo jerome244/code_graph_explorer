@@ -3,6 +3,7 @@
 
 import JSZip from "jszip";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import * as cytoscapeImport from "cytoscape";
 const cytoscape = (cytoscapeImport as any).default ?? (cytoscapeImport as any);
 
@@ -1020,6 +1021,11 @@ export default function GraphPage() {
   const resizeObserversRef = useRef<Map<string, ResizeObserver>>(new Map());
   const resizeRAFRef = useRef<Map<string, number>>(new Map());
 
+  // small helper for attribute selectors (paths)
+  function cssAttrEscape(v: string) {
+    return v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  }
+
   useEffect(() => {
     // Detach observers for closed popups
     for (const [path, obs] of resizeObserversRef.current) {
@@ -1032,7 +1038,7 @@ export default function GraphPage() {
     // Attach observers for open popups
     for (const p of popupsRef.current) {
       if (resizeObserversRef.current.has(p.path)) continue;
-      const el = document.querySelector<HTMLElement>(`[data-popup-path="${p.path.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`);
+      const el = document.querySelector<HTMLElement>(`[data-popup-path="${cssAttrEscape(p.path)}"]`);
       if (!el) continue;
 
       const obs = new ResizeObserver(() => {
@@ -1065,7 +1071,7 @@ export default function GraphPage() {
       resizeObserversRef.current.set(p.path, obs);
     }
 
-  return () => {
+    return () => {
       for (const [, obs] of resizeObserversRef.current) obs.disconnect();
       resizeObserversRef.current.clear();
       for (const [, id] of resizeRAFRef.current) cancelAnimationFrame(id);
@@ -1074,15 +1080,24 @@ export default function GraphPage() {
   }, [popups]);
 
   // ------------------------------ CALLER⇢DECLARER POPUP LINK OVERLAY ------------------------------
-  function cssAttrEscape(v: string) {
-    return v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  }
+
+  // global toggle + portal mount guard
+  const [showLinks, setShowLinks] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
+  // Robust CSS.escape fallback for [data-func="<name>"]
+  const cssEscape = (val: string) => {
+    // @ts-ignore
+    return (window as any).CSS?.escape ? (window as any).CSS.escape(val) : val.replace(/"/g, '\\"');
+  };
 
   type PopupLink = { x1: number; y1: number; x2: number; y2: number; label: string; color: string };
-
   const [popupLinks, setPopupLinks] = useState<PopupLink[]>([]);
 
   useEffect(() => {
+    if (!showLinks) { setPopupLinks([]); return; }
+
     let raf = 0;
 
     // Build the single-line string of the span's row and check for imports
@@ -1118,9 +1133,10 @@ export default function GraphPage() {
       const pre = root.querySelector<HTMLElement>("pre");
       if (!pre) return null;
 
+      const nameEsc = cssEscape(funcName);
       const selectors = [
-        `[data-func="${funcName}"][data-role="${role}"]`,
-        `[data-func="${funcName}"]`,
+        `[data-func="${nameEsc}"][data-role="${role}"]`,
+        `[data-func="${nameEsc}"]`,
       ];
 
       for (const sel of selectors) {
@@ -1199,7 +1215,7 @@ export default function GraphPage() {
 
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [funcIndex, popups]);
+  }, [funcIndex, popups, showLinks]);
 
   // ------------------------------ Render ------------------------------
 
@@ -1422,9 +1438,28 @@ export default function GraphPage() {
             padding: "4px 8px",
             borderRadius: 8,
             border: "1px solid #e5e7eb",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
           }}
         >
           {selected ? <strong>{selected}</strong> : <span>Select a file from the tree or graph</span>}
+          {/* Global toggle, disabled if fewer than 2 popups */}
+          <button
+            onClick={() => setShowLinks((v) => !v)}
+            disabled={popups.length < 2}
+            title={popups.length < 2 ? "Open two popups to link calls to declarations" : (showLinks ? "Hide lines" : "Show lines")}
+            style={{
+              fontSize: 11,
+              padding: "4px 6px",
+              borderRadius: 6,
+              border: "1px solid #e5e7eb",
+              background: showLinks ? "#eef2ff" : "white",
+              cursor: popups.length < 2 ? "not-allowed" : "pointer",
+            }}
+          >
+            {showLinks ? "Hide lines" : "Show lines"}
+          </button>
         </div>
 
         {/* Cytoscape canvas */}
@@ -1500,12 +1535,29 @@ export default function GraphPage() {
                 borderTopRightRadius: 8,
                 fontSize: 12,
                 flex: "0 0 auto",
+                gap: 8,
               }}
             >
               <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "30vw" }}>
                 {basename(pp.path)}
               </strong>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                {/* Per-popup button controlling global toggle for convenience */}
+                <button
+                  onClick={() => setShowLinks((v) => !v)}
+                  disabled={popups.length < 2}
+                  title={popups.length < 2 ? "Open two popups to link calls to declarations" : (showLinks ? "Hide lines" : "Show lines")}
+                  style={{
+                    border: "1px solid #ddd",
+                    background: showLinks ? "#eef2ff" : "white",
+                    padding: "4px 6px",
+                    borderRadius: 6,
+                    fontSize: 11,
+                    cursor: popups.length < 2 ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {showLinks ? "Lines on" : "Lines off"}
+                </button>
                 {pp.dirty && <span style={{ fontSize: 11, color: "#9a3412" }}>● unsaved</span>}
                 <button
                   onClick={() => {
@@ -1538,40 +1590,44 @@ export default function GraphPage() {
           </div>
         ))}
 
-        {/* Link overlay (caller → declarer) — TOP layer; plain lines, no arrow heads */}
-        <svg
-          style={{
-            position: "fixed",
-            inset: 0,
-            width: "100vw",
-            height: "100vh",
-            zIndex: 50,
-            pointerEvents: "none",
-          }}
-        >
-          {popupLinks.map((l, i) => (
-            <g key={i} style={{ color: l.color }}>
-              <path
-                d={`M ${l.x1} ${l.y1} C ${l.x1 + 60} ${l.y1}, ${l.x2 - 60} ${l.y2}, ${l.x2} ${l.y2}`}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                strokeOpacity={0.95}
-                strokeLinecap="round"
-              />
-              <text
-                x={(l.x1 + l.x2) / 2}
-                y={(l.y1 + l.y2) / 2 - 6}
-                fontSize={10}
-                fontFamily="ui-sans-serif, system-ui, Segoe UI, Roboto, Helvetica, Arial"
-                textAnchor="middle"
-                opacity={0.9}
-              >
-                {l.label}
-              </text>
-            </g>
-          ))}
-        </svg>
+        {/* Link overlay (caller → declarer) — TOP layer via portal; plain lines, no arrow heads */}
+        {mounted && showLinks && createPortal(
+          <svg
+            style={{
+              position: "fixed",
+              inset: 0,
+              width: "100vw",
+              height: "100vh",
+              zIndex: 9999,
+              pointerEvents: "none",
+            }}
+          >
+            {popupLinks.map((l, i) => (
+              <g key={i}>
+                <path
+                  d={`M ${l.x1} ${l.y1} C ${l.x1 + 60} ${l.y1}, ${l.x2 - 60} ${l.y2}, ${l.x2} ${l.y2}`}
+                  fill="none"
+                  stroke={l.color}
+                  strokeWidth={2}
+                  strokeOpacity={0.95}
+                  strokeLinecap="round"
+                />
+                <text
+                  x={(l.x1 + l.x2) / 2}
+                  y={(l.y1 + l.y2) / 2 - 6}
+                  fontSize={10}
+                  fontFamily="ui-sans-serif, system-ui, Segoe UI, Roboto, Helvetica, Arial"
+                  textAnchor="middle"
+                  opacity={0.9}
+                  fill={l.color}
+                >
+                  {l.label}
+                </text>
+              </g>
+            ))}
+          </svg>,
+          document.body
+        )}
       </section>
     </div>
   );

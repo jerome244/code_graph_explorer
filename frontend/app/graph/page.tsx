@@ -341,6 +341,16 @@ export default function GraphPage() {
     });
   }, [popups]);
 
+  // If global is ON and new popups open, ensure they are ON too
+  useEffect(() => {
+    if (!showLinesGlobal) return;
+    setPopupLinesEnabled((prev) => {
+      const next = { ...prev };
+      for (const p of popups) next[p.path] = true;
+      return next;
+    });
+  }, [showLinesGlobal, popups]);
+
   const togglePopupLines = (path: string) => {
     if (popups.length < 2) return; // nothing to link
     setPopupLinesEnabled((prev) => ({ ...prev, [path]: !prev[path] }));
@@ -1482,9 +1492,22 @@ export default function GraphPage() {
         >
           {selected ? <strong>{selected}</strong> : <span>Select a file from the tree or graph</span>}
           <button
-            onClick={() => setShowLinesGlobal((v) => !v)}
+            onClick={() => {
+              if (popups.length < 2) return;
+              setShowLinesGlobal((prev) => {
+                const next = !prev;
+                // flip all per-popup toggles to match global
+                setPopupLinesEnabled(() => {
+                  if (!next) return {}; // all off
+                  const m: Record<string, boolean> = {};
+                  for (const p of popupsRef.current) m[p.path] = true;
+                  return m; // all on
+                });
+                return next;
+              });
+            }}
             disabled={popups.length < 2}
-            title={popups.length < 2 ? "Open two popups to link calls to declarations" : (showLinesGlobal ? "Hide all lines" : "Show all lines")}
+            title={popups.length < 2 ? "Open two popups to link calls to declarations" : (showLinesGlobal ? "Turn ALL lines off" : "Turn ALL lines on")}
             style={{
               fontSize: 11,
               padding: "4px 6px",

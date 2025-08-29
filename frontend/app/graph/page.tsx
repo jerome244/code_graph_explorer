@@ -7,8 +7,11 @@ const cytoscape = (cytoscapeImport as any).default ?? (cytoscapeImport as any);
 
 // ------------------------------ Types & utils ------------------------------
 
+// Persist x/y *and* hidden flag per node
+type NodeState = { x?: number; y?: number; hidden?: boolean };
+type PositionsMap = Record<string, NodeState>;
+
 type CyElement = cytoscape.ElementDefinition;
-type PositionsMap = Record<string, { x: number; y: number }>;
 
 const ALLOWED_EXTS = new Set([
   ".c",
@@ -185,16 +188,17 @@ export default function GraphPage() {
     fileMapRef.current = fileMap;
   }, [fileMap]);
 
-  // Positions (persisted on save)
+  // Positions (+ hidden) persisted on save
   const positionsRef = useRef<PositionsMap>({});
 
+  // Snapshot x/y + hidden per node
   function snapshotPositions(): PositionsMap {
     const cy = cyRef.current;
     const out: PositionsMap = {};
     if (!cy) return out;
     cy.nodes().forEach((n) => {
       const p = n.position();
-      out[n.id()] = { x: p.x, y: p.y };
+      out[n.id()] = { x: p.x, y: p.y, hidden: n.hidden() };
     });
     return out;
   }
@@ -235,10 +239,9 @@ export default function GraphPage() {
 
   useEffect(() => {
     if (shareOpen) fetchProjectDetail();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareOpen, projectId]);
 
-  // simple debounce for user search
+  // debounce user search
   useEffect(() => {
     const h = setTimeout(async () => {
       if (!shareOpen) return;
@@ -429,7 +432,6 @@ export default function GraphPage() {
       cancelAnimationFrame(raf);
       cyRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cyStylesheet]);
 
   // Apply elements (only relayout here)
@@ -454,6 +456,15 @@ export default function GraphPage() {
         cy.fit(undefined, 20);
       }
     }
+
+    // Apply hidden/show from persisted positions
+    Object.entries(positionsRef.current).forEach(([id, st]) => {
+      if (!st) return;
+      const n = cy.$id(id);
+      if (!n.length) return;
+      if (st.hidden) n.hide();
+      else n.show();
+    });
 
     // prune popups for removed nodes
     setPopups((cur) => cur.filter((p) => cy.$id(p.path).length > 0));
@@ -485,7 +496,7 @@ export default function GraphPage() {
       alert("Give your project a name first");
       return;
     }
-    const positions = snapshotPositions();
+    const positions = snapshotPositions(); // includes hidden
     const r = await fetch("/api/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -512,7 +523,7 @@ export default function GraphPage() {
       body: JSON.stringify({ files }),
     });
 
-    // Save current node positions on the project
+    // Save current node positions (+ hidden) on the project
     const rp = await fetch(`/api/projects/${projectId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -532,7 +543,7 @@ export default function GraphPage() {
     setProjectId(proj.id);
     setProjectName(proj.name);
 
-    // positions
+    // restore positions (+ hidden)
     positionsRef.current = (proj.positions ?? {}) as PositionsMap;
 
     const newMap: Record<string, string> = {};
@@ -542,11 +553,11 @@ export default function GraphPage() {
 
     const files = Object.entries(newMap).map(([path, content]) => ({ path, content }));
 
-    // nodes: attach saved position if present
+    // nodes: attach saved x/y if present (hidden applied after render)
     const nodes = files.map(({ path }) => {
       const pos = positionsRef.current[path];
       const el: any = { data: { id: path, label: basename(path), ext: extname(path) }, group: "nodes" as const };
-      if (pos && typeof pos.x === "number" && typeof pos.y === "number") el.position = pos;
+      if (pos && typeof pos.x === "number" && typeof pos.y === "number") el.position = { x: pos.x, y: pos.y };
       return el;
     });
 
@@ -655,15 +666,23 @@ export default function GraphPage() {
     const isHidden = (node as any).hidden ? (node as any).hidden() : node.style("display") === "none";
 
     if (isHidden) {
+      // SHOW
       node.show();
       node.connectedEdges().forEach((e) => {
         if (!e.source().hidden() && !e.target().hidden()) e.show();
       });
+      // persist hidden=false
+      positionsRef.current[id] = { ...(positionsRef.current[id] || {}), hidden: false };
+
       cy.animate({ center: { eles: node }, duration: 250, easing: "ease-in-out" });
       setSelected(id);
     } else {
+      // HIDE
       node.hide();
       node.connectedEdges().hide();
+      // persist hidden=true
+      positionsRef.current[id] = { ...(positionsRef.current[id] || {}), hidden: true };
+
       const popped = popupsRef.current.find((pp) => pp.path === id);
       if (popped && popped.dirty) savePopup(id);
       setPopups((cur) => cur.filter((pp) => pp.path !== id));
@@ -811,7 +830,7 @@ export default function GraphPage() {
             Save all
           </button>
 
-          {/* ---------------- SHARE ADDITIONS: button ---------------- */}
+          {/* Share button */}
           <button
             onClick={() => setShareOpen((o) => !o)}
             disabled={!authed || !projectId}
@@ -828,7 +847,7 @@ export default function GraphPage() {
           </p>
         )}
 
-        {/* ---------------- SHARE ADDITIONS: panel ---------------- */}
+        {/* Share panel */}
         {shareOpen && projectId && (
           <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

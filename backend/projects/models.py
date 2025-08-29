@@ -1,17 +1,31 @@
 from django.conf import settings
 from django.db import models
 
+
 class Project(models.Model):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="projects")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="projects",
+    )
     name = models.CharField(max_length=200)
     # { [filePath]: {x: number, y: number} }
-    positions = models.JSONField(blank=True, default=dict)  # <— NEW
+    positions = models.JSONField(blank=True, default=dict)
+    # NEW: share with specific users
+    shared_with = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        related_name="shared_projects",
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         unique_together = ("user", "name")
         ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.name}"
 
 
 class ProjectFile(models.Model):

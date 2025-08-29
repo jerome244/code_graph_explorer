@@ -843,16 +843,16 @@ export default function GraphPage() {
   }, []);
 
   // ------------------------------ Realtime: broadcast drags + cursors ------------------------------
-  // Hook node drag events to broadcast positions
+  // Hook node drag events to broadcast positions (attach regardless of WS timing)
   useEffect(() => {
     const cy = cyRef.current;
-    const ws = wsRef.current;
-    if (!cy || !ws) return;
+    if (!cy) return;
 
     let raf = 0;
     const send = (id: string, pos: {x:number; y:number}) => {
-      if (!wsRef.current || wsRef.current.readyState !== 1) return;
-      wsRef.current.send(JSON.stringify({ type: "node_move", path: id, x: pos.x, y: pos.y }));
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify({ type: "node_move", path: id, x: pos.x, y: pos.y }));
     };
 
     const onDrag = (evt: any) => {
@@ -879,13 +879,12 @@ export default function GraphPage() {
       } catch {}
       cancelAnimationFrame(raf);
     };
-  }, [projectId, wsRef.current]);
+  }, [projectId]);
 
-  // Send cursor positions over WS
+  // Send cursor positions over WS (attach regardless of WS timing)
   useEffect(() => {
     const root = containerRef.current;
-    const ws = wsRef.current;
-    if (!root || !ws) return;
+    if (!root) return;
 
     let raf = 0;
     let last = { x: 0, y: 0 };
@@ -897,8 +896,9 @@ export default function GraphPage() {
       if (!raf) {
         raf = requestAnimationFrame(() => {
           raf = 0;
-          if (wsRef.current && wsRef.current.readyState === 1) {
-            wsRef.current.send(JSON.stringify({ type: "cursor", x: last.x, y: last.y }));
+          const ws = wsRef.current;
+          if (ws && ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: "cursor", x: last.x, y: last.y }));
           }
         });
       }
@@ -906,7 +906,7 @@ export default function GraphPage() {
 
     root.addEventListener("mousemove", onMove);
     return () => { root.removeEventListener("mousemove", onMove); cancelAnimationFrame(raf); };
-  }, [projectId, wsRef.current]);
+  }, [projectId]);
 
   // ------------------------------ Render ------------------------------
 
@@ -985,7 +985,7 @@ export default function GraphPage() {
             Save all
           </button>
 
-          {/* Share button */}
+        {/* Share button */}
           <button
             onClick={() => setShareOpen((o) => !o)}
             disabled={!authed || !projectId}

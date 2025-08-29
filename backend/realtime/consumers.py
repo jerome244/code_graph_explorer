@@ -96,13 +96,20 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
 
     # Handlers for group messages
     async def presence_join(self, event):
-        await self.send_json({"type": "presence_join", **event})
+        await self.send_json({"type": "presence_join", "peer": event.get("peer")})
 
     async def presence_leave(self, event):
-        await self.send_json({"type": "presence_leave", **event})
+        await self.send_json({"type": "presence_leave", "peer": event.get("peer")})
 
     async def cursor_update(self, event):
-        await self.send_json({"type": "cursor", **event})
+        await self.send_json({
+            "type": "cursor",
+            "peer_id": event.get("peer_id"),
+            "data": event.get("data"),
+        })
 
     async def node_move(self, event):
-        await self.send_json({"type": "node_move", **event})
+        await self.send_json({
+            "type": "node_move",
+            "data": event.get("data"),
+        })

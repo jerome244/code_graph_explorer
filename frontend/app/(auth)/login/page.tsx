@@ -8,9 +8,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const router = useRouter();
-  const next = useSearchParams().get("next") || "/";
+  const params = useSearchParams();
+  const next = params.get("next");
 
-  const onSubmit = async (e: React.FormEvent) => {
+  function safeNext(p?: string | null) {
+    return p && p.startsWith("/") && !p.startsWith("//") ? p : "/dashboard";
+  }
+
+  const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setErr(null);
     const r = await fetch("/api/auth/login", {
@@ -18,8 +23,11 @@ export default function LoginPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     });
-    if (r.ok) router.replace(next);
-    else setErr("Invalid credentials");
+    if (r.ok) {
+      router.replace(safeNext(next));
+    } else {
+      setErr(await r.text().catch(() => "Invalid credentials"));
+    }
   };
 
   return (

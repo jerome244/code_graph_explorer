@@ -142,18 +142,18 @@ export default function GraphPage() {
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [info, setInfo] = useState<string>("Upload a .zip to begin");
 
-  // file contents + ref (handlers always read latest)
+  // file contents + ref so handlers always read latest
   const [fileMap, setFileMap] = useState<Record<string, string>>({});
   const fileMapRef = useRef<Record<string, string>>({});
   useEffect(() => {
     fileMapRef.current = fileMap;
   }, [fileMap]);
 
-  // selected file for the small badge
+  // selected badge
   const [selected, setSelected] = useState<string | null>(null);
 
-  // MULTI popups that follow nodes
-  type Popup = { path: string; x: number; y: number };
+  // MULTI popups (editable) that follow nodes
+  type Popup = { path: string; x: number; y: number; draft: string; dirty: boolean };
   const [popups, setPopups] = useState<Popup[]>([]);
   const popupsRef = useRef<Popup[]>([]);
   useEffect(() => {
@@ -163,86 +163,71 @@ export default function GraphPage() {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
 
-  // even smaller nodes
+  // tiny nodes
   const cyStylesheet = useMemo<cytoscape.Stylesheet[]>(
     () => [
-      {
-        selector: "node",
-        style: {
-          label: "data(label)",
-          "font-size": 8,
-          "text-valign": "center",
-          "text-halign": "center",
-          width: 14,
-          height: 14,
-        },
-      },
+      { selector: "node", style: { label: "data(label)", "font-size": 8, "text-valign": "center", "text-halign": "center", width: 14, height: 14 } },
       { selector: "edge", style: { width: 1, "curve-style": "bezier", "target-arrow-shape": "triangle" } },
       { selector: "node:selected", style: { "border-width": 2, "border-color": "#2563eb" } },
-      // dim hidden nodes just in case (extra guard)
       { selector: "node[?hidden]", style: { opacity: 0.2 } },
     ],
     []
   );
 
-  // Create cy ONCE
+  // create cy once
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     if (cyRef.current) {
-      try {
-        cyRef.current.stop();
-        cyRef.current.destroy();
-      } catch {}
+      try { cyRef.current.stop(); cyRef.current.destroy(); } catch {}
       cyRef.current = null;
     }
 
-    const cy = cytoscape({
-      container,
-      elements: [],
-      style: cyStylesheet as any,
-      wheelSensitivity: 0.2,
-    });
+    const cy = cytoscape({ container, elements: [], style: cyStylesheet as any, wheelSensitivity: 0.2 });
     cyRef.current = cy;
 
-    // open/close popup on node click (toggle)
+    // toggle popup on node click
     const onTapNode = (evt: any) => {
       const id: string = evt.target.id();
       const node = cy.$id(id);
       if (!node.length) return;
 
-      // if popup exists -> close it; else open it
       const exists = popupsRef.current.find((pp) => pp.path === id);
       if (exists) {
+        // save before close if dirty
+        if (exists.dirty) savePopup(id);
         setPopups((cur) => cur.filter((pp) => pp.path !== id));
         return;
       }
 
       const p = node.renderedPosition();
-      setPopups((cur) => [...cur, { path: id, x: p.x, y: p.y }]);
+      const code = fileMapRef.current[id] ?? "";
+      setPopups((cur) => [...cur, { path: id, x: p.x, y: p.y, draft: code, dirty: false }]);
       setSelected(id);
     };
     cy.on("tap", "node", onTapNode);
 
-    // keep popups following nodes while pan/zoom/move
+    // follow nodes on pan/zoom/move (preserve draft/dirty)
     let raf = 0;
     const scheduleFollow = () => {
       if (raf) return;
       raf = requestAnimationFrame(() => {
         raf = 0;
         const next: Popup[] = [];
-        const current = popupsRef.current;
-        for (const pop of current) {
-          const n = cy.$id(pop.path);
+        const prevByPath = new Map(popupsRef.current.map((p) => [p.path, p]));
+        for (const p of popupsRef.current) {
+          const n = cy.$id(p.path);
           if (!n.length) continue;
           const rp = n.renderedPosition();
-          next.push({ path: pop.path, x: rp.x, y: rp.y });
+          const prev = prevByPath.get(p.path)!;
+          next.push({ ...prev, x: rp.x, y: rp.y });
         }
         setPopups((prev) => {
           if (prev.length !== next.length) return next;
           for (let i = 0; i < prev.length; i++) {
-            if (prev[i].path !== next[i].path || prev[i].x !== next[i].x || prev[i].y !== next[i].y) return next;
+            const a = prev[i], b = next[i];
+            if (a.path !== b.path || a.x !== b.x || a.y !== b.y || a.draft !== b.draft || a.dirty !== b.dirty) return next;
           }
           return prev;
         });
@@ -274,7 +259,7 @@ export default function GraphPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cyStylesheet]);
 
-  // Update elements in-place
+  // update elements without recreating cy
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
@@ -295,30 +280,108 @@ export default function GraphPage() {
     setPopups((cur) => cur.filter((p) => cy.$id(p.path).length > 0));
   }, [elements]);
 
-  // Toggle node visibility from the tree
+  // document-level outside click (capture) → save any dirty popup not containing the click
+  useEffect(() => {
+    const onDownCapture = (ev: MouseEvent) => {
+      const target = ev.target as HTMLElement | null;
+      // collect all popup roots on the page
+      const roots = Array.from(document.querySelectorAll<HTMLElement>('[data-popup-path]'));
+      const dirty = popupsRef.current.filter((p) => p.dirty);
+      if (!dirty.length) return;
+
+      for (const p of dirty) {
+        const root = roots.find((el) => el.dataset.popupPath === p.path);
+        if (root && root.contains(target)) {
+          // clicked inside this popup → don't save it here
+          continue;
+        }
+        savePopup(p.path);
+      }
+    };
+    document.addEventListener("mousedown", onDownCapture, true); // capture phase
+    return () => document.removeEventListener("mousedown", onDownCapture, true);
+  }, []);
+
+  // save popup content → update fileMap + recompute edges for that file
+    const savePopup = useCallback((path: string) => {
+    const cy = cyRef.current;
+    const popup = popupsRef.current.find((pp) => pp.path === path);
+    if (!popup) return;
+
+    const draft = popup.draft;
+
+    if (draft !== fileMapRef.current[path]) {
+        // 1) update file contents (state + ref)
+        const newMap = { ...fileMapRef.current, [path]: draft };
+        fileMapRef.current = newMap;
+        setFileMap(newMap);
+
+        // 2) recompute this file's outgoing edges and update them directly in Cytoscape (no relayout)
+        const refs = inferEdges(path, draft);
+        const newEdges: CyElement[] = [];
+
+        if (cy) {
+        const nodeIds = new Set<string>(cy.nodes().map((n) => n.id()));
+        for (const r of refs) {
+            const resolved = resolveRelative(path, r);
+            if (!resolved) continue;
+
+            let target: string | null = null;
+            if (nodeIds.has(resolved)) {
+            target = resolved;
+            } else {
+            for (const ext of [".js", ".css", ".html", ".py", ".c", ".ts", ".tsx", ".jsx", ".h"]) {
+                const cand = `${resolved}${ext}`;
+                if (nodeIds.has(cand)) { target = cand; break; }
+            }
+            }
+
+            if (target) {
+            newEdges.push({
+                data: { id: `${path}=>${target}`, source: path, target }
+            });
+            }
+        }
+
+        cy.startBatch();
+        try {
+            // remove old outgoing edges for this source and add the new set
+            cy.edges().filter((e) => e.data("source") === path).remove();
+            if (newEdges.length) cy.add(newEdges);
+        } finally {
+            cy.endBatch();
+        }
+        }
+
+        // IMPORTANT: do NOT call setElements() here, or the graph will relayout and reset positions
+    }
+
+    // 3) mark popup as saved
+    setPopups((cur) => cur.map((pp) => (pp.path === path ? { ...pp, dirty: false } : pp)));
+    }, []);
+
+
+  // tree: toggle node visibility w/o zoom jump
   const toggleVisibilityFromTree = (id: string) => {
     const cy = cyRef.current;
     if (!cy) return;
     const node = cy.$id(id);
     if (!node.length) return;
 
-    // Prefer cytoscape API hidden()/visible() if present
     const isHidden = (node as any).hidden ? (node as any).hidden() : node.style("display") === "none";
 
     if (isHidden) {
       node.show();
-      // show connected edges (edges will still hide if the other end is hidden)
-      // show only edges whose both ends are visible
-      node.connectedEdges().forEach((e) => {
-        if (!e.source().hidden() && !e.target().hidden()) e.show();
-      });
-      // gently pan to the node, keep current zoom
+      node.connectedEdges().forEach((e) => { if (!e.source().hidden() && !e.target().hidden()) e.show(); });
       cy.animate({ center: { eles: node }, duration: 250, easing: "ease-in-out" });
       setSelected(id);
     } else {
       node.hide();
       node.connectedEdges().hide();
-      setPopups((cur) => cur.filter((pp) => pp.path !== id)); // close its popup if open
+      // close its popup if open (save if dirty first)
+      const popped = popupsRef.current.find((pp) => pp.path === id);
+      if (popped && popped.dirty) savePopup(id);
+      setPopups((cur) => cur.filter((pp) => pp.path !== id));
       if (selected === id) setSelected(null);
     }
   };
@@ -362,7 +425,7 @@ export default function GraphPage() {
         if (pathSet.has(resolved)) {
           edges.push({ data: { id: `${f.path}=>${resolved}`, source: f.path, target: resolved }, group: "edges" });
         } else {
-          for (const ext of [".js", ".css", ".html", ".py", ".c", ".ts", ".tsx", ".jsx"]) {
+          for (const ext of [".js", ".css", ".html", ".py", ".c", ".ts", ".tsx", ".jsx", ".h"]) {
             const cand = `${resolved}${ext}`;
             if (pathSet.has(cand)) {
               edges.push({ data: { id: `${f.path}=>${cand}`, source: f.path, target: cand }, group: "edges" });
@@ -401,11 +464,7 @@ export default function GraphPage() {
           }}
         />
         <p style={{ fontSize: 12, color: "#4b5563" }}>{info}</p>
-        {tree ? (
-          <TreeView node={tree} onSelect={toggleVisibilityFromTree} />
-        ) : (
-          <p style={{ fontSize: 12, color: "#6b7280" }}>No files yet.</p>
-        )}
+        {tree ? <TreeView node={tree} onSelect={toggleVisibilityFromTree} /> : <p style={{ fontSize: 12, color: "#6b7280" }}>No files yet.</p>}
       </aside>
 
       <section style={{ position: "relative", overflow: "hidden" }}>
@@ -424,30 +483,37 @@ export default function GraphPage() {
           {selected ? <strong>{selected}</strong> : <span>Select a file from the tree or graph</span>}
         </div>
 
-        {/* Graph canvas */}
+        {/* Cytoscape canvas */}
         <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
 
-        {/* Multiple popups that follow nodes; clicking same node closes its popup */}
+        {/* Editable popups that follow nodes; multiple allowed */}
         {popups.map((pp) => {
-          const code = fileMapRef.current[pp.path] ?? "(no content loaded)";
+          const code = pp.draft;
           return (
             <div
               key={pp.path}
-              style={{
-                position: "absolute",
-                left: Math.max(8, pp.x) + "px",
-                top: Math.max(8, pp.y) + "px",
-                transform: "translate(-50%, -110%)",
-                background: "white",
-                border: "1px solid #e5e7eb",
-                borderRadius: 8,
-                boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-                maxWidth: "40vw",
-                maxHeight: "40vh",
-                overflow: "auto",
-                zIndex: 20,
-              }}
+              data-popup-path={pp.path}
+            style={{
+            position: "absolute",
+            left: Math.max(8, pp.x) + "px",
+            top: Math.max(8, pp.y) + "px",
+            transform: "translate(-50%, -110%)",
+            background: "white",
+            border: "1px solid #e5e7eb",
+            borderRadius: 8,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
+            // smaller by default, but flexible
+            width: "clamp(240px, 26vw, 520px)",
+            maxHeight: "34vh",
+            minHeight: 140,
+            overflow: "hidden",
+            zIndex: 20,
+            // make the popup user-resizable
+            resize: "both",
+            }}
+
               onWheel={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
             >
               <div
                 style={{
@@ -465,26 +531,46 @@ export default function GraphPage() {
                 <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "30vw" }}>
                   {basename(pp.path)}
                 </strong>
-                <button
-                  onClick={() => setPopups((cur) => cur.filter((p) => p.path !== pp.path))}
-                  style={{ background: "none", border: 0, cursor: "pointer", fontSize: 16, lineHeight: 1 }}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ×
-                </button>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {pp.dirty && <span style={{ fontSize: 11, color: "#9a3412" }}>● unsaved</span>}
+                  <button
+                    onClick={() => {
+                      if (pp.dirty) savePopup(pp.path);
+                      setPopups((cur) => cur.filter((p) => p.path !== pp.path));
+                    }}
+                    style={{ background: "none", border: 0, cursor: "pointer", fontSize: 16, lineHeight: 1 }}
+                    aria-label="Close"
+                    title="Close"
+                  >
+                    ×
+                  </button>
+                </div>
               </div>
-              <pre
+              <textarea
+                value={code}
+                spellCheck={false}
+                onChange={(e) =>
+                  setPopups((cur) =>
+                    cur.map((p) => (p.path === pp.path ? { ...p, draft: e.target.value, dirty: true } : p))
+                  )
+                }
+                onBlur={() => savePopup(pp.path)}
                 style={{
-                  margin: 0,
-                  padding: "10px",
-                  whiteSpace: "pre",
-                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                  fontSize: 12,
+                display: "block",
+                width: "100%",
+                height: "calc(34vh - 34px)", // header is ~34px tall
+                padding: "8px",              // a bit tighter
+                border: 0,
+                outline: "none",
+                resize: "none",
+                whiteSpace: "pre",
+                overflow: "auto",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                fontSize: 11,                // slightly smaller font
+                lineHeight: 1.35,
                 }}
-              >
-{code}
-              </pre>
+
+              />
             </div>
           );
         })}

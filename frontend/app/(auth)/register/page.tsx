@@ -1,3 +1,4 @@
+// frontend/app/(auth)/register/page.tsx
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -9,23 +10,31 @@ export default function RegisterPage() {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
-  const onSubmit = async (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
+
     const resp = await fetch("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, email, password }),
     });
+
     if (resp.status === 201) {
-      // Auto-login after registration
+      // Auto-login after successful registration
       const login = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
-      if (login.ok) router.replace("/");
-      else router.replace("/login");
+
+      if (login.ok) {
+        router.replace("/dashboard"); // or "/"
+        router.refresh();             // ensure Nav re-renders with authenticated state
+      } else {
+        router.replace("/login");
+        router.refresh();
+      }
     } else {
       setError("Registration failed");
     }
@@ -37,15 +46,31 @@ export default function RegisterPage() {
       <form onSubmit={onSubmit}>
         <div>
           <label>Username</label>
-          <input value={username} onChange={(e) => setUsername(e.target.value)} required />
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+            autoComplete="username"
+          />
         </div>
         <div>
           <label>Email</label>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
+          />
         </div>
         <div>
           <label>Password</label>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            autoComplete="new-password"
+          />
         </div>
         {error && <p style={{ color: "crimson" }}>{error}</p>}
         <button type="submit">Register</button>

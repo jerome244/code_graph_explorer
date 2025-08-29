@@ -5,9 +5,21 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import * as cytoscapeImport from "cytoscape";
 const cytoscape = (cytoscapeImport as any).default ?? (cytoscapeImport as any);
 
+// ------------------------------ Types & utils ------------------------------
+
 type CyElement = cytoscape.ElementDefinition;
 
-const ALLOWED_EXTS = new Set([".c", ".py", ".html", ".css", ".js", ".ts", ".tsx", ".jsx", ".h"]);
+const ALLOWED_EXTS = new Set([
+  ".c",
+  ".h",
+  ".py",
+  ".html",
+  ".css",
+  ".js",
+  ".ts",
+  ".tsx",
+  ".jsx",
+]);
 
 type TreeNode = {
   name: string;
@@ -125,7 +137,14 @@ function TreeView({ node, onSelect }: { node: TreeNode; onSelect: (path: string)
           ) : (
             <button
               onClick={() => onSelect(child.path)}
-              style={{ background: "none", border: 0, padding: 0, cursor: "pointer", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
+              style={{
+                background: "none",
+                border: 0,
+                padding: 0,
+                cursor: "pointer",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                fontSize: 12,
+              }}
               title={child.path}
             >
               {child.name}
@@ -137,22 +156,29 @@ function TreeView({ node, onSelect }: { node: TreeNode; onSelect: (path: string)
   );
 }
 
+// ------------------------------ Page ------------------------------
+
 export default function GraphPage() {
+  // Graph state
   const [elements, setElements] = useState<CyElement[]>([]);
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [info, setInfo] = useState<string>("Upload a .zip to begin");
+  const [selected, setSelected] = useState<string | null>(null);
 
-  // file contents + ref so handlers always read latest
+  // File contents (editable) + ref (handlers see latest)
   const [fileMap, setFileMap] = useState<Record<string, string>>({});
   const fileMapRef = useRef<Record<string, string>>({});
   useEffect(() => {
     fileMapRef.current = fileMap;
   }, [fileMap]);
 
-  // selected badge
-  const [selected, setSelected] = useState<string | null>(null);
+  // Auth/persistence
+  const [authed, setAuthed] = useState(false);
+  const [projectId, setProjectId] = useState<number | null>(null);
+  const [projectName, setProjectName] = useState<string>("");
+  const [myProjects, setMyProjects] = useState<Array<{ id: number; name: string }>>([]);
 
-  // MULTI popups (editable) that follow nodes
+  // multi-popups that follow nodes; editable
   type Popup = { path: string; x: number; y: number; draft: string; dirty: boolean };
   const [popups, setPopups] = useState<Popup[]>([]);
   const popupsRef = useRef<Popup[]>([]);
@@ -160,13 +186,24 @@ export default function GraphPage() {
     popupsRef.current = popups;
   }, [popups]);
 
+  // Cytoscape refs
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
 
-  // tiny nodes
+  // Styles: tiny nodes
   const cyStylesheet = useMemo<cytoscape.Stylesheet[]>(
     () => [
-      { selector: "node", style: { label: "data(label)", "font-size": 8, "text-valign": "center", "text-halign": "center", width: 14, height: 14 } },
+      {
+        selector: "node",
+        style: {
+          label: "data(label)",
+          "font-size": 8,
+          "text-valign": "center",
+          "text-halign": "center",
+          width: 14,
+          height: 14,
+        },
+      },
       { selector: "edge", style: { width: 1, "curve-style": "bezier", "target-arrow-shape": "triangle" } },
       { selector: "node:selected", style: { "border-width": 2, "border-color": "#2563eb" } },
       { selector: "node[?hidden]", style: { opacity: 0.2 } },
@@ -174,59 +211,89 @@ export default function GraphPage() {
     []
   );
 
-  // create cy once
+  // Load my projects list (guest-friendly, silent refresh)
+  useEffect(() => {
+    (async () => {
+      try {
+        let r = await fetch("/api/projects", { cache: "no-store" });
+        if (r.status === 401) {
+          const rr = await fetch("/api/auth/refresh", { method: "POST" });
+          if (rr.ok) r = await fetch("/api/projects", { cache: "no-store" });
+        }
+        if (r.ok) {
+          const items = await r.json();
+          setMyProjects(items.map((p: any) => ({ id: p.id, name: p.name })));
+          setAuthed(true);
+        } else {
+          setAuthed(false);
+        }
+      } catch {
+        setAuthed(false);
+      }
+    })();
+  }, []);
+
+  // Create cy once (strict-mode safe)
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     if (cyRef.current) {
-      try { cyRef.current.stop(); cyRef.current.destroy(); } catch {}
+      try {
+        cyRef.current.stop();
+        cyRef.current.destroy();
+      } catch {}
       cyRef.current = null;
     }
 
-    const cy = cytoscape({ container, elements: [], style: cyStylesheet as any, wheelSensitivity: 0.2 });
+    const cy = cytoscape({
+      container,
+      elements: [],
+      style: cyStylesheet as any,
+      wheelSensitivity: 0.2,
+    });
     cyRef.current = cy;
 
-    // toggle popup on node click
+    // Node click → toggle popup
     const onTapNode = (evt: any) => {
       const id: string = evt.target.id();
       const node = cy.$id(id);
       if (!node.length) return;
 
-      const exists = popupsRef.current.find((pp) => pp.path === id);
-      if (exists) {
-        // save before close if dirty
-        if (exists.dirty) savePopup(id);
-        setPopups((cur) => cur.filter((pp) => pp.path !== id));
+      const existing = popupsRef.current.find((p) => p.path === id);
+      if (existing) {
+        if (existing.dirty) savePopup(id);
+        setPopups((cur) => cur.filter((p) => p.path !== id));
         return;
       }
 
-      const p = node.renderedPosition();
+      const rp = node.renderedPosition();
       const code = fileMapRef.current[id] ?? "";
-      setPopups((cur) => [...cur, { path: id, x: p.x, y: p.y, draft: code, dirty: false }]);
+      setPopups((cur) => [...cur, { path: id, x: rp.x, y: rp.y, draft: code, dirty: false }]);
       setSelected(id);
     };
     cy.on("tap", "node", onTapNode);
 
-    // follow nodes on pan/zoom/move (preserve draft/dirty)
+    // Popups follow nodes on pan/zoom/move
     let raf = 0;
     const scheduleFollow = () => {
       if (raf) return;
       raf = requestAnimationFrame(() => {
         raf = 0;
         const next: Popup[] = [];
-        const prevByPath = new Map(popupsRef.current.map((p) => [p.path, p]));
+        const byPath = new Map(popupsRef.current.map((p) => [p.path, p]));
         for (const p of popupsRef.current) {
           const n = cy.$id(p.path);
           if (!n.length) continue;
           const rp = n.renderedPosition();
-          const prev = prevByPath.get(p.path)!;
+          const prev = byPath.get(p.path)!;
           next.push({ ...prev, x: rp.x, y: rp.y });
         }
         setPopups((prev) => {
           if (prev.length !== next.length) return next;
           for (let i = 0; i < prev.length; i++) {
-            const a = prev[i], b = next[i];
+            const a = prev[i],
+              b = next[i];
             if (a.path !== b.path || a.x !== b.x || a.y !== b.y || a.draft !== b.draft || a.dirty !== b.dirty) return next;
           }
           return prev;
@@ -259,7 +326,7 @@ export default function GraphPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cyStylesheet]);
 
-  // update elements without recreating cy
+  // Apply elements (only relayout here)
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
@@ -276,92 +343,174 @@ export default function GraphPage() {
       cy.fit(undefined, 20);
     }
 
-    // drop popups whose nodes no longer exist
+    // prune popups for removed nodes
     setPopups((cur) => cur.filter((p) => cy.$id(p.path).length > 0));
   }, [elements]);
 
-  // document-level outside click (capture) → save any dirty popup not containing the click
+  // Outside clicks: save any dirty popup that didn't receive the click
   useEffect(() => {
     const onDownCapture = (ev: MouseEvent) => {
       const target = ev.target as HTMLElement | null;
-      // collect all popup roots on the page
-      const roots = Array.from(document.querySelectorAll<HTMLElement>('[data-popup-path]'));
-      const dirty = popupsRef.current.filter((p) => p.dirty);
-      if (!dirty.length) return;
+      const roots = Array.from(document.querySelectorAll<HTMLElement>("[data-popup-path]"));
+      const dirties = popupsRef.current.filter((p) => p.dirty);
+      if (!dirties.length) return;
 
-      for (const p of dirty) {
+      for (const p of dirties) {
         const root = roots.find((el) => el.dataset.popupPath === p.path);
-        if (root && root.contains(target)) {
-          // clicked inside this popup → don't save it here
-          continue;
-        }
+        if (root && target && root.contains(target)) continue; // clicked inside
         savePopup(p.path);
       }
     };
-    document.addEventListener("mousedown", onDownCapture, true); // capture phase
+    document.addEventListener("mousedown", onDownCapture, true);
     return () => document.removeEventListener("mousedown", onDownCapture, true);
   }, []);
 
-  // save popup content → update fileMap + recompute edges for that file
-    const savePopup = useCallback((path: string) => {
-    const cy = cyRef.current;
-    const popup = popupsRef.current.find((pp) => pp.path === path);
-    if (!popup) return;
+  // ------------------------------ Persistence helpers ------------------------------
 
-    const draft = popup.draft;
+  async function saveAsNewProject() {
+    const files = Object.entries(fileMapRef.current).map(([path, content]) => ({ path, content }));
+    if (!projectName.trim()) {
+      alert("Give your project a name first");
+      return;
+    }
+    const r = await fetch("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: projectName.trim(), files }),
+    });
+    if (!r.ok) {
+      alert("Failed to create project");
+      return;
+    }
+    const data = await r.json();
+    setProjectId(data.id);
+    setMyProjects((cur) => [{ id: data.id, name: data.name }, ...cur.filter((p) => p.id !== data.id)]);
+    setInfo(`Saved as project #${data.id}`);
+  }
 
-    if (draft !== fileMapRef.current[path]) {
-        // 1) update file contents (state + ref)
+  async function saveAllToExisting() {
+    if (!projectId) return saveAsNewProject();
+    const files = Object.entries(fileMapRef.current).map(([path, content]) => ({ path, content }));
+    const r = await fetch(`/api/projects/${projectId}/files/bulk`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ files }),
+    });
+    setInfo(r.ok ? "All changes saved" : "Bulk save failed");
+  }
+
+  async function loadProject(id: number) {
+    const r = await fetch(`/api/projects/${id}`);
+    if (!r.ok) {
+      alert("Failed to load project");
+      return;
+    }
+    const proj = await r.json();
+    setProjectId(proj.id);
+    setProjectName(proj.name);
+
+    const newMap: Record<string, string> = {};
+    for (const f of proj.files || []) newMap[f.path] = f.content ?? "";
+    fileMapRef.current = newMap;
+    setFileMap(newMap);
+
+    const files = Object.entries(newMap).map(([path, content]) => ({ path, content }));
+    const nodes = files.map(({ path }) => ({ data: { id: path, label: basename(path), ext: extname(path) }, group: "nodes" as const }));
+    const pathSet = new Set(files.map((f) => f.path));
+    const edges: CyElement[] = [];
+    for (const f of files) {
+      const refs = inferEdges(f.path, f.content || "");
+      for (const r of refs) {
+        const resolved = resolveRelative(f.path, r);
+        if (!resolved) continue;
+        if (pathSet.has(resolved)) edges.push({ data: { id: `${f.path}=>${resolved}`, source: f.path, target: resolved }, group: "edges" });
+        else {
+          for (const ext of [".js", ".css", ".html", ".py", ".c", ".ts", ".tsx", ".jsx", ".h"]) {
+            const cand = `${resolved}${ext}`;
+            if (pathSet.has(cand)) {
+              edges.push({ data: { id: `${f.path}=>${cand}`, source: f.path, target: cand }, group: "edges" });
+              break;
+            }
+          }
+        }
+      }
+    }
+    setElements([...nodes, ...edges]);
+    setTree(buildTree(files.map((f) => f.path)));
+    setInfo(`Loaded project "${proj.name}" (${files.length} files)`);
+    setPopups([]);
+    setSelected(null);
+  }
+
+  // Save popup contents: update fileMap + surgically update edges in cy (no relayout)
+  const savePopup = useCallback(
+    (path: string) => {
+      const cy = cyRef.current;
+      const popup = popupsRef.current.find((pp) => pp.path === path);
+      if (!popup) return;
+
+      const draft = popup.draft;
+      if (draft !== fileMapRef.current[path]) {
+        // update file map
         const newMap = { ...fileMapRef.current, [path]: draft };
         fileMapRef.current = newMap;
         setFileMap(newMap);
 
-        // 2) recompute this file's outgoing edges and update them directly in Cytoscape (no relayout)
+        // recompute edges from this file
         const refs = inferEdges(path, draft);
         const newEdges: CyElement[] = [];
 
         if (cy) {
-        const nodeIds = new Set<string>(cy.nodes().map((n) => n.id()));
-        for (const r of refs) {
+          const nodeIds = new Set<string>(cy.nodes().map((n) => n.id()));
+          for (const r of refs) {
             const resolved = resolveRelative(path, r);
             if (!resolved) continue;
 
             let target: string | null = null;
             if (nodeIds.has(resolved)) {
-            target = resolved;
+              target = resolved;
             } else {
-            for (const ext of [".js", ".css", ".html", ".py", ".c", ".ts", ".tsx", ".jsx", ".h"]) {
+              for (const ext of [".js", ".css", ".html", ".py", ".c", ".ts", ".tsx", ".jsx", ".h"]) {
                 const cand = `${resolved}${ext}`;
-                if (nodeIds.has(cand)) { target = cand; break; }
-            }
+                if (nodeIds.has(cand)) {
+                  target = cand;
+                  break;
+                }
+              }
             }
 
             if (target) {
-            newEdges.push({
-                data: { id: `${path}=>${target}`, source: path, target }
-            });
+              newEdges.push({ data: { id: `${path}=>${target}`, source: path, target } });
             }
-        }
+          }
 
-        cy.startBatch();
-        try {
-            // remove old outgoing edges for this source and add the new set
+          // update edges for this source only
+          cy.startBatch();
+          try {
             cy.edges().filter((e) => e.data("source") === path).remove();
             if (newEdges.length) cy.add(newEdges);
-        } finally {
+          } finally {
             cy.endBatch();
+          }
         }
+
+        // Persist to backend if project loaded AND authed
+        if (projectId && authed) {
+          fetch(`/api/projects/${projectId}/file`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path, content: draft }),
+          }).catch(() => {});
         }
+      }
 
-        // IMPORTANT: do NOT call setElements() here, or the graph will relayout and reset positions
-    }
+      // mark popup as saved
+      setPopups((cur) => cur.map((pp) => (pp.path === path ? { ...pp, dirty: false } : pp)));
+    },
+    [projectId, authed]
+  );
 
-    // 3) mark popup as saved
-    setPopups((cur) => cur.map((pp) => (pp.path === path ? { ...pp, dirty: false } : pp)));
-    }, []);
-
-
-  // tree: toggle node visibility w/o zoom jump
+  // Toggle node visibility from the tree (no zoom jump)
   const toggleVisibilityFromTree = (id: string) => {
     const cy = cyRef.current;
     if (!cy) return;
@@ -372,13 +521,14 @@ export default function GraphPage() {
 
     if (isHidden) {
       node.show();
-      node.connectedEdges().forEach((e) => { if (!e.source().hidden() && !e.target().hidden()) e.show(); });
+      node.connectedEdges().forEach((e) => {
+        if (!e.source().hidden() && !e.target().hidden()) e.show();
+      });
       cy.animate({ center: { eles: node }, duration: 250, easing: "ease-in-out" });
       setSelected(id);
     } else {
       node.hide();
       node.connectedEdges().hide();
-      // close its popup if open (save if dirty first)
       const popped = popupsRef.current.find((pp) => pp.path === id);
       if (popped && popped.dirty) savePopup(id);
       setPopups((cur) => cur.filter((pp) => pp.path !== id));
@@ -386,6 +536,7 @@ export default function GraphPage() {
     }
   };
 
+  // Parse a zip, build files → nodes/edges
   const onFile = useCallback(async (file: File) => {
     setInfo("Parsing zip…");
     const zip = await JSZip.loadAsync(file);
@@ -402,7 +553,7 @@ export default function GraphPage() {
       })
     );
 
-    // content map + ref
+    // content map
     const map: Record<string, string> = {};
     for (const f of files) map[f.path] = f.content;
     fileMapRef.current = map;
@@ -440,19 +591,24 @@ export default function GraphPage() {
     setTree(buildTree(files.map((f) => f.path)));
     setInfo(`${files.length} files, ${edges.length} relations`);
     setSelected(null);
-    setPopups([]); // clear old popups on new upload
+    setPopups([]); // clear old popups
+    setProjectId(null);
+    setProjectName(file.name.replace(/\.zip$/i, "") || "My Project");
   }, []);
+
+  // ------------------------------ Render ------------------------------
 
   return (
     <div
       style={{
         display: "grid",
         gridTemplateColumns: "minmax(220px, 28vw) minmax(0,1fr)",
-        height: "calc(100vh - 56px)", // use 100vh if you don't have a header
+        height: "100vh",
         width: "100vw",
         overflow: "hidden",
       }}
     >
+      {/* Sidebar */}
       <aside style={{ borderRight: "1px solid #e5e7eb", padding: 12, overflow: "auto" }}>
         <h2 style={{ marginTop: 0 }}>Project</h2>
         <input
@@ -464,10 +620,79 @@ export default function GraphPage() {
           }}
         />
         <p style={{ fontSize: 12, color: "#4b5563" }}>{info}</p>
-        {tree ? <TreeView node={tree} onSelect={toggleVisibilityFromTree} /> : <p style={{ fontSize: 12, color: "#6b7280" }}>No files yet.</p>}
+
+        {/* Load existing */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", margin: "8px 0" }}>
+          <select
+            value={projectId ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) {
+                setProjectId(null);
+                return;
+              }
+              loadProject(Number(v));
+            }}
+            style={{ fontSize: 12 }}
+            title={authed ? "Load project" : "Sign in to load projects"}
+            disabled={!authed}
+          >
+            <option value="">{authed ? "Load project…" : "Sign in to load…"}</option>
+            {myProjects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Name + Save buttons */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            placeholder="Project name"
+            value={projectName}
+            onChange={(e) => setProjectName(e.target.value)}
+            style={{ fontSize: 12, padding: "4px 6px", width: 180 }}
+            title="Project name"
+            disabled={!authed}
+          />
+          <button
+            onClick={saveAsNewProject}
+            style={{ fontSize: 12 }}
+            title={authed ? "Save as new project" : "Sign in to save"}
+            disabled={!authed}
+          >
+            Save as new
+          </button>
+          <button
+            onClick={saveAllToExisting}
+            style={{ fontSize: 12 }}
+            title={authed ? "Save all changes" : "Sign in to save"}
+            disabled={!authed}
+          >
+            Save all
+          </button>
+        </div>
+
+        {!authed && (
+          <p style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
+            <a href="/login">Sign in</a> to enable saving/loading projects.
+          </p>
+        )}
+
+        {/* Tree */}
+        {tree ? (
+          <div style={{ marginTop: 8 }}>
+            <TreeView node={tree} onSelect={toggleVisibilityFromTree} />
+          </div>
+        ) : (
+          <p style={{ fontSize: 12, color: "#6b7280" }}>No files yet.</p>
+        )}
       </aside>
 
+      {/* Graph area */}
       <section style={{ position: "relative", overflow: "hidden" }}>
+        {/* Selection badge */}
         <div
           style={{
             position: "absolute",
@@ -486,94 +711,89 @@ export default function GraphPage() {
         {/* Cytoscape canvas */}
         <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
 
-        {/* Editable popups that follow nodes; multiple allowed */}
-        {popups.map((pp) => {
-          const code = pp.draft;
-          return (
-            <div
-              key={pp.path}
-              data-popup-path={pp.path}
+        {/* Editable popups (smaller, resizable, follow nodes) */}
+        {popups.map((pp) => (
+          <div
+            key={pp.path}
+            data-popup-path={pp.path}
             style={{
-            position: "absolute",
-            left: Math.max(8, pp.x) + "px",
-            top: Math.max(8, pp.y) + "px",
-            transform: "translate(-50%, -110%)",
-            background: "white",
-            border: "1px solid #e5e7eb",
-            borderRadius: 8,
-            boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-            // smaller by default, but flexible
-            width: "clamp(240px, 26vw, 520px)",
-            maxHeight: "34vh",
-            minHeight: 140,
-            overflow: "hidden",
-            zIndex: 20,
-            // make the popup user-resizable
-            resize: "both",
+              position: "absolute",
+              left: Math.max(8, pp.x) + "px",
+              top: Math.max(8, pp.y) + "px",
+              transform: "translate(-50%, -110%)",
+              background: "white",
+              border: "1px solid #e5e7eb",
+              borderRadius: 8,
+              boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
+              width: "clamp(240px, 26vw, 520px)",
+              minHeight: 140,
+              maxHeight: "40vh",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+              zIndex: 20,
+              resize: "both",
             }}
-
-              onWheel={(e) => e.stopPropagation()}
-              onMouseDown={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "6px 10px",
+                borderBottom: "1px solid #e5e7eb",
+                background: "#f9fafb",
+                borderTopLeftRadius: 8,
+                borderTopRightRadius: 8,
+                fontSize: 12,
+                flex: "0 0 auto",
+              }}
             >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  padding: "6px 10px",
-                  borderBottom: "1px solid #e5e7eb",
-                  background: "#f9fafb",
-                  borderTopLeftRadius: 8,
-                  borderTopRightRadius: 8,
-                  fontSize: 12,
-                }}
-              >
-                <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "30vw" }}>
-                  {basename(pp.path)}
-                </strong>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  {pp.dirty && <span style={{ fontSize: 11, color: "#9a3412" }}>● unsaved</span>}
-                  <button
-                    onClick={() => {
-                      if (pp.dirty) savePopup(pp.path);
-                      setPopups((cur) => cur.filter((p) => p.path !== pp.path));
-                    }}
-                    style={{ background: "none", border: 0, cursor: "pointer", fontSize: 16, lineHeight: 1 }}
-                    aria-label="Close"
-                    title="Close"
-                  >
-                    ×
-                  </button>
-                </div>
+              <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "30vw" }}>
+                {basename(pp.path)}
+              </strong>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                {pp.dirty && <span style={{ fontSize: 11, color: "#9a3412" }}>● unsaved</span>}
+                <button
+                  onClick={() => {
+                    if (pp.dirty) savePopup(pp.path);
+                    setPopups((cur) => cur.filter((p) => p.path !== pp.path));
+                  }}
+                  style={{ background: "none", border: 0, cursor: "pointer", fontSize: 16, lineHeight: 1 }}
+                  aria-label="Close"
+                  title="Close"
+                >
+                  ×
+                </button>
               </div>
-              <textarea
-                value={code}
-                spellCheck={false}
-                onChange={(e) =>
-                  setPopups((cur) =>
-                    cur.map((p) => (p.path === pp.path ? { ...p, draft: e.target.value, dirty: true } : p))
-                  )
-                }
-                onBlur={() => savePopup(pp.path)}
-                style={{
+            </div>
+            <textarea
+              value={pp.draft}
+              spellCheck={false}
+              onChange={(e) =>
+                setPopups((cur) => cur.map((p) => (p.path === pp.path ? { ...p, draft: e.target.value, dirty: true } : p)))
+              }
+              onBlur={() => savePopup(pp.path)}
+              style={{
                 display: "block",
                 width: "100%",
-                height: "calc(34vh - 34px)", // header is ~34px tall
-                padding: "8px",              // a bit tighter
+                flex: "1 1 auto",
+                height: "auto",
+                padding: "8px",
                 border: 0,
                 outline: "none",
                 resize: "none",
                 whiteSpace: "pre",
                 overflow: "auto",
                 fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                fontSize: 11,                // slightly smaller font
+                fontSize: 11,
                 lineHeight: 1.35,
-                }}
-
-              />
-            </div>
-          );
-        })}
+              }}
+            />
+          </div>
+        ))}
       </section>
     </div>
   );

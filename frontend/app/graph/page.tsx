@@ -391,6 +391,7 @@ export default function GraphPage() {
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
+
         if (msg.type === "presence_state") {
           const map = new Map<number, Peer>();
           for (const p of msg.peers as Peer[]) map.set(p.id, p);
@@ -425,6 +426,41 @@ export default function GraphPage() {
             node.position({ x, y });
             applyingRemoteRef.current = false;
           }
+        } else if (msg.type === "node_visibility") {
+          const { path, hidden, by } = msg.data || {};
+          if (!path || by === me?.id) return;
+          const cy = cyRef.current;
+          if (!cy) return;
+          const node = cy.$id(path);
+          if (!node.length) return;
+
+          if (hidden) {
+            node.hide();
+            node.connectedEdges().hide();
+            setPopups((cur) => cur.filter((pp) => pp.path !== path));
+            setSelected((sel) => (sel === path ? null : sel));
+          } else {
+            node.show();
+            node.connectedEdges().forEach((e) => {
+              if (!e.source().hidden() && !e.target().hidden()) e.show();
+            });
+          }
+          positionsRef.current[path] = { ...(positionsRef.current[path] || {}), hidden: !!hidden };
+        } else if (msg.type === "popup_open") {
+          const { path, by } = msg.data || {};
+          if (!path || by === me?.id) return;
+          const cy = cyRef.current;
+          if (!cy) return;
+          const node = cy.$id(path);
+          if (!node.length) return;
+          const rp = node.renderedPosition();
+          const code = fileMapRef.current[path] ?? "";
+          setPopups((cur) => (cur.some((p) => p.path === path) ? cur : [...cur, { path, x: rp.x, y: rp.y, draft: code, dirty: false }]));
+        } else if (msg.type === "popup_close") {
+          const { path, by } = msg.data || {};
+          if (!path || by === me?.id) return;
+          setPopups((cur) => cur.filter((p) => p.path !== path));
+          setSelected((sel) => (sel === path ? null : sel));
         }
       } catch {}
     };
@@ -453,16 +489,19 @@ export default function GraphPage() {
     });
     cyRef.current = cy;
 
-    // Node click → toggle popup
+    // Node click → toggle popup (+ broadcast)
     const onTapNode = (evt: any) => {
       const id: string = evt.target.id();
       const node = cy.$id(id);
       if (!node.length) return;
 
+      const ws = wsRef.current;
       const existing = popupsRef.current.find((p) => p.path === id);
+
       if (existing) {
         if (existing.dirty) savePopup(id);
         setPopups((cur) => cur.filter((p) => p.path !== id));
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_close", path: id }));
         return;
       }
 
@@ -470,6 +509,7 @@ export default function GraphPage() {
       const code = fileMapRef.current[id] ?? "";
       setPopups((cur) => [...cur, { path: id, x: rp.x, y: rp.y, draft: code, dirty: false }]);
       setSelected(id);
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_open", path: id }));
     };
     cy.on("tap", "node", onTapNode);
 
@@ -745,7 +785,7 @@ export default function GraphPage() {
     [projectId, authed]
   );
 
-  // Toggle node visibility from the tree (no zoom jump)
+  // Toggle node visibility from the tree (no zoom jump) + broadcast
   const toggleVisibilityFromTree = (id: string) => {
     const cy = cyRef.current;
     if (!cy) return;
@@ -753,6 +793,7 @@ export default function GraphPage() {
     if (!node.length) return;
 
     const isHidden = (node as any).hidden ? (node as any).hidden() : node.style("display") === "none";
+    const ws = wsRef.current;
 
     if (isHidden) {
       // SHOW
@@ -760,22 +801,22 @@ export default function GraphPage() {
       node.connectedEdges().forEach((e) => {
         if (!e.source().hidden() && !e.target().hidden()) e.show();
       });
-      // persist hidden=false
       positionsRef.current[id] = { ...(positionsRef.current[id] || {}), hidden: false };
-
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "node_visibility", path: id, hidden: false }));
       cy.animate({ center: { eles: node }, duration: 250, easing: "ease-in-out" });
       setSelected(id);
     } else {
       // HIDE
       node.hide();
       node.connectedEdges().hide();
-      // persist hidden=true
       positionsRef.current[id] = { ...(positionsRef.current[id] || {}), hidden: true };
 
       const popped = popupsRef.current.find((pp) => pp.path === id);
       if (popped && popped.dirty) savePopup(id);
       setPopups((cur) => cur.filter((pp) => pp.path !== id));
       if (selected === id) setSelected(null);
+
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "node_visibility", path: id, hidden: true }));
     }
   };
 
@@ -985,12 +1026,12 @@ export default function GraphPage() {
             Save all
           </button>
 
-        {/* Share button */}
+          {/* Share button */}
           <button
             onClick={() => setShareOpen((o) => !o)}
             disabled={!authed || !projectId}
             style={{ fontSize: 12, border: "1px solid #ddd", padding: "4px 8px", borderRadius: 8, background: "white" }}
-            title={projectId ? "Share this project" : "Save or load a project to share" }
+            title={projectId ? "Share this project" : "Save or load a project to share"}
           >
             {shareOpen ? "Close sharing" : "Share…"}
           </button>
@@ -1002,7 +1043,7 @@ export default function GraphPage() {
           </p>
         )}
 
-        {/* Share panel (unchanged UI; calls your /api/projects/:id/share/ proxy) */}
+        {/* Share panel */}
         {shareOpen && projectId && (
           <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1216,6 +1257,8 @@ export default function GraphPage() {
                   onClick={() => {
                     if (pp.dirty) savePopup(pp.path);
                     setPopups((cur) => cur.filter((p) => p.path !== pp.path));
+                    const ws = wsRef.current;
+                    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_close", path: pp.path }));
                   }}
                   style={{ background: "none", border: 0, cursor: "pointer", fontSize: 16, lineHeight: 1 }}
                   aria-label="Close"

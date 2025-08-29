@@ -1,115 +1,151 @@
-from typing import Dict, Any
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
-from projects.models import Project
+from django.contrib.auth.models import AnonymousUser
+import secrets
 
-# ephemeral presence store: group -> { user_id: {username, color} }
-PRESENCE: Dict[str, Dict[int, Dict[str, Any]]] = {}
+# Very light in-memory presence just for demo/dev
+# { group_name: { user_id: {"id": int, "username": str, "color": str} } }
+PRESENCE = {}
 
-def group_name(project_id: int) -> str:
-    return f"project_{project_id}"
-
-COLORS = [
-    "#ef4444", "#f97316", "#f59e0b", "#22c55e", "#06b6d4",
-    "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#84cc16"
-]
-
-@database_sync_to_async
-def user_role(user, project_id: int) -> str:
-    if not user or getattr(user, "is_authenticated", False) is False:
-        return "none"
-    try:
-        p = Project.objects.get(pk=project_id)
-    except Project.DoesNotExist:
-        return "none"
-    if p.user_id == user.id:
-        return "owner"
-    if p.editors.filter(id=user.id).exists():
-        return "editor"
-    if p.shared_with.filter(id=user.id).exists():
-        return "viewer"
-    return "none"
+def _color_for_user(uid: int) -> str:
+    # stable pastel-ish color by uid
+    rng = (uid * 2654435761) & 0xFFFFFFFF
+    r = 140 + (rng & 0x3F)     # 140..203
+    g = 120 + ((rng >> 6) & 0x3F)
+    b = 120 + ((rng >> 12) & 0x3F)
+    return f"rgb({r},{g},{b})"
 
 class ProjectConsumer(AsyncJsonWebsocketConsumer):
-    async def connect(self):
-        self.project_id = int(self.scope["url_route"]["kwargs"]["project_id"])
-        self.group = group_name(self.project_id)
+    """
+    Group: proj_<project_id>
+    Frontend sends: {"type": "...", ...payload...}
+    We re-broadcast to the group as: {"type": "<same>", "data": {..., "by": <sender_id>}}
+    Presence events: presence_state/presence_join/presence_leave
+    """
 
-        # authz
-        role = await user_role(self.scope.get("user"), self.project_id)
-        if role == "none":
-            await self.close(code=4403)
+    async def connect(self):
+        user = self.scope.get("user", AnonymousUser())
+        self.project_id = self.scope["url_route"]["kwargs"]["project_id"]
+        self.group_name = f"proj_{self.project_id}"
+
+        if not user or isinstance(user, AnonymousUser) or not user.is_authenticated:
+            await self.close()
             return
 
-        await self.channel_layer.group_add(self.group, self.channel_name)
+        # Join group
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
 
-        # add to presence
-        u = self.scope.get("user")
-        PRESENCE.setdefault(self.group, {})
-        # Pick a stable color per user
-        color = COLORS[u.id % len(COLORS)]
-        PRESENCE[self.group][u.id] = {"id": u.id, "username": u.get_username(), "color": color}
+        # Add to presence
+        peers = PRESENCE.setdefault(self.group_name, {})
+        me = peers.get(user.id)
+        if not me:
+            me = {"id": user.id, "username": user.username, "color": _color_for_user(user.id)}
+            peers[user.id] = me
 
-        # send full presence to the new client
-        await self.send_json({"type": "presence_state", "peers": list(PRESENCE[self.group].values())})
-        # notify others of join
-        await self.channel_layer.group_send(self.group, {
-            "type": "presence.join",
-            "peer": PRESENCE[self.group][u.id],
-        })
+        # Send full presence state to me
+        await self.send_json({"type": "presence_state", "peers": list(peers.values())})
+        # Announce my join to others
+        await self.channel_layer.group_send(
+            self.group_name,
+            {"type": "broadcast", "payload": {"type": "presence_join", "peer": me}}
+        )
 
     async def disconnect(self, code):
+        user = self.scope.get("user", AnonymousUser())
         try:
-            await self.channel_layer.group_discard(self.group, self.channel_name)
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
         except Exception:
             pass
-        u = self.scope.get("user")
-        if u and getattr(u, "is_authenticated", False):
-            peers = PRESENCE.get(self.group, {})
-            if u.id in peers:
-                peers.pop(u.id, None)
-                await self.channel_layer.group_send(self.group, {
-                    "type": "presence.leave",
-                    "peer": {"id": u.id},
-                })
 
-    async def receive_json(self, content: dict, **kwargs):
-        typ = content.get("type")
-        u = self.scope.get("user")
-        if typ == "cursor":
-            # { type, x, y, docX?, docY? }
-            await self.channel_layer.group_send(self.group, {
-                "type": "cursor.update",
-                "peer_id": getattr(u, "id", None),
-                "data": {k: content.get(k) for k in ("x","y","docX","docY")},
-            })
-        elif typ == "node_move":
-            # { type, path, x, y, transient?: bool }
-            payload = {"path": content.get("path"), "x": content.get("x"), "y": content.get("y"), "by": getattr(u, "id", None)}
-            await self.channel_layer.group_send(self.group, {"type": "node.move", "data": payload})
-        elif typ == "ping":
-            await self.send_json({"type": "pong"})
+        if not user or isinstance(user, AnonymousUser) or not user.is_authenticated:
+            return
+
+        peers = PRESENCE.get(self.group_name, {})
+        if user.id in peers:
+            peer = peers.pop(user.id)
+            await self.channel_layer.group_send(
+                self.group_name,
+                {"type": "broadcast", "payload": {"type": "presence_leave", "peer": {"id": peer["id"]}}}
+            )
+        if not peers:
+            PRESENCE.pop(self.group_name, None)
+
+    # Frontend -> Server
+    async def receive_json(self, content, **kwargs):
+        t = content.get("type")
+        user = self.scope.get("user")
+
+        # Cursor (lightweight, throttled by client)
+        if t == "cursor":
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "broadcast",
+                    "payload": {
+                        "type": "cursor",
+                        "peer_id": user.id,
+                        "data": {"x": content.get("x"), "y": content.get("y")},
+                    },
+                },
+            )
+
+        # Node drag / position
+        elif t == "node_move":
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "broadcast",
+                    "payload": {
+                        "type": "node_move",
+                        "data": {"path": content.get("path"), "x": content.get("x"), "y": content.get("y"), "by": user.id},
+                    },
+                },
+            )
+
+        # Show/hide node from the tree
+        elif t == "node_visibility":
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "broadcast",
+                    "payload": {
+                        "type": "node_visibility",
+                        "data": {"path": content.get("path"), "hidden": bool(content.get("hidden")), "by": user.id},
+                    },
+                },
+            )
+
+        # >>> NEW: Popup open/close <<<
+        elif t == "popup_open":
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "broadcast",
+                    "payload": {
+                        "type": "popup_open",
+                        "data": {"path": content.get("path"), "by": user.id},
+                    },
+                },
+            )
+
+        elif t == "popup_close":
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "broadcast",
+                    "payload": {
+                        "type": "popup_close",
+                        "data": {"path": content.get("path"), "by": user.id},
+                    },
+                },
+            )
+
+        # Unknown → ignore silently
         else:
-            # ignore unknown
-            pass
+            return
 
-    # Handlers for group messages
-    async def presence_join(self, event):
-        await self.send_json({"type": "presence_join", "peer": event.get("peer")})
-
-    async def presence_leave(self, event):
-        await self.send_json({"type": "presence_leave", "peer": event.get("peer")})
-
-    async def cursor_update(self, event):
-        await self.send_json({
-            "type": "cursor",
-            "peer_id": event.get("peer_id"),
-            "data": event.get("data"),
-        })
-
-    async def node_move(self, event):
-        await self.send_json({
-            "type": "node_move",
-            "data": event.get("data"),
-        })
+    # Server -> Clients
+    async def broadcast(self, event):
+        # Just forward the payload as-is to the socket
+        await self.send_json(event["payload"])

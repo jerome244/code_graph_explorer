@@ -93,6 +93,7 @@ function highlightWithFunctions(
   if (!facts) return htmlEscape(code);
 
   const declaredSet = new Set(facts.declared);
+  const calledSet = new Set(facts.called);
   const names = Array.from(new Set([...facts.declared, ...facts.called].filter((n) => index[n])));
   if (names.length === 0) return htmlEscape(code);
 
@@ -103,8 +104,11 @@ function highlightWithFunctions(
   return escaped.replace(re, (m) => {
     const color = index[m]?.color || "#111827";
     const isDecl = declaredSet.has(m);
+    const isCall = calledSet.has(m) && !isDecl;
+    const role = isDecl ? "decl" : isCall ? "call" : "ref";
     const deco = isDecl ? " text-decoration: underline dotted;" : "";
-    return `<span style="color:${color};${deco}">${m}</span>`;
+    // Tag spans so we can anchor lines to the *actual* name positions
+    return `<span data-func="${m}" data-role="${role}" data-path="${path}" style="color:${color};${deco}">${m}</span>`;
   });
 }
 
@@ -1028,7 +1032,7 @@ export default function GraphPage() {
     // Attach observers for open popups
     for (const p of popupsRef.current) {
       if (resizeObserversRef.current.has(p.path)) continue;
-      const el = document.querySelector<HTMLElement>(`[data-popup-path="${p.path}"]`);
+      const el = document.querySelector<HTMLElement>(`[data-popup-path="${p.path.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`);
       if (!el) continue;
 
       const obs = new ResizeObserver(() => {
@@ -1061,13 +1065,141 @@ export default function GraphPage() {
       resizeObserversRef.current.set(p.path, obs);
     }
 
-    return () => {
+  return () => {
       for (const [, obs] of resizeObserversRef.current) obs.disconnect();
       resizeObserversRef.current.clear();
       for (const [, id] of resizeRAFRef.current) cancelAnimationFrame(id);
       resizeRAFRef.current.clear();
     };
   }, [popups]);
+
+  // ------------------------------ CALLER⇢DECLARER POPUP LINK OVERLAY ------------------------------
+  function cssAttrEscape(v: string) {
+    return v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  }
+
+  type PopupLink = { x1: number; y1: number; x2: number; y2: number; label: string; color: string };
+
+  const [popupLinks, setPopupLinks] = useState<PopupLink[]>([]);
+
+  useEffect(() => {
+    let raf = 0;
+
+    // Build the single-line string of the span's row and check for imports
+    const lineTextAroundSpan = (span: HTMLElement, pre: HTMLElement) => {
+      try {
+        const before = document.createRange();
+        before.setStart(pre, 0);
+        before.setEnd(span, 0);
+        const beforeText = before.toString();
+
+        const after = document.createRange();
+        after.setStartAfter(span);
+        after.setEnd(pre, pre.childNodes.length);
+        const afterText = after.toString();
+
+        const start = beforeText.lastIndexOf("\n") + 1;
+        const endRel = afterText.indexOf("\n");
+        const line =
+          beforeText.slice(start) +
+          (span.textContent ?? "") +
+          (endRel >= 0 ? afterText.slice(0, endRel) : afterText);
+        return line;
+      } catch {
+        return "";
+      }
+    };
+
+    // find the "best" span for a function inside a popup, preferring role-specific, then any,
+    // and skipping import/from lines (Python).
+    const findFuncPoint = (popupPath: string, funcName: string, role: "call" | "decl"): { x: number; y: number } | null => {
+      const root = document.querySelector<HTMLElement>(`[data-popup-path="${cssAttrEscape(popupPath)}"]`);
+      if (!root) return null;
+      const pre = root.querySelector<HTMLElement>("pre");
+      if (!pre) return null;
+
+      const selectors = [
+        `[data-func="${funcName}"][data-role="${role}"]`,
+        `[data-func="${funcName}"]`,
+      ];
+
+      for (const sel of selectors) {
+        const spans = Array.from(root.querySelectorAll<HTMLElement>(sel));
+        for (const span of spans) {
+          const line = lineTextAroundSpan(span, pre).trim();
+          if (/^(import|from)\b/.test(line)) continue; // skip python import lines
+          const r = span.getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
+      }
+      return null;
+    };
+
+    const tick = () => {
+      try {
+        const links: PopupLink[] = [];
+        if (!popupsRef.current.length) { setPopupLinks(links); return; }
+
+        const byFile: Record<string, { declared: string[]; called: string[] }> = funcIndex?.byFile || {};
+        const paletteByName: Record<string, { color?: string }> = funcIndex?.index || {};
+
+        // fallback anchors on popup edges
+        const rects = new Map<string, DOMRect>();
+        for (const p of popupsRef.current) {
+          const el = document.querySelector<HTMLElement>(`[data-popup-path="${cssAttrEscape(p.path)}"]`);
+          if (!el) continue;
+          rects.set(p.path, el.getBoundingClientRect());
+        }
+        const anchorRight = (r: DOMRect) => ({ x: r.left + r.width - 8, y: r.top + r.height / 2 });
+        const anchorLeft  = (r: DOMRect) => ({ x: r.left + 8,           y: r.top + r.height / 2 });
+
+        // for each ordered pair (A calls → B declares)
+        for (let i = 0; i < popupsRef.current.length; i++) {
+          const A = popupsRef.current[i];
+          const factsA = byFile[A.path] || { declared: [], called: [] };
+          const rectA = rects.get(A.path);
+          if (!rectA) continue;
+
+          for (let j = 0; j < popupsRef.current.length; j++) {
+            if (i === j) continue;
+            const B = popupsRef.current[j];
+            const rectB = rects.get(B.path);
+            if (!rectB) continue;
+            const factsB = byFile[B.path] || { declared: [], called: [] };
+
+            const match = new Set(factsA.called.filter((n) => factsB.declared.includes(n)));
+            if (match.size === 0) continue;
+
+            const names = Array.from(match).sort((a, b) => a.localeCompare(b));
+
+            names.forEach((name, k) => {
+              const color = paletteByName[name]?.color || "#111827";
+
+              const src = findFuncPoint(A.path, name, "call") || anchorRight(rectA);
+              const dst = findFuncPoint(B.path, name, "decl") || anchorLeft(rectB);
+
+              // small vertical deflection if there are multiple lines for readability
+              const yOffset = (k - (names.length - 1) / 2) * 8;
+
+              links.push({
+                x1: src.x, y1: src.y + yOffset,
+                x2: dst.x, y2: dst.y + yOffset,
+                label: name,
+                color,
+              });
+            });
+          }
+        }
+
+        setPopupLinks(links);
+      } finally {
+        raf = requestAnimationFrame(tick);
+      }
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [funcIndex, popups]);
 
   // ------------------------------ Render ------------------------------
 
@@ -1405,6 +1537,41 @@ export default function GraphPage() {
             </div>
           </div>
         ))}
+
+        {/* Link overlay (caller → declarer) — TOP layer; plain lines, no arrow heads */}
+        <svg
+          style={{
+            position: "fixed",
+            inset: 0,
+            width: "100vw",
+            height: "100vh",
+            zIndex: 50,
+            pointerEvents: "none",
+          }}
+        >
+          {popupLinks.map((l, i) => (
+            <g key={i} style={{ color: l.color }}>
+              <path
+                d={`M ${l.x1} ${l.y1} C ${l.x1 + 60} ${l.y1}, ${l.x2 - 60} ${l.y2}, ${l.x2} ${l.y2}`}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeOpacity={0.95}
+                strokeLinecap="round"
+              />
+              <text
+                x={(l.x1 + l.x2) / 2}
+                y={(l.y1 + l.y2) / 2 - 6}
+                fontSize={10}
+                fontFamily="ui-sans-serif, system-ui, Segoe UI, Roboto, Helvetica, Arial"
+                textAnchor="middle"
+                opacity={0.9}
+              >
+                {l.label}
+              </text>
+            </g>
+          ))}
+        </svg>
       </section>
     </div>
   );

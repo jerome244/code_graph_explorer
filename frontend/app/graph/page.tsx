@@ -1,9 +1,24 @@
+// /frontend/app/graph/page.tsx
 "use client";
 
 import JSZip from "jszip";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as cytoscapeImport from "cytoscape";
 const cytoscape = (cytoscapeImport as any).default ?? (cytoscapeImport as any);
+
+// Parsing + path helpers moved to a separate module
+import {
+  ALLOWED_EXTS,
+  CANDIDATE_RESOLVE_EXTS,
+  TreeNode,
+  extname,
+  dirname,
+  basename,
+  normalize,
+  resolveRelative,
+  inferEdges,
+  buildTree,
+} from "./parsing";
 
 // ------------------------------ Types & utils ------------------------------
 
@@ -15,120 +30,6 @@ type CyElement = cytoscape.ElementDefinition;
 
 // >>> Realtime peers for presence + cursors
 type Peer = { id: number; username: string; color: string; x?: number; y?: number };
-
-const ALLOWED_EXTS = new Set([
-  ".c",
-  ".h",
-  ".py",
-  ".html",
-  ".css",
-  ".js",
-  ".ts",
-  ".tsx",
-  ".jsx",
-]);
-
-type TreeNode = {
-  name: string;
-  path: string;
-  isDir: boolean;
-  children?: TreeNode[];
-  ext?: string;
-};
-
-function extname(path: string) {
-  const idx = path.lastIndexOf(".");
-  return idx >= 0 ? path.slice(idx).toLowerCase() : "";
-}
-function dirname(path: string) {
-  const i = path.lastIndexOf("/");
-  return i === -1 ? "" : path.slice(0, i);
-}
-function basename(path: string) {
-  const i = path.lastIndexOf("/");
-  return i === -1 ? path : path.slice(i + 1);
-}
-function normalize(p: string) {
-  const parts = p.split("/");
-  const stack: string[] = [];
-  for (const part of parts) {
-    if (!part || part === ".") continue;
-    if (part === "..") stack.pop();
-    else stack.push(part);
-  }
-  return stack.join("/");
-}
-function resolveRelative(fromFile: string, rel: string) {
-  if (!rel.startsWith(".")) return null;
-  const baseDir = dirname(fromFile);
-  return normalize(baseDir ? `${baseDir}/${rel}` : rel);
-}
-
-function inferEdges(filename: string, content: string): string[] {
-  const edges: string[] = [];
-  const ext = extname(filename);
-
-  if (ext === ".js" || ext === ".ts" || ext === ".tsx" || ext === ".jsx") {
-    const importRe = /import[^'"\n]*from\s*['"]([^'"\n]+)['"]/g;
-    const requireRe = /require\(\s*['"]([^'"\n]+)['"]\s*\)/g;
-    let m;
-    while ((m = importRe.exec(content))) edges.push(m[1]);
-    while ((m = requireRe.exec(content))) edges.push(m[1]);
-  } else if (ext === ".py") {
-    const fromRel = /from\s+(\.+[\w_/]+)\s+import\s+/g;
-    let m;
-    while ((m = fromRel.exec(content))) edges.push(m[1]);
-  } else if (ext === ".html") {
-    const scriptRe = /<script[^>]*src=["']([^"']+)["'][^>]*>/gi;
-    const linkRe = /<link[^>]*href=["']([^"']+)["'][^>]*>/gi;
-    let m;
-    while ((m = scriptRe.exec(content))) edges.push(m[1]);
-    while ((m = linkRe.exec(content))) edges.push(m[1]);
-  } else if (ext === ".css") {
-    const importRe = /@import\s+["']([^"']+)["']/g;
-    let m;
-    while ((m = importRe.exec(content))) edges.push(m[1]);
-  } else if (ext === ".c" || ext === ".h") {
-    const incRe = /#include\s+"([^"]+)"/g;
-    let m;
-    while ((m = incRe.exec(content))) edges.push(m[1]);
-  }
-  return edges;
-}
-
-function buildTree(paths: string[]): TreeNode {
-  const root: TreeNode = { name: "root", path: "", isDir: true, children: [] };
-  const map = new Map<string, TreeNode>([["", root]]);
-  for (const p of paths) {
-    const parts = p.split("/");
-    let curPath = "";
-    let parent = root;
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      curPath = curPath ? `${curPath}/${part}` : part;
-      const isLast = i === parts.length - 1;
-      if (!map.has(curPath)) {
-        const node: TreeNode = {
-          name: part,
-          path: curPath,
-          isDir: !isLast,
-          children: !isLast ? [] : undefined,
-          ext: isLast ? extname(curPath) : undefined,
-        };
-        (parent.children = parent.children || []).push(node);
-        map.set(curPath, node);
-      }
-      parent = map.get(curPath)!;
-    }
-  }
-  const sortRec = (n: TreeNode) => {
-    if (!n.children) return;
-    n.children.sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name));
-    n.children.forEach(sortRec);
-  };
-  sortRec(root);
-  return root;
-}
 
 function TreeView({ node, onSelect }: { node: TreeNode; onSelect: (path: string) => void }) {
   if (!node.children) return null;
@@ -711,7 +612,7 @@ export default function GraphPage() {
         if (!resolved) continue;
         if (pathSet.has(resolved)) edges.push({ data: { id: `${f.path}=>${resolved}`, source: f.path, target: resolved }, group: "edges" });
         else {
-          for (const ext of [".js", ".css", ".html", ".py", ".c", ".ts", ".tsx", ".jsx", ".h"]) {
+          for (const ext of CANDIDATE_RESOLVE_EXTS) {
             const cand = `${resolved}${ext}`;
             if (pathSet.has(cand)) {
               edges.push({ data: { id: `${f.path}=>${cand}`, source: f.path, target: cand }, group: "edges" });
@@ -757,7 +658,7 @@ export default function GraphPage() {
             if (nodeIds.has(resolved)) {
               target = resolved;
             } else {
-              for (const ext of [".js", ".css", ".html", ".py", ".c", ".ts", ".tsx", ".jsx", ".h"]) {
+              for (const ext of CANDIDATE_RESOLVE_EXTS) {
                 const cand = `${resolved}${ext}`;
                 if (nodeIds.has(cand)) {
                   target = cand;
@@ -875,7 +776,7 @@ export default function GraphPage() {
         if (pathSet.has(resolved)) {
           edges.push({ data: { id: `${f.path}=>${resolved}`, source: f.path, target: resolved }, group: "edges" });
         } else {
-          for (const ext of [".js", ".css", ".html", ".py", ".c", ".ts", ".tsx", ".jsx", ".h"]) {
+          for (const ext of CANDIDATE_RESOLVE_EXTS) {
             const cand = `${resolved}${ext}`;
             if (pathSet.has(cand)) {
               edges.push({ data: { id: `${f.path}=>${cand}`, source: f.path, target: cand }, group: "edges" });

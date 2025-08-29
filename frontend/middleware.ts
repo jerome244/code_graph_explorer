@@ -7,14 +7,14 @@ const PROTECTED_PATHS = ["/dashboard", "/graph"]; // add more if needed
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const needsAuth = PROTECTED_PATHS.some(
-    (p) => pathname === p || pathname.startsWith(p + "/")
+    (p) => pathname === p || pathname.startsWith(`${p}/`)
   );
 
   if (needsAuth) {
     const access = req.cookies.get("access")?.value;
     if (!access) {
       const url = req.nextUrl.clone();
-      url.pathname = "/login";                // <-- fix
+      url.pathname = "/"; // go to homepage instead of /login
       url.searchParams.set("next", pathname);
       return NextResponse.redirect(url);
     }

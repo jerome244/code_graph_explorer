@@ -157,6 +157,18 @@ function TreeView({ node, onSelect }: { node: TreeNode; onSelect: (path: string)
   );
 }
 
+// ------------------------------ SHARE ADDITIONS ------------------------------
+type Role = "owner" | "editor" | "viewer" | "none";
+type UserLite = { id: number; username: string };
+type ProjectDetail = {
+  id: number;
+  name: string;
+  owner: UserLite;
+  editors: UserLite[];
+  shared_with: UserLite[]; // viewers (may also include editors)
+  my_role?: Role;
+};
+
 // ------------------------------ Page ------------------------------
 
 export default function GraphPage() {
@@ -192,6 +204,86 @@ export default function GraphPage() {
   const [projectId, setProjectId] = useState<number | null>(null);
   const [projectName, setProjectName] = useState<string>("");
   const [myProjects, setMyProjects] = useState<Array<{ id: number; name: string }>>([]);
+
+  // ------------------------------ SHARE ADDITIONS ------------------------------
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareErr, setShareErr] = useState<string | null>(null);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [projDetail, setProjDetail] = useState<ProjectDetail | null>(null);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<UserLite[]>([]);
+  const isOwner = projDetail?.my_role === "owner";
+
+  const collab = useMemo(() => {
+    if (!projDetail) return { editors: [] as UserLite[], viewers: [] as UserLite[] };
+    const editorIds = new Set(projDetail.editors.map((u) => u.id));
+    const viewersOnly = projDetail.shared_with.filter((u) => !editorIds.has(u.id));
+    return { editors: projDetail.editors, viewers: viewersOnly };
+  }, [projDetail]);
+
+  async function fetchProjectDetail() {
+    if (!projectId) return;
+    try {
+      setShareErr(null);
+      const r = await fetch(`/api/projects/${projectId}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(await r.text());
+      setProjDetail(await r.json());
+    } catch (e: any) {
+      setShareErr(e?.message || "Failed to load collaborators");
+    }
+  }
+
+  useEffect(() => {
+    if (shareOpen) fetchProjectDetail();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shareOpen, projectId]);
+
+  // simple debounce for user search
+  useEffect(() => {
+    const h = setTimeout(async () => {
+      if (!shareOpen) return;
+      const qq = q.trim();
+      if (!qq) return setResults([]);
+      try {
+        setShareErr(null);
+        const r = await fetch(`/api/auth/users/search/?q=${encodeURIComponent(qq)}`);
+        if (!r.ok) throw new Error(await r.text());
+        const list: UserLite[] = await r.json();
+        const skip = new Set<number>([
+          projDetail?.owner.id ?? -1,
+          ...(projDetail?.shared_with ?? []).map((u) => u.id),
+        ]);
+        setResults(list.filter((u) => !skip.has(u.id)));
+      } catch (e: any) {
+        setShareErr(e?.message || "Search failed");
+      }
+    }, 300);
+    return () => clearTimeout(h);
+  }, [q, shareOpen, projDetail]);
+
+  async function mutateShare(usernames: string[], mode: "add" | "remove" | "replace", role: "viewer" | "editor") {
+    if (!projectId) return;
+    setShareBusy(true);
+    try {
+      const r = await fetch(`/api/projects/${projectId}/share/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ usernames, mode, role }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      await fetchProjectDetail();
+      setQ(""); setResults([]);
+    } catch (e: any) {
+      try {
+        const obj = JSON.parse(e.message);
+        if (typeof obj?.detail === "string") setShareErr(obj.detail);
+        else if (Array.isArray(obj?.missing)) setShareErr(`Missing: ${obj.missing.join(", ")}`);
+        else setShareErr(e.message);
+      } catch { setShareErr(e.message); }
+    } finally {
+      setShareBusy(false);
+    }
+  }
 
   // multi-popups that follow nodes; editable
   type Popup = { path: string; x: number; y: number; draft: string; dirty: boolean };
@@ -307,8 +399,7 @@ export default function GraphPage() {
         setPopups((prev) => {
           if (prev.length !== next.length) return next;
           for (let i = 0; i < prev.length; i++) {
-            const a = prev[i],
-              b = next[i];
+            const a = prev[i], b = next[i];
             if (a.path !== b.path || a.x !== b.x || a.y !== b.y || a.draft !== b.draft || a.dirty !== b.dirty) return next;
           }
           return prev;
@@ -357,10 +448,8 @@ export default function GraphPage() {
     if (elements.length) {
       const hasAnyPositions = elements.some((el: any) => (el as any).position);
       if (hasAnyPositions) {
-        // We already have explicit node positions → do not run layout
         cy.fit(undefined, 20);
       } else {
-        // No positions → run auto-layout once
         cy.layout({ name: "cose" }).run();
         cy.fit(undefined, 20);
       }
@@ -695,7 +784,7 @@ export default function GraphPage() {
           </select>
         </div>
 
-        {/* Name + Save buttons */}
+        {/* Name + Save buttons + Share */}
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           <input
             placeholder="Project name"
@@ -721,12 +810,126 @@ export default function GraphPage() {
           >
             Save all
           </button>
+
+          {/* ---------------- SHARE ADDITIONS: button ---------------- */}
+          <button
+            onClick={() => setShareOpen((o) => !o)}
+            disabled={!authed || !projectId}
+            style={{ fontSize: 12, border: "1px solid #ddd", padding: "4px 8px", borderRadius: 8, background: "white" }}
+            title={projectId ? "Share this project" : "Save or load a project to share"}
+          >
+            {shareOpen ? "Close sharing" : "Share…"}
+          </button>
         </div>
 
         {!authed && (
           <p style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
             <a href="/login">Sign in</a> to enable saving/loading projects.
           </p>
+        )}
+
+        {/* ---------------- SHARE ADDITIONS: panel ---------------- */}
+        {shareOpen && projectId && (
+          <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 12, color: "#6b7280" }}>Sharing for</div>
+                <div style={{ fontWeight: 600 }}>{projDetail?.name ?? `Project #${projectId}`}</div>
+              </div>
+              <div style={{ fontSize: 12, textTransform: "capitalize", background: "#f3f4f6", borderRadius: 999, padding: "2px 8px" }}>
+                {projDetail?.my_role ?? "—"}
+              </div>
+            </div>
+
+            {shareErr && <div style={{ marginTop: 8, color: "#b91c1c", fontSize: 12 }}>{shareErr}</div>}
+
+            {/* Search */}
+            <div style={{ marginTop: 12 }}>
+              <label htmlFor="userSearch" style={{ display: "block", fontSize: 12, color: "#6b7280", marginBottom: 4 }}>
+                Add people by username
+              </label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  id="userSearch"
+                  placeholder="Search usernames…"
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  disabled={!isOwner || shareBusy}
+                  style={{ flex: 1, border: "1px solid #ddd", borderRadius: 8, padding: "8px 10px" }}
+                />
+              </div>
+              {!!results.length && (
+                <div style={{ border: "1px solid #eee", borderRadius: 8, marginTop: 8, maxHeight: 180, overflow: "auto" }}>
+                  {results.map((u) => (
+                    <div key={u.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", borderTop: "1px solid #eee" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ width: 24, height: 24, borderRadius: 999, background: "#eee", display: "grid", placeItems: "center", fontSize: 12 }}>
+                          {u.username[0]?.toUpperCase()}
+                        </div>
+                        <div style={{ fontWeight: 600 }}>{u.username}</div>
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={() => mutateShare([u.username], "add", "viewer")}
+                          disabled={!isOwner || shareBusy}
+                          style={{ border: "1px solid #ddd", background: "white", padding: "6px 10px", borderRadius: 6 }}
+                        >
+                          Add as viewer
+                        </button>
+                        <button
+                          onClick={() => mutateShare([u.username], "add", "editor")}
+                          disabled={!isOwner || shareBusy}
+                          style={{ border: "1px solid #ddd", background: "white", padding: "6px 10px", borderRadius: 6 }}
+                        >
+                          Add as editor
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Editors */}
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 600 }}>Editors</div>
+              <div style={{ border: "1px solid #eee", borderRadius: 8, marginTop: 6 }}>
+                {(!collab.editors.length) && <div style={{ padding: 8, color: "#6b7280", fontSize: 14 }}>No editors yet.</div>}
+                {collab.editors.map((u) => (
+                  <Row
+                    key={u.id}
+                    u={u}
+                    role="editor"
+                    canEdit={!!isOwner && !shareBusy}
+                    onRemove={() => mutateShare([u.username], "remove", "editor")}
+                    onRoleChange={(newRole) => {
+                      if (newRole === "viewer") mutateShare([u.username], "remove", "editor"); // demote
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Viewers */}
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 600 }}>Viewers</div>
+              <div style={{ border: "1px solid #eee", borderRadius: 8, marginTop: 6 }}>
+                {(!collab.viewers.length) && <div style={{ padding: 8, color: "#6b7280", fontSize: 14 }}>No viewers yet.</div>}
+                {collab.viewers.map((u) => (
+                  <Row
+                    key={u.id}
+                    u={u}
+                    role="viewer"
+                    canEdit={!!isOwner && !shareBusy}
+                    onRemove={() => mutateShare([u.username], "remove", "viewer")}
+                    onRoleChange={(newRole) => {
+                      if (newRole === "editor") mutateShare([u.username], "add", "editor"); // promote
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Tree */}
@@ -844,6 +1047,49 @@ export default function GraphPage() {
           </div>
         ))}
       </section>
+    </div>
+  );
+}
+
+function Row({
+  u,
+  role,
+  canEdit,
+  onRemove,
+  onRoleChange,
+}: {
+  u: UserLite;
+  role: "viewer" | "editor";
+  canEdit: boolean;
+  onRemove: () => void;
+  onRoleChange: (r: "viewer" | "editor") => void;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", borderTop: "1px solid #eee" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ width: 24, height: 24, borderRadius: 999, background: "#eee", display: "grid", placeItems: "center", fontSize: 12 }}>
+          {u.username[0]?.toUpperCase()}
+        </div>
+        <div style={{ fontWeight: 600 }}>{u.username}</div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <select
+          value={role}
+          onChange={(e) => onRoleChange(e.target.value as "viewer" | "editor")}
+          disabled={!canEdit}
+        >
+          <option value="viewer">Viewer</option>
+          <option value="editor">Editor</option>
+        </select>
+        <button
+          onClick={onRemove}
+          disabled={!canEdit}
+          title="Remove"
+          style={{ border: "1px solid #ddd", background: "white", padding: "4px 6px", borderRadius: 6 }}
+        >
+          ✕
+        </button>
+      </div>
     </div>
   );
 }

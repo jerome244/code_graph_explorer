@@ -22,6 +22,7 @@ class ProjectListItemSerializer(serializers.ModelSerializer):
     owner_username = serializers.CharField(source="user.username", read_only=True)
     is_owner = serializers.SerializerMethodField()
     shared_with_count = serializers.IntegerField(read_only=True)
+    my_role = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
@@ -33,11 +34,25 @@ class ProjectListItemSerializer(serializers.ModelSerializer):
             "owner_username",
             "is_owner",
             "shared_with_count",
+            "my_role",
         )
 
     def get_is_owner(self, obj):
         req = self.context.get("request")
         return bool(req and req.user.is_authenticated and obj.user_id == req.user.id)
+
+    def get_my_role(self, obj):
+        req = self.context.get("request")
+        u = getattr(req, "user", None)
+        if not u or not getattr(u, "is_authenticated", False):
+            return "none"
+        if obj.user_id == u.id:
+            return "owner"
+        if obj.editors.filter(id=u.id).exists():
+            return "editor"
+        if obj.shared_with.filter(id=u.id).exists():
+            return "viewer"
+        return "none"
 
 
 class ProjectCreateSerializer(serializers.ModelSerializer):
@@ -49,7 +64,6 @@ class ProjectCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         files = validated_data.pop("files", [])
-        # 'user' is already in validated_data via serializer.save(user=...)
         proj = Project.objects.create(**validated_data)
         if files:
             ProjectFile.objects.bulk_create(
@@ -65,6 +79,8 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
     files = ProjectFileSerializer(many=True, read_only=True)
     owner = MinimalUserSerializer(source="user", read_only=True)
     shared_with = MinimalUserSerializer(many=True, read_only=True)
+    editors = MinimalUserSerializer(many=True, read_only=True)
+    my_role = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
@@ -76,4 +92,19 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
             "files",
             "owner",
             "shared_with",
+            "editors",
+            "my_role",
         )
+
+    def get_my_role(self, obj):
+        req = self.context.get("request")
+        u = getattr(req, "user", None)
+        if not u or not getattr(u, "is_authenticated", False):
+            return "none"
+        if obj.user_id == u.id:
+            return "owner"
+        if obj.editors.filter(id=u.id).exists():
+            return "editor"
+        if obj.shared_with.filter(id=u.id).exists():
+            return "viewer"
+        return "none"

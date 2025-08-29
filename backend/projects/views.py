@@ -53,20 +53,23 @@ class ProjectRetrieveUpdateDeleteView(generics.RetrieveUpdateDestroyAPIView):
         user = self.request.user
         if project.user_id == user.id:
             return project
-        # allow read-only if shared
+        # editors can access object (for update)
+        if project.editors.filter(id=user.id).exists():
+            return project
+        # viewers can read-only
         if self.request.method in ("GET", "HEAD", "OPTIONS") and project.shared_with.filter(
             id=user.id
         ).exists():
             return project
-        # otherwise forbid
         from rest_framework.exceptions import PermissionDenied
         raise PermissionDenied("Not allowed.")
 
     def perform_update(self, serializer):
-        # only owner can update
-        if self.get_object().user_id != self.request.user.id:
+        proj = self.get_object()
+        user = self.request.user
+        if not (proj.user_id == user.id or proj.editors.filter(id=user.id).exists()):
             from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied("Only the owner can update.")
+            raise PermissionDenied("Only owner or editors can update.")
         serializer.save()
 
     def perform_destroy(self, instance):
@@ -80,7 +83,10 @@ class ProjectFilesBulkUpsertView(APIView):
     permission_classes = (permissions.IsAuthenticated,)
 
     def post(self, request, pk):
-        project = get_object_or_404(Project, pk=pk, user=request.user)  # owner-only write
+        # owner or editor; return 404 to non-collaborators to avoid leaking
+        qs = Project.objects.filter(Q(user=request.user) | Q(editors=request.user))
+        project = get_object_or_404(qs, pk=pk)
+
         files = request.data.get("files", [])
         if not isinstance(files, list):
             return Response({"detail": "files must be a list"}, status=status.HTTP_400_BAD_REQUEST)
@@ -102,7 +108,9 @@ class ProjectSingleFileUpsertView(generics.GenericAPIView):
     serializer_class = ProjectFileSerializer
 
     def post(self, request, pk):
-        project = get_object_or_404(Project, pk=pk, user=request.user)  # owner-only write
+        qs = Project.objects.filter(Q(user=request.user) | Q(editors=request.user))
+        project = get_object_or_404(qs, pk=pk)
+
         path = request.data.get("path")
         content = request.data.get("content", "")
         if not path:
@@ -119,9 +127,10 @@ class ShareProjectView(APIView):
     Body:
       {
         "usernames": ["alice", "bob"],
-        "mode": "replace" | "add" | "remove"   # default: replace
+        "mode": "replace" | "add" | "remove",   # default: replace
+        "role": "viewer" | "editor"             # default: viewer
       }
-    Only owner can share.
+    Only owner can change sharing.
     """
     permission_classes = (permissions.IsAuthenticated,)
 
@@ -129,29 +138,44 @@ class ShareProjectView(APIView):
         project = get_object_or_404(Project, pk=pk, user=request.user)  # must own
         usernames = request.data.get("usernames", [])
         mode = (request.data.get("mode") or "replace").lower()
+        role = (request.data.get("role") or "viewer").lower()
 
         if not isinstance(usernames, list):
             return Response({"detail": "usernames must be a list"}, status=status.HTTP_400_BAD_REQUEST)
+        if role not in ("viewer", "editor"):
+            return Response({"detail": "invalid role"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # fetch users by username, ignore self
-        users = list(
-            User.objects.filter(username__in=usernames).exclude(id=request.user.id)
-        )
-        found_usernames = {u.username for u in users}
-        missing = sorted(set(usernames) - found_usernames)
+        users = list(User.objects.filter(username__in=usernames).exclude(id=request.user.id))
+        found = {u.username for u in users}
+        missing = sorted(set(usernames) - found)
         if missing and mode in ("replace", "add"):
-            # You can choose to ignore missing instead; here we surface it.
             return Response(
                 {"detail": "Some usernames not found", "missing": missing},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         if mode == "replace":
-            project.shared_with.set(users)
+            if role == "viewer":
+                project.shared_with.set(users)
+                # ensure editors are still viewers
+                project.shared_with.add(*project.editors.all())
+            else:  # editor
+                project.editors.set(users)
+                # editors must also be viewers
+                project.shared_with.add(*users)
         elif mode == "add":
-            project.shared_with.add(*users)
+            if role == "viewer":
+                project.shared_with.add(*users)
+            else:
+                project.editors.add(*users)
+                project.shared_with.add(*users)
         elif mode == "remove":
-            project.shared_with.remove(*users)
+            if role == "viewer":
+                project.shared_with.remove(*users)
+                # dropping view also drops editor
+                project.editors.remove(*users)
+            else:
+                project.editors.remove(*users)
         else:
             return Response({"detail": "invalid mode"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -160,6 +184,7 @@ class ShareProjectView(APIView):
             {
                 "id": project.id,
                 "shared_with": [{"id": u.id, "username": u.username} for u in project.shared_with.all()],
+                "editors": [{"id": u.id, "username": u.username} for u in project.editors.all()],
             }
         )
 
@@ -167,12 +192,13 @@ class ShareProjectView(APIView):
 class SharedWithMeListView(generics.ListAPIView):
     """
     GET /api/projects/shared-with-me/
-    Projects others own but have shared with me.
+    Projects others own but have shared with me (viewer or editor).
     """
     permission_classes = (permissions.IsAuthenticated,)
     serializer_class = ProjectListItemSerializer
 
     def get_queryset(self):
+        # editors are also added to shared_with above, so this is enough
         return (
             Project.objects.filter(shared_with=self.request.user)
             .annotate(file_count=Count("files"), shared_with_count=Count("shared_with"))

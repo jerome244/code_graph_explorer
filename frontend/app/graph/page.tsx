@@ -406,6 +406,10 @@ export default function GraphPage() {
   const applyingRemotePopupRef = useRef(false);
   const peersRef = useRef<Map<number, Peer>>(new Map());
   const [peers, setPeers] = useState<Peer[]>([]);
+  // NEW: debounce timers per open path for text edits
+  const textTimersRef = useRef<Map<string, number>>(new Map());
+  // NEW: latest remote drafts per path so late-opened popups get current text
+  const remoteDraftsRef = useRef<Record<string, string>>({});
 
   // who am I (for ignoring echoes)
   useEffect(() => {
@@ -497,6 +501,9 @@ export default function GraphPage() {
               if (!(path in prev)) return prev;
               const n = { ...prev }; delete n[path]; return n;
             });
+            // clear pending text broadcasts
+            const t = textTimersRef.current.get(path);
+            if (t) { window.clearTimeout(t); textTimersRef.current.delete(path); }
           } else {
             node.show();
             node.connectedEdges().forEach((e) => {
@@ -512,7 +519,7 @@ export default function GraphPage() {
           const node = cy.$id(path);
           if (!node.length) return;
           const rp = node.renderedPosition();
-          const code = fileMapRef.current[path] ?? "";
+          const code = (remoteDraftsRef.current[path] != null) ? remoteDraftsRef.current[path] : (fileMapRef.current[path] ?? "");
           setPopups((cur) => (cur.some((p) => p.path === path) ? cur : [...cur, { path, x: rp.x, y: rp.y, draft: code, dirty: false }]));
         } else if (msg.type === "popup_close") {
           const { path, by } = msg.data || {};
@@ -520,6 +527,8 @@ export default function GraphPage() {
           setPopups((cur) => cur.filter((p) => p.path !== path));
           setSelected((sel) => (sel === path ? null : sel));
           setPopupLinesEnabled((prev) => { if (!(path in prev)) return prev; const n = { ...prev }; delete n[path]; return n; });
+          const t = textTimersRef.current.get(path);
+          if (t) { window.clearTimeout(t); textTimersRef.current.delete(path); }
         } else if (msg.type === "popup_resize") {
           const { path, w, h, by } = msg.data || {};
           if (!path || by === me?.id) return;
@@ -550,6 +559,13 @@ export default function GraphPage() {
             for (const p of popupsRef.current) m[p.path] = true;
             return m;
           });
+        }
+        // --- NEW: text edit broadcast from peers
+        else if (msg.type === "text_edit" || msg.type === "text_change" || msg.type === "text_update") {
+          const { path, content, by } = msg.data || {};
+          if (!path || by === me?.id) return;
+          remoteDraftsRef.current[path] = String(content ?? "");
+          setPopups((cur) => cur.map((p) => (p.path === path ? { ...p, draft: remoteDraftsRef.current[path], dirty: true } : p)));
         }
       } catch {}
     };
@@ -591,12 +607,14 @@ export default function GraphPage() {
         if (existing.dirty) savePopup(id);
         setPopups((cur) => cur.filter((p) => p.path !== id));
         setPopupLinesEnabled((prev) => { if (!(id in prev)) return prev; const n = { ...prev }; delete n[id]; return n; });
+        const t = textTimersRef.current.get(id);
+        if (t) { window.clearTimeout(t); textTimersRef.current.delete(id); }
         if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_close", path: id }));
         return;
       }
 
       const rp = node.renderedPosition();
-      const code = fileMapRef.current[id] ?? "";
+      const code = (remoteDraftsRef.current[id] != null) ? remoteDraftsRef.current[id] : (fileMapRef.current[id] ?? "");
       setPopups((cur) => [...cur, { path: id, x: rp.x, y: rp.y, draft: code, dirty: false }]);
       setSelected(id);
       if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_open", path: id }));
@@ -930,6 +948,7 @@ export default function GraphPage() {
       if (popped && popped.dirty) savePopup(id);
       setPopups((cur) => cur.filter((pp) => pp.path !== id));
       setPopupLinesEnabled((prev) => { if (!(id in prev)) return prev; const n = { ...prev }; delete n[id]; return n; });
+      const t = textTimersRef.current.get(id); if (t) { window.clearTimeout(t); textTimersRef.current.delete(id); }
       if (selected === id) setSelected(null);
 
       if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "node_visibility", path: id, hidden: true }));
@@ -1277,6 +1296,23 @@ export default function GraphPage() {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [funcIndex, popups, showLinesGlobal, popupLinesEnabled, overlayEnabled]);
+
+  // ------------------------------ Text edit broadcasting (debounced) ------------------------------
+  const scheduleTextSend = useCallback((path: string, content: string) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== 1) return;
+    const timers = textTimersRef.current;
+    const existing = timers.get(path);
+    if (existing) window.clearTimeout(existing);
+    const id = window.setTimeout(() => {
+      try {
+        ws.send(JSON.stringify({ type: "text_edit", path, content }));
+      } finally {
+        timers.delete(path);
+      }
+    }, 150);
+    timers.set(path, id);
+  }, []);
 
   // ------------------------------ Render ------------------------------
 
@@ -1655,6 +1691,8 @@ export default function GraphPage() {
                       setPopups((cur) => cur.filter((p) => p.path !== pp.path));
                       setPopupLinesEnabled((prev) => { if (!(pp.path in prev)) return prev; const n = { ...prev }; delete n[pp.path]; return n; });
                       const ws = wsRef.current;
+                      const t = textTimersRef.current.get(pp.path);
+                      if (t) { window.clearTimeout(t); textTimersRef.current.delete(pp.path); }
                       if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_close", path: pp.path }));
                     }}
                     style={{ background: "none", border: 0, cursor: "pointer", fontSize: 16, lineHeight: 1 }}
@@ -1672,9 +1710,10 @@ export default function GraphPage() {
                   path={pp.path}
                   value={pp.draft}
                   funcIndex={funcIndex}
-                  onChange={(v) =>
-                    setPopups((cur) => cur.map((p) => (p.path === pp.path ? { ...p, draft: v, dirty: true } : p)))
-                  }
+                  onChange={(v) => {
+                    setPopups((cur) => cur.map((p) => (p.path === pp.path ? { ...p, draft: v, dirty: true } : p)));
+                    scheduleTextSend(pp.path, v);
+                  }}
                   onBlur={() => savePopup(pp.path)}
                 />
               </div>

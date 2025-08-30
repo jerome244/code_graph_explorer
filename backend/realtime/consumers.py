@@ -201,6 +201,27 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
                 },
             )
 
+        # Full-document text edits (frontend sends {type:"text_edit", path, content})
+        elif t == "text_edit":
+            path = content.get("path")
+            if not path:
+                return
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "broadcast",
+                    "payload": {
+                        "type": "text_edit",
+                        "data": {
+                            "path": path,
+                            "content": content.get("content", ""),
+                            "by": user.id,
+                        },
+                    },
+                },
+            )
+
+
         # Unknown → ignore silently
         else:
             return

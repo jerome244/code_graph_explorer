@@ -119,17 +119,22 @@ function InlineEditor({
   onChange,
   onBlur,
   funcIndex,
+  colorize,
 }: {
   path: string;
   value: string;
   onChange: (v: string) => void;
   onBlur: () => void;
   funcIndex: any;
+  colorize: boolean;
 }) {
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const preRef = useRef<HTMLPreElement | null>(null);
 
-  const html = useMemo(() => highlightWithFunctions(path, value, funcIndex), [path, value, funcIndex]);
+  const html = useMemo(
+    () => (colorize ? highlightWithFunctions(path, value, funcIndex) : htmlEscape(value)),
+    [colorize, path, value, funcIndex]
+  );
 
   const onScroll = () => {
     const ta = taRef.current,
@@ -169,6 +174,7 @@ function InlineEditor({
           fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
           fontSize: 11,
           lineHeight: 1.35,
+          visibility: colorize ? "visible" : "hidden",
         }}
         dangerouslySetInnerHTML={{ __html: html }}
       />
@@ -187,7 +193,7 @@ function InlineEditor({
           outline: "none",
           resize: "none",
           background: "transparent",
-          color: "transparent", // invisible text; caret still visible:
+          color: colorize ? "transparent" : "#111827",
           caretColor: "#111827",
           whiteSpace: "pre",
           overflow: "auto",
@@ -330,6 +336,9 @@ export default function GraphPage() {
   const [popupLinesEnabled, setPopupLinesEnabled] = useState<Record<string, boolean>>({});
   const anyPopupLineOn = Object.values(popupLinesEnabled).some(Boolean);
   const overlayEnabled = showLinesGlobal || anyPopupLineOn;
+
+  // NEW: global code coloration toggle (OFF by default)
+  const [colorizeFunctions, setColorizeFunctions] = useState(false);
 
   // keep popupLinesEnabled keys pruned to open popups
   useEffect(() => {
@@ -833,6 +842,7 @@ export default function GraphPage() {
     setSelected(null);
     setPopupLinesEnabled({}); // clear per-popup toggles when switching projects
     setShowLinesGlobal(false);
+    setColorizeFunctions(false); // reset coloration to default OFF on load
   }
 
   // Save popup contents: update fileMap + surgically update edges and function facts in cy (no relayout)
@@ -1025,6 +1035,7 @@ export default function GraphPage() {
     setProjectName(file.name.replace(/\.zip$/i, "") || "My Project");
     setPopupLinesEnabled({});
     setShowLinesGlobal(false);
+    setColorizeFunctions(false); // reset coloration to default OFF on new upload
   }, []);
 
   // ------------------------------ Realtime: broadcast drags + cursors ------------------------------
@@ -1532,7 +1543,7 @@ export default function GraphPage() {
 
       {/* Graph area */}
       <section style={{ position: "relative", overflow: "hidden" }}>
-        {/* Selection + global lines toggle */}
+        {/* Selection + global toggles */}
         <div
           style={{
             position: "absolute",
@@ -1549,6 +1560,24 @@ export default function GraphPage() {
           }}
         >
           {selected ? <strong>{selected}</strong> : <span>Select a file from the tree or graph</span>}
+
+          {/* NEW: code coloration toggle */}
+          <button
+            onClick={() => setColorizeFunctions(v => !v)}
+            title={colorizeFunctions ? "Turn code coloration off" : "Colorize function calls & declarations"}
+            style={{
+              fontSize: 11,
+              padding: "4px 6px",
+              borderRadius: 6,
+              border: "1px solid #e5e7eb",
+              background: colorizeFunctions ? "#ecfeff" : "white",
+              cursor: "pointer",
+            }}
+          >
+            {colorizeFunctions ? "Code coloration: on" : "Code coloration: off"}
+          </button>
+
+          {/* Global lines toggle */}
           <button
             onClick={() => {
               if (popups.length < 2) return;
@@ -1710,6 +1739,7 @@ export default function GraphPage() {
                   path={pp.path}
                   value={pp.draft}
                   funcIndex={funcIndex}
+                  colorize={colorizeFunctions}
                   onChange={(v) => {
                     setPopups((cur) => cur.map((p) => (p.path === pp.path ? { ...p, draft: v, dirty: true } : p)));
                     scheduleTextSend(pp.path, v);

@@ -14,18 +14,7 @@ export const ALLOWED_EXTS = new Set([
   ".jsx",
 ]);
 
-export const CANDIDATE_RESOLVE_EXTS = [
-  "",
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
-  ".py",
-  ".css",
-  ".html",
-  ".c",
-  ".h",
-];
+export const CANDIDATE_RESOLVE_EXTS = ["", ".ts", ".tsx", ".js", ".jsx", ".py", ".css", ".html", ".c", ".h"];
 
 export type TreeNode = {
   name: string;
@@ -88,38 +77,26 @@ const JS_CALL_RE = /\b([A-Za-z_]\w*)\s*\(/g;
 const PY_DECL_RE = /^[ \t]*def\s+([A-Za-z_]\w*)\s*\(/gm;
 const PY_CALL_RE = /\b([A-Za-z_]\w*)\s*\(/g;
 
-const RESERVED_WORDS = new Set([
-  "if","for","while","switch","return","class","def","with","lambda","print","range","int","str","float",
-  "async","await","try","catch","except","finally","yield","new","function"
-]);
-
-// ---- C helpers ----
-const C_RESERVED = new Set([
-  "if","for","while","switch","return","sizeof","typedef","struct","enum","union","case","break","continue",
-  "goto","default","do","else","static","extern","inline","const","volatile","register","signed","unsigned",
-  "long","short","auto","_Atomic","_Bool","_Complex","_Imaginary","void","char","int","float","double"
-]);
-
-// Strip comments, strings/chars, and preprocessor lines to avoid false positives
-function stripCCommentsStringsPP(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, " ")          // block comments
-    .replace(/\/\/[^\n]*$/gm, " ")              // line comments
-    .replace(/"(?:\\.|[^"\\])*"/g, '""')        // string literals
-    .replace(/'(?:\\.|[^'\\])'/g, "''")         // char literals
-    .replace(/^[ \t]*#[^\n]*$/gm, " ");         // preprocessor lines
-}
-
-// Very tolerant C declaration/definition regex.
-// Captures function name in group 2; matches prototypes (…; ) and definitions (… {).
-const C_DECL_DEF_RE =
-  /(^|\n)[ \t]*(?:__attribute__\s*\(\([^)]*\)\)\s*)*(?:static|extern|inline|const|volatile|register|signed|unsigned|long|short|struct\s+\w+|enum\s+\w+|union\s+\w+|[A-Za-z_]\w*|\*|\s)+\s+([A-Za-z_]\w*)\s*\([^;{)]*\)\s*(?:\{|;)/g;
-
-// Generic call name(...)
+// Heuristic C/C++ (used for .c/.h). We strip comments/strings first.
+const C_DEF_RE = /^[ \t]*(?:[_A-Za-z]\w*[\s\*]+)*([A-Za-z_]\w*)\s*\([^;{]*\)\s*\{/gm;   // function definitions
+const C_PROTO_RE = /^[ \t]*(?:[_A-Za-z]\w*[\s\*]+)*([A-Za-z_]\w*)\s*\([^;{]*\)\s*;/gm;  // prototypes in headers/same file
 const C_CALL_RE = /\b([A-Za-z_]\w*)\s*\(/g;
 
-function looksMacroish(name: string) {
-  return name.length >= 2 && name === name.toUpperCase();
+const RESERVED_WORDS = new Set([
+  // shared
+  "if","for","while","switch","return","class","def","with","lambda","print","range","int","str","float",
+  "async","await","try","catch","except","finally","yield","new","function",
+  // C/C
+  "sizeof","alignof","_Alignof","__alignof__",
+]);
+
+function stripCNoise(src: string): string {
+  // Remove block comments, line comments, strings, and char literals.
+  return src
+    .replace(/\/\*[^]*?\*\//g, m => " ".repeat(m.length))
+    .replace(/\/\/[^\n\r]*/g, m => " ".repeat(m.length))
+    .replace(/"(?:\\.|[^"\\])*"/g, m => " ".repeat(m.length))
+    .replace(/'(?:\\.|[^'\\])'/g, m => " ".repeat(m.length));
 }
 
 export function extractFunctionFacts(filename: string, content: string): FunctionFacts {
@@ -149,14 +126,6 @@ export function extractFunctionFacts(filename: string, content: string): Functio
       if (prev.includes(".")) continue; // skip obj.method()
       called.push(name);
     }
-
-    // Optional: colorize JSX className/id usage as "calls"
-    // let m2: RegExpExecArray | null;
-    // const classNameRe = /className\s*=\s*["']([^"']+)["']/g;
-    // const idJsxRe = /id\s*=\s*["']([^"']+)["']/g;
-    // while ((m2 = classNameRe.exec(content))) m2[1].trim().split(/\s+/).forEach(c => c && called.push(c));
-    // while ((m2 = idJsxRe.exec(content))) { const v = m2[1].trim(); if (v) called.push(v); }
-
   } else if (ext === ".html") {
     // HTML class/id usage -> treat as "called"
     let m: RegExpExecArray | null;
@@ -169,37 +138,40 @@ export function extractFunctionFacts(filename: string, content: string): Functio
       const idv = m[1].trim();
       if (idv) called.push(idv);
     }
-
   } else if (ext === ".css") {
-    // CSS selectors -> treat as "declared"
+    // CSS declarations
     let m: RegExpExecArray | null;
     const cssClassSelRe = /(^|[^A-Za-z0-9_-])\.([A-Za-z_-][\w-]*)/g;
     while ((m = cssClassSelRe.exec(content))) declared.push(m[2]);
     const cssIdSelRe = /(^|[^A-Za-z0-9_-])#(?![0-9a-fA-F]{3,8}\b)(-?[_A-Za-z][\w-]*)/g;
     while ((m = cssIdSelRe.exec(content))) declared.push(m[2]);
-
   } else if (ext === ".c" || ext === ".h") {
-    // C: robust-ish pass
-    const stripped = stripCCommentsStringsPP(content);
+    const clean = stripCNoise(content);
 
-    // declarations/definitions
-    let md: RegExpExecArray | null;
-    while ((md = C_DECL_DEF_RE.exec(stripped))) {
-      const fname = md[2];
-      if (!C_RESERVED.has(fname)) declared.push(fname);
+    // declarations (definitions + prototypes)
+    let m: RegExpExecArray | null;
+    while ((m = C_DEF_RE.exec(clean))) {
+      const name = m[1];
+      if (!RESERVED_WORDS.has(name)) declared.push(name);
+    }
+    while ((m = C_PROTO_RE.exec(clean))) {
+      const name = m[1];
+      if (!RESERVED_WORDS.has(name)) declared.push(name);
     }
 
-    // avoid counting decl/def as calls
-    const strippedNoDecls = stripped.replace(C_DECL_DEF_RE, (s) => " ".repeat(s.length));
-
     // calls
-    let mc: RegExpExecArray | null;
-    while ((mc = C_CALL_RE.exec(strippedNoDecls))) {
-      const name = mc[1];
-      if (C_RESERVED.has(name)) continue;
-      if (looksMacroish(name)) continue; // e.g., ASSERT(...)
-      const prev2 = strippedNoDecls.slice(Math.max(0, mc.index - 2), mc.index);
-      if (prev2.includes(".") || prev2.includes("->")) continue; // obj.fn() / ptr->fn()
+    while ((m = C_CALL_RE.exec(clean))) {
+      const name = m[1];
+      if (RESERVED_WORDS.has(name)) continue;
+
+      // skip likely function-pointer deref patterns: "*name)(" or ")(" right after name
+      const next = clean.slice(m.index + name.length, m.index + name.length + 2);
+      if (next.startsWith(")(")) continue;
+
+      // crude pre-scan to avoid macro-like keywords after '#'
+      const prev2 = clean.slice(Math.max(0, m.index - 2), m.index);
+      if (prev2.includes("#")) continue;
+
       called.push(name);
     }
   }
@@ -268,29 +240,25 @@ export function inferEdges(filename: string, content: string): string[] {
     let m: RegExpExecArray | null;
     while ((m = importRe.exec(content))) edges.push(m[1]);
     while ((m = requireRe.exec(content))) edges.push(m[1]);
-
   } else if (ext === ".py") {
     const fromRel = /from\s+(\.+[\w_/]+)\s+import\s+/g;
     let m: RegExpExecArray | null;
     while ((m = fromRel.exec(content))) edges.push(m[1]);
-
   } else if (ext === ".html") {
     const scriptRe = /<script[^>]*src=["']([^"']+)["'][^>]*>/gi;
     const linkRe = /<link[^>]*href=["']([^"']+)["'][^>]*>/gi;
     let m: RegExpExecArray | null;
     while ((m = scriptRe.exec(content))) edges.push(m[1]);
     while ((m = linkRe.exec(content))) edges.push(m[1]);
-
   } else if (ext === ".css") {
     const importRe = /@import\s+["']([^"']+)["']/g;
     let m: RegExpExecArray | null;
     while ((m = importRe.exec(content))) edges.push(m[1]);
-
   } else if (ext === ".c" || ext === ".h") {
-    // Only consider local includes with quotes; ignore system headers <...>
-    const incRe = /^[ \t]*#\s*include\s*["]([^"]+)["]/gm;
+    // local includes only: #include "path"
+    const incLocal = /^\s*#\s*include\s*"([^"]+)"/gm;
     let m: RegExpExecArray | null;
-    while ((m = incRe.exec(content))) edges.push(m[1]);
+    while ((m = incLocal.exec(content))) edges.push(m[1]);
   }
   return edges;
 }

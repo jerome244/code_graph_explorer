@@ -26,6 +26,7 @@ import TreeView from "./TreeView";
 import { htmlEscape, regexEscape, highlightWithFunctions } from "./utils";
 
 import Row from './Row';
+import Sidebar from "./Sidebar";
 
 // ------------------------------ Page ------------------------------
 
@@ -1159,210 +1160,28 @@ export default function GraphPage() {
   };
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(220px, 28vw) minmax(0,1fr)",
-        height: "100vh",
-        width: "100vw",
-        overflow: "hidden",
-      }}
-    >
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 28vw) minmax(0,1fr)", height: "100vh", width: "100vw", overflow: "hidden" }}>
       {/* Sidebar */}
-      <aside style={{ borderRight: "1px solid #e5e7eb", padding: 12, overflow: "auto" }}>
-        <h2 style={{ marginTop: 0 }}>Project</h2>
-        <input
-          type="file"
-          accept=".zip"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) onFile(f);
-          }}
-        />
-        <p style={{ fontSize: 12, color: "#4b5563" }}>{info}</p>
-
-        {/* Load existing */}
-        <div style={{ display: "flex", gap: 6, alignItems: "center", margin: "8px 0" }}>
-          <select
-            value={projectId ?? ""}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (!v) {
-                setProjectId(null);
-                return;
-              }
-              loadProject(Number(v));
-            }}
-            style={{ fontSize: 12 }}
-            title={authed ? "Load project" : "Sign in to load projects"}
-            disabled={!authed}
-          >
-            <option value="">{authed ? "Load project…" : "Sign in to load…"}</option>
-            {myProjects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Name + Save buttons + Share */}
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-          <input
-            placeholder="Project name"
-            value={projectName}
-            onChange={(e) => setProjectName(e.target.value)}
-            style={{ fontSize: 12, padding: "4px 6px", width: 180 }}
-            title="Project name"
-            disabled={!authed}
-          />
-          <button
-            onClick={saveAsNewProject}
-            style={{ fontSize: 12 }}
-            title={authed ? "Save as new project" : "Sign in to save"}
-            disabled={!authed}
-          >
-            Save as new
-          </button>
-          <button
-            onClick={saveAllToExisting}
-            style={{ fontSize: 12 }}
-            title={authed ? "Save all changes" : "Sign in to save"}
-            disabled={!authed}
-          >
-            Save all
-          </button>
-
-          {/* Share button */}
-          <button
-            onClick={() => setShareOpen((o) => !o)}
-            disabled={!authed || !projectId}
-            style={{ fontSize: 12, border: "1px solid #ddd", padding: "4px 8px", borderRadius: 8, background: "white" }}
-            title={projectId ? "Share this project" : "Save or load a project to share"}
-          >
-            {shareOpen ? "Close sharing" : "Share…"}
-          </button>
-        </div>
-
-        {!authed && (
-          <p style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
-            <a href="/login">Sign in</a> to enable saving/loading projects.
-          </p>
-        )}
-
-        {/* Share panel */}
-        {shareOpen && projectId && (
-          <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <div style={{ fontSize: 12, color: "#6b7280" }}>Sharing for</div>
-                <div style={{ fontWeight: 600 }}>{projDetail?.name ?? `Project #${projectId}`}</div>
-              </div>
-              <div style={{ fontSize: 12, textTransform: "capitalize", background: "#f3f4f6", borderRadius: 999, padding: "2px 8px" }}>
-                {projDetail?.my_role ?? "—"}
-              </div>
-            </div>
-
-            {shareErr && <div style={{ marginTop: 8, color: "#b91c1c", fontSize: 12 }}>{shareErr}</div>}
-
-            {/* Search */}
-            <div style={{ marginTop: 12 }}>
-              <label htmlFor="userSearch" style={{ display: "block", fontSize: 12, color: "#6b7280", marginBottom: 4 }}>
-                Add people by username
-              </label>
-              <div style={{ display: "flex", gap: 8 }}>
-                <input
-                  id="userSearch"
-                  placeholder="Search usernames…"
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
-                  disabled={!isOwner || shareBusy}
-                  style={{ flex: 1, border: "1px solid #ddd", borderRadius: 8, padding: "8px 10px" }}
-                />
-              </div>
-              {!!results.length && (
-                <div style={{ border: "1px solid #eee", borderRadius: 8, marginTop: 8, maxHeight: 180, overflow: "auto" }}>
-                  {results.map((u) => (
-                    <div key={u.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", borderTop: "1px solid #eee" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <div style={{ width: 24, height: 24, borderRadius: 999, background: "#eee", display: "grid", placeItems: "center", fontSize: 12 }}>
-                          {u.username[0]?.toUpperCase()}
-                        </div>
-                        <div style={{ fontWeight: 600 }}>{u.username}</div>
-                      </div>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button
-                          onClick={() => mutateShare([u.username], "add", "viewer")}
-                          disabled={!isOwner || shareBusy}
-                          style={{ border: "1px solid #ddd", background: "white", padding: "6px 10px", borderRadius: 6 }}
-                        >
-                          Add as viewer
-                        </button>
-                        <button
-                          onClick={() => mutateShare([u.username], "add", "editor")}
-                          disabled={!isOwner || shareBusy}
-                          style={{ border: "1px solid #ddd", background: "white", padding: "6px 10px", borderRadius: 6 }}
-                        >
-                          Add as editor
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Editors */}
-            <div style={{ marginTop: 16 }}>
-              <div style={{ fontWeight: 600 }}>Editors</div>
-              <div style={{ border: "1px solid #eee", borderRadius: 8, marginTop: 6 }}>
-                {(!collab.editors.length) && <div style={{ padding: 8, color: "#6b7280", fontSize: 14 }}>No editors yet.</div>}
-                {collab.editors.map((u) => (
-                  <Row
-                    key={u.id}
-                    u={u}
-                    role="editor"
-                    canEdit={!!isOwner && !shareBusy}
-                    onRemove={() => mutateShare([u.username], "remove", "editor")}
-                    onRoleChange={(newRole) => {
-                      if (newRole === "viewer") mutateShare([u.username], "remove", "editor"); // demote
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Viewers */}
-            <div style={{ marginTop: 16 }}>
-              <div style={{ fontWeight: 600 }}>Viewers</div>
-              <div style={{ border: "1px solid #eee", borderRadius: 8, marginTop: 6 }}>
-                {(!collab.viewers.length) && <div style={{ padding: 8, color: "#6b7280", fontSize: 14 }}>No viewers yet.</div>}
-                {collab.viewers.map((u) => (
-                  <Row
-                    key={u.id}
-                    u={u}
-                    role="viewer"
-                    canEdit={!!isOwner && !shareBusy}
-                    onRemove={() => mutateShare([u.username], "remove", "viewer")}
-                    onRoleChange={(newRole) => {
-                      if (newRole === "editor") mutateShare([u.username], "add", "editor"); // promote
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Tree */}
-        {tree ? (
-          <div style={{ marginTop: 8 }}>
-            <TreeView node={tree} onSelect={toggleVisibilityFromTree} />
-          </div>
-        ) : (
-          <p style={{ fontSize: 12, color: "#6b7280" }}>No files yet.</p>
-        )}
-      </aside>
+      <Sidebar
+        info={info}
+        projectId={projectId}
+        setProjectId={setProjectId}
+        onFile={onFile}
+        loadProject={loadProject}
+        saveAsNewProject={saveAsNewProject}
+        saveAllToExisting={saveAllToExisting}
+        shareOpen={shareOpen}
+        setShareOpen={setShareOpen}
+        projDetail={projDetail}
+        q={q}
+        setQ={setQ}
+        results={results}
+        isOwner={isOwner}
+        mutateShare={mutateShare}
+        shareErr={shareErr}
+        authed={authed}
+        myProjects={myProjects}
+      />
 
       {/* Graph area */}
       <section style={{ position: "relative", overflow: "hidden" }}>

@@ -20,191 +20,11 @@ import {
   buildTree,
 } from "./parsing";
 
-// ------------------------------ Types & utils ------------------------------
+import { Peer, ProjectDetail, Role } from "./types";
+import InlineEditor from "./InlineEditor";
+import TreeView from "./TreeView";
+import { htmlEscape, regexEscape, highlightWithFunctions } from "./utils";
 
-// Persist x/y *and* hidden flag per node
-type NodeState = { x?: number; y?: number; hidden?: boolean };
-type PositionsMap = Record<string, NodeState>;
-
-type CyElement = cytoscape.ElementDefinition;
-
-// >>> Realtime peers for presence + cursors
-type Peer = { id: number; username: string; color: string; x?: number; y?: number };
-
-function TreeView({ node, onSelect }: { node: TreeNode; onSelect: (path: string) => void }) {
-  if (!node.children) return null;
-  return (
-    <ul style={{ listStyle: "none", paddingLeft: 12 }}>
-      {node.children.map((child) => (
-        <li key={child.path}>
-          {child.isDir ? (
-            <details open>
-              <summary style={{ cursor: "pointer" }}>{child.name}</summary>
-              <TreeView node={child} onSelect={onSelect} />
-            </details>
-          ) : (
-            <button
-              onClick={() => onSelect(child.path)}
-              style={{
-                background: "none",
-                border: 0,
-                padding: 0,
-                cursor: "pointer",
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                fontSize: 12,
-              }}
-              title={child.path}
-            >
-              {child.name}
-            </button>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-// ------------------------------ SHARE ADDITIONS ------------------------------
-type Role = "owner" | "editor" | "viewer" | "none";
-type UserLite = { id: number; username: string };
-type ProjectDetail = {
-  id: number;
-  name: string;
-  owner: UserLite;
-  editors: UserLite[];
-  shared_with: UserLite[]; // viewers (may also include editors)
-  my_role?: Role;
-};
-
-// ------------------------------ Inline code highlighter ------------------------------
-
-function htmlEscape(s: string) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-function regexEscape(lit: string) {
-  return lit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function highlightWithFunctions(
-  path: string,
-  code: string,
-  funcIndex: { byFile?: Record<string, { declared: string[]; called: string[] }>; index?: any }
-): string {
-  const facts = funcIndex.byFile?.[path];
-  const index = funcIndex.index || {};
-  if (!facts) return htmlEscape(code);
-
-  const declaredSet = new Set(facts.declared);
-  const calledSet = new Set(facts.called);
-  const names = Array.from(new Set([...facts.declared, ...facts.called].filter((n) => index[n])));
-  if (names.length === 0) return htmlEscape(code);
-
-  // Build a single regex of all names, word-boundary matched
-  const re = new RegExp(`\\b(${names.map(regexEscape).join("|")})\\b`, "g");
-  const escaped = htmlEscape(code);
-
-  return escaped.replace(re, (m) => {
-    const color = index[m]?.color || "#111827";
-    const isDecl = declaredSet.has(m);
-    const isCall = calledSet.has(m) && !isDecl;
-    const role = isDecl ? "decl" : isCall ? "call" : "ref";
-    const deco = isDecl ? " text-decoration: underline dotted;" : "";
-    // Tag spans so we can anchor lines to the *actual* name positions
-    return `<span data-func="${m}" data-role="${role}" data-path="${path}" style="color:${color};${deco}">${m}</span>`;
-  });
-}
-
-function InlineEditor({
-  path,
-  value,
-  onChange,
-  onBlur,
-  funcIndex,
-  colorize,
-}: {
-  path: string;
-  value: string;
-  onChange: (v: string) => void;
-  onBlur: () => void;
-  funcIndex: any;
-  colorize: boolean;
-}) {
-  const taRef = useRef<HTMLTextAreaElement | null>(null);
-  const preRef = useRef<HTMLPreElement | null>(null);
-
-  const html = useMemo(
-    () => (colorize ? highlightWithFunctions(path, value, funcIndex) : htmlEscape(value)),
-    [colorize, path, value, funcIndex]
-  );
-
-  const onScroll = () => {
-    const ta = taRef.current,
-      pre = preRef.current;
-    if (ta && pre) {
-      pre.scrollTop = ta.scrollTop;
-      pre.scrollLeft = ta.scrollLeft;
-    }
-  };
-
-  useEffect(() => {
-    const ta = taRef.current,
-      pre = preRef.current;
-    if (!ta || !pre) return;
-    const sync = () => {
-      pre.style.height = `${ta.clientHeight}px`;
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(ta);
-    return () => ro.disconnect();
-  }, []);
-
-  return (
-    <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      <pre
-        ref={preRef}
-        aria-hidden
-        style={{
-          position: "absolute",
-          inset: 0,
-          margin: 0,
-          padding: 8,
-          overflow: "auto",
-          whiteSpace: "pre",
-          pointerEvents: "none",
-          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-          fontSize: 11,
-          lineHeight: 1.35,
-          visibility: colorize ? "visible" : "hidden",
-        }}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-      <textarea
-        ref={taRef}
-        value={value}
-        spellCheck={false}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={onBlur}
-        onScroll={onScroll}
-        style={{
-          position: "absolute",
-          inset: 0,
-          padding: 8,
-          border: 0,
-          outline: "none",
-          resize: "none",
-          background: "transparent",
-          color: colorize ? "transparent" : "#111827",
-          caretColor: "#111827",
-          whiteSpace: "pre",
-          overflow: "auto",
-          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-          fontSize: 11,
-          lineHeight: 1.35,
-        }}
-      />
-    </div>
-  );
-}
 
 // ------------------------------ Page ------------------------------
 
@@ -336,8 +156,6 @@ export default function GraphPage() {
   const [popupLinesEnabled, setPopupLinesEnabled] = useState<Record<string, boolean>>({});
   const anyPopupLineOn = Object.values(popupLinesEnabled).some(Boolean);
   const overlayEnabled = showLinesGlobal || anyPopupLineOn;
-
-  // NEW: global code coloration toggle (OFF by default)
   const [colorizeFunctions, setColorizeFunctions] = useState(false);
 
   // keep popupLinesEnabled keys pruned to open popups
@@ -415,9 +233,7 @@ export default function GraphPage() {
   const applyingRemotePopupRef = useRef(false);
   const peersRef = useRef<Map<number, Peer>>(new Map());
   const [peers, setPeers] = useState<Peer[]>([]);
-  // NEW: debounce timers per open path for text edits
   const textTimersRef = useRef<Map<string, number>>(new Map());
-  // NEW: latest remote drafts per path so late-opened popups get current text
   const remoteDraftsRef = useRef<Record<string, string>>({});
 
   // who am I (for ignoring echoes)

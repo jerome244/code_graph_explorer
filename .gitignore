@@ -3,9 +3,7 @@ frontend/node_modules/
 frontend/.next/
 frontend/.vercel/
 frontend/.turbo/
-frontend/.env
-frontend/.env.local
-frontend/.env.*.local
+
 
 # Lock files (optional if you want reproducible builds)
 frontend/package-lock.json
@@ -36,5 +34,3 @@ __pycache__/
 *.mypy_cache/
 *.vscode/
 *.idea/
-.env
-.env.*

@@ -638,27 +638,8 @@ export default function GraphPage() {
       return el;
     });
 
-    const pathSet = new Set(files.map((f) => f.path));
-    const edges: CyElement[] = [];
-    for (const f of files) {
-      const refs = inferEdges(f.path, f.content || "");
-      for (const rr of refs) {
-        const resolved = resolveRelative(f.path, rr);
-        if (!resolved) continue;
-        if (pathSet.has(resolved)) edges.push({ data: { id: `${f.path}=>${resolved}`, source: f.path, target: resolved }, group: "edges" });
-        else {
-          for (const ext of CANDIDATE_RESOLVE_EXTS) {
-            const cand = `${resolved}${ext}`;
-            if (pathSet.has(cand)) {
-              edges.push({ data: { id: `${f.path}=>${cand}`, source: f.path, target: cand }, group: "edges" });
-              break;
-            }
-          }
-        }
-      }
-    }
+    setElements(nodes);
 
-    setElements([...nodes, ...edges]);
     setTree(buildTree(files.map((f) => f.path)));
     setFuncIndex(built); // keep both byFile + index
     setInfo(`Loaded project "${proj.name}" (${files.length} files${Object.keys(positionsRef.current).length ? ", layout restored" : ""})`);

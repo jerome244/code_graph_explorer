@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const PROTECTED_PATHS = ["/dashboard", "/graph"]; // add more if needed
+const PROTECTED_PATHS = ["/dashboard", "/graph"]; // Protected pages
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -14,14 +14,15 @@ export function middleware(req: NextRequest) {
     const access = req.cookies.get("access")?.value;
     if (!access) {
       const url = req.nextUrl.clone();
-      url.pathname = "/"; // go to homepage instead of /login
-      url.searchParams.set("next", pathname);
+      url.pathname = "/"; // Redirect to homepage
+      url.searchParams.set("next", pathname); // Keep track of the requested page
       return NextResponse.redirect(url);
     }
   }
+
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: ["/((?!api|_next|favicon.ico|assets|.*\\.).*)"],
+  matcher: ["/((?!api|_next|favicon.ico|assets|.*\\.).*)"], // Exclude these paths from middleware
 };

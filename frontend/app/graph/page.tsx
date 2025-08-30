@@ -1160,28 +1160,337 @@ export default function GraphPage() {
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 28vw) minmax(0,1fr)", height: "100vh", width: "100vw", overflow: "hidden" }}>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(220px, 28vw) minmax(0,1fr)",
+        height: "100vh",
+        width: "100vw",
+        overflow: "hidden",
+      }}
+    >
       {/* Sidebar */}
-      <Sidebar
-        info={info}
-        projectId={projectId}
-        setProjectId={setProjectId}
-        onFile={onFile}
-        loadProject={loadProject}
-        saveAsNewProject={saveAsNewProject}
-        saveAllToExisting={saveAllToExisting}
-        shareOpen={shareOpen}
-        setShareOpen={setShareOpen}
-        projDetail={projDetail}
-        q={q}
-        setQ={setQ}
-        results={results}
-        isOwner={isOwner}
-        mutateShare={mutateShare}
-        shareErr={shareErr}
-        authed={authed}
-        myProjects={myProjects}
-      />
+      <aside
+        style={{
+          borderRight: "2px solid #e5e7eb",  // Thicker border
+          padding: 20,  // Increased padding
+          overflow: "auto",
+          width: "280px",  // Increase sidebar width for more space
+          backgroundColor: "#f9fafb",  // Slight background color for the sidebar
+        }}
+      >
+        <h2 style={{ marginTop: 0, fontSize: 20, fontWeight: 600, color: "#333" }}>Project</h2>
+        
+        <input
+          type="file"
+          accept=".zip"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onFile(f);
+          }}
+          style={{
+            fontSize: 14,
+            padding: "8px 12px",
+            marginBottom: 16,  // Add space below the file input
+            width: "100%",
+            borderRadius: 8,
+            border: "1px solid #ddd",
+          }}
+        />
+        
+        <p style={{ fontSize: 14, color: "#4b5563", marginBottom: 16 }}>{info}</p>
+
+        {/* Load existing */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16 }}>
+          <select
+            value={projectId ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) {
+                setProjectId(null);
+                return;
+              }
+              loadProject(Number(v));
+            }}
+            style={{
+              fontSize: 14,
+              padding: "8px 12px",
+              borderRadius: 8,
+              width: "100%",
+              border: "1px solid #ddd",
+            }}
+            title={authed ? "Load project" : "Sign in to load projects"}
+            disabled={!authed}
+          >
+            <option value="">{authed ? "Load project…" : "Sign in to load…"}</option>
+            {myProjects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Name + Save buttons + Share */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
+          <input
+            placeholder="Project name"
+            value={projectName}
+            onChange={(e) => setProjectName(e.target.value)}
+            style={{
+              fontSize: 14,
+              padding: "8px 12px",
+              width: "200px",
+              borderRadius: 8,
+              border: "1px solid #ddd",
+              marginBottom: 8,
+            }}
+            title="Project name"
+            disabled={!authed}
+          />
+          <button
+            onClick={saveAsNewProject}
+            style={{
+              fontSize: 14,
+              padding: "8px 12px",
+              borderRadius: 8,
+              background: "#2563eb",
+              color: "#fff",
+              border: "1px solid #ddd",
+            }}
+            title={authed ? "Save as new project" : "Sign in to save"}
+            disabled={!authed}
+          >
+            Save as new
+          </button>
+          <button
+            onClick={saveAllToExisting}
+            style={{
+              fontSize: 14,
+              padding: "8px 12px",
+              borderRadius: 8,
+              background: "#2563eb",
+              color: "#fff",
+              border: "1px solid #ddd",
+            }}
+            title={authed ? "Save all changes" : "Sign in to save"}
+            disabled={!authed}
+          >
+            Save all
+          </button>
+
+          {/* Share button */}
+          <button
+            onClick={() => setShareOpen((o) => !o)}
+            disabled={!authed || !projectId}
+            style={{
+              fontSize: 14,
+              padding: "8px 12px",
+              borderRadius: 8,
+              background: "#f3f4f6",
+              color: "#333",
+              border: "1px solid #ddd",
+              cursor: "pointer",
+            }}
+            title={projectId ? "Share this project" : "Save or load a project to share"}
+          >
+            {shareOpen ? "Close sharing" : "Share…"}
+          </button>
+        </div>
+
+        {!authed && (
+          <p style={{ fontSize: 14, color: "#6b7280", marginTop: 6 }}>
+            <a href="/login">Sign in</a> to enable saving/loading projects.
+          </p>
+        )}
+
+        {/* Share panel */}
+        {shareOpen && projectId && (
+          <div style={{ marginTop: 16, border: "1px solid #e5e7eb", borderRadius: 12, padding: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 14, color: "#6b7280" }}>Sharing for</div>
+                <div style={{ fontWeight: 600, fontSize: 16 }}>
+                  {projDetail?.name ?? `Project #${projectId}`}
+                </div>
+              </div>
+              <div
+                style={{
+                  fontSize: 14,
+                  textTransform: "capitalize",
+                  background: "#f3f4f6",
+                  borderRadius: 999,
+                  padding: "4px 12px",
+                }}
+              >
+                {projDetail?.my_role ?? "—"}
+              </div>
+            </div>
+
+            {shareErr && (
+              <div style={{ marginTop: 8, color: "#b91c1c", fontSize: 14 }}>{shareErr}</div>
+            )}
+
+            {/* Search */}
+            <div style={{ marginTop: 16 }}>
+              <label
+                htmlFor="userSearch"
+                style={{
+                  display: "block",
+                  fontSize: 14,
+                  color: "#6b7280",
+                  marginBottom: 6,
+                }}
+              >
+                Add people by username
+              </label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  id="userSearch"
+                  placeholder="Search usernames…"
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  disabled={!isOwner || shareBusy}
+                  style={{
+                    flex: 1,
+                    border: "1px solid #ddd",
+                    borderRadius: 8,
+                    padding: "10px 12px",
+                    fontSize: 14,
+                  }}
+                />
+              </div>
+              {!!results.length && (
+                <div
+                  style={{
+                    border: "1px solid #eee",
+                    borderRadius: 8,
+                    marginTop: 8,
+                    maxHeight: 200,
+                    overflow: "auto",
+                  }}
+                >
+                  {results.map((u) => (
+                    <div
+                      key={u.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        padding: "10px 12px",
+                        borderTop: "1px solid #eee",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div
+                          style={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: 999,
+                            background: "#eee",
+                            display: "grid",
+                            placeItems: "center",
+                            fontSize: 14,
+                          }}
+                        >
+                          {u.username[0]?.toUpperCase()}
+                        </div>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>{u.username}</div>
+                      </div>
+                      <div style={{ display: "flex", gap: 12 }}>
+                        <button
+                          onClick={() => mutateShare([u.username], "add", "viewer")}
+                          disabled={!isOwner || shareBusy}
+                          style={{
+                            border: "1px solid #ddd",
+                            background: "white",
+                            padding: "8px 14px",
+                            borderRadius: 6,
+                            fontSize: 14,
+                          }}
+                        >
+                          Add as viewer
+                        </button>
+                        <button
+                          onClick={() => mutateShare([u.username], "add", "editor")}
+                          disabled={!isOwner || shareBusy}
+                          style={{
+                            border: "1px solid #ddd",
+                            background: "white",
+                            padding: "8px 14px",
+                            borderRadius: 6,
+                            fontSize: 14,
+                          }}
+                        >
+                          Add as editor
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Editors */}
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 600, fontSize: 16 }}>Editors</div>
+              <div style={{ border: "1px solid #eee", borderRadius: 8, marginTop: 8 }}>
+                {!collab.editors.length && (
+                  <div style={{ padding: 12, color: "#6b7280", fontSize: 14 }}>
+                    No editors yet.
+                  </div>
+                )}
+                {collab.editors.map((u) => (
+                  <Row
+                    key={u.id}
+                    u={u}
+                    role="editor"
+                    canEdit={!!isOwner && !shareBusy}
+                    onRemove={() => mutateShare([u.username], "remove", "editor")}
+                    onRoleChange={(newRole) => {
+                      if (newRole === "viewer") mutateShare([u.username], "remove", "editor"); // demote
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Viewers */}
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 600, fontSize: 16 }}>Viewers</div>
+              <div style={{ border: "1px solid #eee", borderRadius: 8, marginTop: 8 }}>
+                {!collab.viewers.length && (
+                  <div style={{ padding: 12, color: "#6b7280", fontSize: 14 }}>
+                    No viewers yet.
+                  </div>
+                )}
+                {collab.viewers.map((u) => (
+                  <Row
+                    key={u.id}
+                    u={u}
+                    role="viewer"
+                    canEdit={!!isOwner && !shareBusy}
+                    onRemove={() => mutateShare([u.username], "remove", "viewer")}
+                    onRoleChange={(newRole) => {
+                      if (newRole === "editor") mutateShare([u.username], "add", "editor"); // promote
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Tree */}
+        {tree ? (
+          <div style={{ marginTop: 16 }}>
+            <TreeView node={tree} onSelect={toggleVisibilityFromTree} />
+          </div>
+        ) : (
+          <p style={{ fontSize: 14, color: "#6b7280" }}>No files yet.</p>
+        )}
+      </aside>
+
 
       {/* Graph area */}
       <section style={{ position: "relative", overflow: "hidden" }}>

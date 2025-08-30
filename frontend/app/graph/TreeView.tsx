@@ -1,22 +1,40 @@
-import React from "react";
-import { TreeNode } from "./types"; // Import TreeNode type if it's defined elsewhere
+import React, { useState } from "react";
+import { TreeNode } from "./types"; // Import TreeNode type
 
-// TreeView component to render a nested list of file/folder paths
-export default function TreeView({
-  node,
-  onSelect,
-}: {
+interface TreeViewProps {
   node: TreeNode;
   onSelect: (path: string) => void;
-}) {
+}
+
+export default function TreeView({ node, onSelect }: TreeViewProps) {
+  const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
+
+  const toggleFolder = (path: string) => {
+    setOpenFolders((prev) => {
+      const newOpenFolders = new Set(prev);
+      if (newOpenFolders.has(path)) {
+        newOpenFolders.delete(path); // Close the folder
+      } else {
+        newOpenFolders.add(path); // Open the folder
+      }
+      return newOpenFolders;
+    });
+  };
+
   if (!node.children) return null;
+
   return (
     <ul style={{ listStyle: "none", paddingLeft: 12 }}>
       {node.children.map((child) => (
         <li key={child.path}>
           {child.isDir ? (
-            <details open>
-              <summary style={{ cursor: "pointer" }}>{child.name}</summary>
+            <details open={openFolders.has(child.path)}>
+              <summary
+                onClick={() => toggleFolder(child.path)}
+                style={{ cursor: "pointer" }}
+              >
+                {child.name}
+              </summary>
               <TreeView node={child} onSelect={onSelect} />
             </details>
           ) : (

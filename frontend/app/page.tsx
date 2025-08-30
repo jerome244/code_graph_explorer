@@ -1,8 +1,30 @@
 "use client";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+
+// Helper function to get cookie by name
+const getCookie = (name: string): string | null => {
+  const cookieValue = document.cookie
+    .split("; ")
+    .find((row) => row.startsWith(`${name}=`))?.split("=")[1];
+  return cookieValue ? decodeURIComponent(cookieValue) : null;
+};
 
 export default function Home() {
   const router = useRouter();
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  // Check if the user is authenticated based on the 'access' token
+  useEffect(() => {
+    // Check for access token on page load
+    const token = getCookie("access");
+    if (token) {
+      setIsAuthenticated(true);  // User is logged in
+      router.replace("/dashboard");  // Redirect to dashboard if logged in
+    } else {
+      setIsAuthenticated(false); // User is not logged in
+    }
+  }, [router]);
 
   const goToLogin = () => {
     router.push("/login");  // Redirect to login page
@@ -15,21 +37,23 @@ export default function Home() {
   return (
     <main style={mainStyle}>
       <h1 style={headingStyle}>Welcome</h1>
-      <p>This is a public homepage. Use the buttons below to Login or Register.</p>
-      <div style={{ display: "flex", gap: "16px" }}>
-        <button
-          onClick={goToLogin}
-          style={buttonStyle}
-        >
-          Login
-        </button>
-        <button
-          onClick={goToRegister}
-          style={buttonStyle}
-        >
-          Register
-        </button>
-      </div>
+      <p>
+        {isAuthenticated
+          ? "You are logged in!"
+          : "Use the buttons below to Login or Register."}
+      </p>
+
+      {/* Show login and register buttons only if the user is not authenticated */}
+      {!isAuthenticated && (
+        <div style={{ display: "flex", gap: "16px" }}>
+          <button onClick={goToLogin} style={buttonStyle}>
+            Login
+          </button>
+          <button onClick={goToRegister} style={buttonStyle}>
+            Register
+          </button>
+        </div>
+      )}
     </main>
   );
 }

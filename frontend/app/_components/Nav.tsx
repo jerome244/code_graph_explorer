@@ -34,18 +34,14 @@ export default async function Nav() {
     >
       {/* Navigation Links */}
       <nav style={{ display: "flex", gap: 24 }}>
-        <Link href="/" style={navLinkStyle}>
-          Home
+        <Link href={me ? "/dashboard" : "/"} style={navLinkStyle}>
+          {me ? "Dashboard" : "Home"}
         </Link>
         <Link href="/graph" style={navLinkStyle}>
           Graph
         </Link>
-        {me && (
-          <Link href="/dashboard" style={navLinkStyle}>
-            Dashboard
-          </Link>
-        )}
       </nav>
+
 
       {/* User Options */}
       <div style={{ display: "flex", gap: 16, alignItems: "center" }}>

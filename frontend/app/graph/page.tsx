@@ -1712,17 +1712,6 @@ export default function GraphPage() {
                   strokeOpacity={0.95}
                   strokeLinecap="round"
                 />
-                <text
-                  x={(l.x1 + l.x2) / 2}
-                  y={(l.y1 + l.y2) / 2 - 6}
-                  fontSize={10}
-                  fontFamily="ui-sans-serif, system-ui, Segoe UI, Roboto, Helvetica, Arial"
-                  textAnchor="middle"
-                  opacity={0.9}
-                  fill={l.color}
-                >
-                  {l.label}
-                </text>
               </g>
             ))}
           </svg>,

@@ -94,7 +94,7 @@ export function extractFunctionFacts(filename: string, content: string): Functio
       const name = m[1];
       if (RESERVED_WORDS.has(name)) continue;
       const prev = content.slice(Math.max(0, m.index - 2), m.index);
-      if (prev.includes(".")) continue;
+      if (prev.includes(".")) continue; // skip obj.method()
       called.push(name);
     }
   } else if (ext === ".js" || ext === ".ts" || ext === ".tsx" || ext === ".jsx") {
@@ -106,9 +106,41 @@ export function extractFunctionFacts(filename: string, content: string): Functio
       const name = m[1];
       if (RESERVED_WORDS.has(name)) continue;
       const prev = content.slice(Math.max(0, m.index - 2), m.index);
-      if (prev.includes(".")) continue;
+      if (prev.includes(".")) continue; // skip obj.method()
       called.push(name);
     }
+
+    // Optional: colorize JSX className/id usage as "calls"
+    // const classNameRe = /className\s*=\s*["']([^"']+)["']/g;
+    // const idJsxRe = /id\s*=\s*["']([^"']+)["']/g;
+    // while ((m = classNameRe.exec(content))) m[1].trim().split(/\s+/).forEach(c => c && called.push(c));
+    // while ((m = idJsxRe.exec(content))) { const v = m[1].trim(); if (v) called.push(v); }
+
+  } else if (ext === ".html") {
+    // HTML class/id usage -> treat as "called"
+    let m: RegExpExecArray | null;
+
+    const classAttrRe = /class\s*=\s*["']([^"']+)["']/gi;
+    while ((m = classAttrRe.exec(content))) {
+      m[1].trim().split(/\s+/).forEach(cls => { if (cls) called.push(cls); });
+    }
+
+    const idAttrRe = /id\s*=\s*["']([^"']+)["']/gi;
+    while ((m = idAttrRe.exec(content))) {
+      const idv = m[1].trim();
+      if (idv) called.push(idv);
+    }
+
+  } else if (ext === ".css") {
+    // CSS selectors -> treat as "declared"
+    // Classes: capture ".class" but not something like ".5em"
+    const cssClassSelRe = /(^|[^A-Za-z0-9_-])\.([A-Za-z_-][\w-]*)/g;
+    let m: RegExpExecArray | null;
+    while ((m = cssClassSelRe.exec(content))) declared.push(m[2]);
+
+    // IDs: capture "#id" but avoid hex colors (#fff, #123abc)
+    const cssIdSelRe = /(^|[^A-Za-z0-9_-])#(?![0-9a-fA-F]{3,8}\b)(-?[_A-Za-z][\w-]*)/g;
+    while ((m = cssIdSelRe.exec(content))) declared.push(m[2]);
   }
 
   return { declared: Array.from(new Set(declared)), called: Array.from(new Set(called)) };

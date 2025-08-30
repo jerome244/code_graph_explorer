@@ -1,3 +1,4 @@
+# /backend/realtime/consumers.py
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.contrib.auth.models import AnonymousUser
 
@@ -144,7 +145,7 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
                 },
             )
 
-        # >>> Popup resize (added)
+        # Popup resize
         elif t == "popup_resize":
             await self.channel_layer.group_send(
                 self.group_name,
@@ -156,6 +157,44 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
                             "path": content.get("path"),
                             "w": content.get("w"),
                             "h": content.get("h"),
+                            "by": user.id,
+                        },
+                    },
+                },
+            )
+
+        # --- NEW: Sync per-popup "lines on/off" toggle ---
+        elif t == "popup_lines":
+            path = content.get("path")
+            enabled = bool(content.get("enabled"))
+            if not path:
+                return
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "broadcast",
+                    "payload": {
+                        "type": "popup_lines",
+                        "data": {
+                            "path": path,
+                            "enabled": enabled,
+                            "by": user.id,
+                        },
+                    },
+                },
+            )
+
+        # --- NEW: Sync GLOBAL "all lines on/off" toggle ---
+        elif t == "popup_lines_global":
+            enabled = bool(content.get("enabled"))
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "broadcast",
+                    "payload": {
+                        "type": "popup_lines_global",
+                        "data": {
+                            "enabled": enabled,
                             "by": user.id,
                         },
                     },

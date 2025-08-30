@@ -351,11 +351,6 @@ export default function GraphPage() {
     });
   }, [showLinesGlobal, popups]);
 
-  const togglePopupLines = (path: string) => {
-    if (popups.length < 2) return; // nothing to link
-    setPopupLinesEnabled((prev) => ({ ...prev, [path]: !prev[path] }));
-  };
-
   // Cytoscape refs
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
@@ -535,6 +530,25 @@ export default function GraphPage() {
           // keep guard for two RAFs to avoid echo
           requestAnimationFrame(() => {
             requestAnimationFrame(() => { applyingRemotePopupRef.current = false; });
+          });
+        }
+        // --- NEW: per-popup lines toggle from peers
+        else if (msg.type === "popup_lines") {
+          const { path, enabled, by } = msg.data || {};
+          if (!path || by === me?.id) return;
+          setPopupLinesEnabled(prev => ({ ...prev, [path]: !!enabled }));
+        }
+        // --- NEW: global lines toggle from peers
+        else if (msg.type === "popup_lines_global") {
+          const { enabled, by } = msg.data || {};
+          if (by === me?.id) return;
+          const on = !!enabled;
+          setShowLinesGlobal(on);
+          setPopupLinesEnabled(() => {
+            if (!on) return {};
+            const m: Record<string, boolean> = {};
+            for (const p of popupsRef.current) m[p.path] = true;
+            return m;
           });
         }
       } catch {}
@@ -1266,6 +1280,14 @@ export default function GraphPage() {
 
   // ------------------------------ Render ------------------------------
 
+  // helper to broadcast per-popup toggle
+  const sendPopupLines = (path: string, enabled: boolean) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: "popup_lines", path, enabled }));
+    }
+  };
+
   return (
     <div
       style={{
@@ -1494,17 +1516,20 @@ export default function GraphPage() {
           <button
             onClick={() => {
               if (popups.length < 2) return;
-              setShowLinesGlobal((prev) => {
-                const next = !prev;
-                // flip all per-popup toggles to match global
-                setPopupLinesEnabled(() => {
-                  if (!next) return {}; // all off
-                  const m: Record<string, boolean> = {};
-                  for (const p of popupsRef.current) m[p.path] = true;
-                  return m; // all on
-                });
-                return next;
+              const next = !showLinesGlobal;                 // compute next first
+              setShowLinesGlobal(next);
+              // flip all per-popup toggles to match global
+              setPopupLinesEnabled(() => {
+                if (!next) return {}; // all off
+                const m: Record<string, boolean> = {};
+                for (const p of popupsRef.current) m[p.path] = true;
+                return m; // all on
               });
+              // broadcast global toggle
+              const ws = wsRef.current;
+              if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify({ type: "popup_lines_global", enabled: next }));
+              }
             }}
             disabled={popups.length < 2}
             title={popups.length < 2 ? "Open two popups to link calls to declarations" : (showLinesGlobal ? "Turn ALL lines off" : "Turn ALL lines on")}
@@ -1604,7 +1629,12 @@ export default function GraphPage() {
                 </strong>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <button
-                    onClick={() => togglePopupLines(pp.path)}
+                    onClick={() => {
+                      if (popups.length < 2) return;
+                      const next = !popupLinesEnabled[pp.path];
+                      setPopupLinesEnabled(prev => ({ ...prev, [pp.path]: next }));
+                      sendPopupLines(pp.path, next);
+                    }}
                     disabled={popups.length < 2}
                     title={popups.length < 2 ? "Open another popup to link" : (linesOn ? "Hide lines for this popup" : "Show lines for this popup")}
                     style={{

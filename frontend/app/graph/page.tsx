@@ -3,7 +3,6 @@
 
 import JSZip from "jszip";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import * as cytoscapeImport from "cytoscape";
 const cytoscape = (cytoscapeImport as any).default ?? (cytoscapeImport as any);
 
@@ -185,6 +184,11 @@ export default function GraphPage() {
   const anyPopupLineOn = Object.values(popupLinesEnabled).some(Boolean);
   const overlayEnabled = showLinesGlobal || anyPopupLineOn;
   const [colorizeFunctions, setColorizeFunctions] = useState(false);
+
+  // --- GitHub import state ---
+  const [ghRepo, setGhRepo] = useState(""); // "owner/repo"
+  const [ghRef, setGhRef] = useState("");   // optional branch/tag/sha
+  const [ghToken, setGhToken] = useState(""); // optional (for private repos / rate limits)
 
   // keep popupLinesEnabled keys pruned to open popups
   useEffect(() => {
@@ -869,6 +873,41 @@ export default function GraphPage() {
     setColorizeFunctions(false); // reset coloration to default OFF on new upload
   }, []);
 
+  const importFromGitHub = useCallback(async () => {
+    const repo = ghRepo.trim();
+    const ref = ghRef.trim() || undefined;
+    const token = ghToken.trim() || undefined;
+
+    if (!repo) {
+      setInfo("Enter GitHub repo as owner/name");
+      return;
+    }
+
+    try {
+      setInfo("Downloading from GitHub…");
+      const r = await fetch("/api/github/archive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo, ref, token }),
+      });
+
+      if (!r.ok) {
+        const { error } = await r.json().catch(() => ({}));
+        setInfo(error || `GitHub download failed (${r.status})`);
+        return;
+      }
+
+      const buf = await r.arrayBuffer();
+      const blob = new Blob([buf], { type: "application/zip" });
+      const name = `${repo.replace("/", "-")}${ref ? "-" + ref : ""}.zip`;
+      const file = new File([blob], name, { type: "application/zip" });
+
+      await onFile(file); // ← reuse the same ZIP parsing pipeline
+    } catch (e: any) {
+      setInfo(e?.message || "GitHub import failed");
+    }
+  }, [ghRepo, ghRef, ghToken, onFile]);
+
   // ------------------------------ Realtime: broadcast drags + cursors ------------------------------
   // Hook node drag events to broadcast positions (attach regardless of WS timing)
   useEffect(() => {
@@ -1206,7 +1245,50 @@ export default function GraphPage() {
             border: "1px solid #ddd",
           }}
         />
-        
+
+        {/* Import from GitHub */}
+        <div style={{ marginTop: 16, padding: 12, border: "1px solid #e5e7eb", borderRadius: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Import from GitHub</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            <input
+              placeholder='owner/repo (e.g. "vercel/next.js")'
+              value={ghRepo}
+              onChange={(e) => setGhRepo(e.target.value)}
+              style={{ fontSize: 14, padding: "8px 12px", border: "1px solid #ddd", borderRadius: 8 }}
+            />
+            <input
+              placeholder="ref (branch/tag/commit) — optional"
+              value={ghRef}
+              onChange={(e) => setGhRef(e.target.value)}
+              style={{ fontSize: 14, padding: "8px 12px", border: "1px solid #ddd", borderRadius: 8 }}
+            />
+            <input
+              placeholder="GitHub token (optional; required for private repos)"
+              type="password"
+              value={ghToken}
+              onChange={(e) => setGhToken(e.target.value)}
+              style={{ fontSize: 14, padding: "8px 12px", border: "1px solid #ddd", borderRadius: 8 }}
+            />
+            <button
+              onClick={importFromGitHub}
+              style={{
+                fontSize: 14,
+                padding: "8px 12px",
+                borderRadius: 8,
+                background: "#111827",
+                color: "white",
+                border: "1px solid #0f172a",
+                cursor: "pointer",
+              }}
+            >
+              Import repo
+            </button>
+            <div style={{ fontSize: 12, color: "#6b7280" }}>
+              Leave ref blank to use the default branch. Use a token for private repos or to avoid rate limits.
+            </div>
+          </div>
+        </div>
+
         <p style={{ fontSize: 14, color: "#4b5563", marginBottom: 16 }}>{info}</p>
 
         {/* Load existing */}

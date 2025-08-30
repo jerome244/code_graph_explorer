@@ -31,6 +31,32 @@ import Sidebar from "./Sidebar";
 // ------------------------------ Page ------------------------------
 
 export default function GraphPage() {
+
+  // --- FULLSCREEN: start ---
+  const outerRef = useRef<HTMLDivElement>(null);
+  const [isFs, setIsFs] = useState(false);
+
+  useEffect(() => {
+    const onChange = () => setIsFs(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(async () => {
+    const el: any = outerRef.current ?? document.documentElement;
+    try {
+      if (!document.fullscreenElement) {
+        if (el.requestFullscreen) await el.requestFullscreen();
+        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen(); // Safari
+      } else {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else if ((document as any).webkitExitFullscreen) (document as any).webkitExitFullscreen(); // Safari
+      }
+    } catch {}
+  }, []);
+  // --- FULLSCREEN: end ---
+
+
   // Graph state
   const [elements, setElements] = useState<CyElement[]>([]);
   const [tree, setTree] = useState<TreeNode | null>(null);
@@ -1142,12 +1168,14 @@ export default function GraphPage() {
 
   return (
     <div
+      ref={outerRef}
       style={{
         display: "grid",
         gridTemplateColumns: "minmax(220px, 28vw) minmax(0,1fr)",
         height: "100vh",
         width: "100vw",
         overflow: "hidden",
+        background: "#fff", 
       }}
     >
       {/* Sidebar */}
@@ -1462,6 +1490,24 @@ export default function GraphPage() {
           </div>
         )}
 
+        <button
+          onClick={toggleFullscreen}
+          style={{
+            fontSize: 14,
+            padding: "8px 12px",
+            borderRadius: 8,
+            background: "#111827",
+            color: "white",
+            border: "1px solid #0f172a",
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+          }}
+          title={isFs ? "Exit fullscreen" : "Enter fullscreen"}
+        >
+          {isFs ? "Exit Fullscreen" : "Fullscreen"}
+        </button>
+
+
         {/* Tree */}
         {tree ? (
           <div style={{ marginTop: 16 }}>
@@ -1474,7 +1520,7 @@ export default function GraphPage() {
 
 
       {/* Graph area */}
-      <section style={{ position: "relative", overflow: "hidden" }}>
+      <section style={{ position: "relative", overflow: "hidden", background: "#fff" }}>
         {/* Selection + global toggles */}
         <div
           style={{
@@ -1551,7 +1597,7 @@ export default function GraphPage() {
         </div>
 
         {/* Cytoscape canvas */}
-        <div ref={containerRef} style={{ position: "relative", width: "100%", height: "100%" }} />
+        <div ref={containerRef} style={{ position: "relative", width: "100%", height: "100%", background: "#fff" }} />
 
         {/* Presence avatars */}
         {peers.length > 0 && (
@@ -1690,8 +1736,8 @@ export default function GraphPage() {
           );
         })}
 
-        {/* Link overlay (caller → declarer) — TOP layer via portal; plain lines, no arrow heads */}
-        {mounted && overlayEnabled && createPortal(
+        {/* Link overlay (caller → declarer) — inline so it works in fullscreen */}
+        {overlayEnabled && (
           <svg
             style={{
               position: "fixed",
@@ -1714,9 +1760,9 @@ export default function GraphPage() {
                 />
               </g>
             ))}
-          </svg>,
-          document.body
+          </svg>
         )}
+
       </section>
     </div>
   );

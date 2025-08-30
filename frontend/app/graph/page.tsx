@@ -769,17 +769,17 @@ export default function GraphPage() {
     const isHidden = (node as any).hidden ? (node as any).hidden() : node.style("display") === "none";
     const ws = wsRef.current;
 
-    if (isHidden) {
-      // SHOW
-      node.show();
-      node.connectedEdges().forEach((e) => {
-        if (!e.source().hidden() && !e.target().hidden()) e.show();
-      });
-      positionsRef.current[id] = { ...(positionsRef.current[id] || {}), hidden: false };
-      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "node_visibility", path: id, hidden: false }));
-      cy.animate({ center: { eles: node }, duration: 250, easing: "ease-in-out" });
-      setSelected(id);
-    } else {
+      if (isHidden) {
+        // SHOW
+        node.show();
+        node.connectedEdges().forEach((e) => {
+          if (!e.source().hidden() && !e.target().hidden()) e.show();
+        });
+        positionsRef.current[id] = { ...(positionsRef.current[id] || {}), hidden: false };
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "node_visibility", path: id, hidden: false }));
+        // no recenter
+        setSelected(id);
+      } else {
       // HIDE
       node.hide();
       node.connectedEdges().hide();

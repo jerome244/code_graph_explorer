@@ -163,7 +163,7 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
                 },
             )
 
-        # --- NEW: Sync per-popup "lines on/off" toggle ---
+        # --- Sync per-popup "lines on/off" toggle ---
         elif t == "popup_lines":
             path = content.get("path")
             enabled = bool(content.get("enabled"))
@@ -184,7 +184,7 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
                 },
             )
 
-        # --- NEW: Sync GLOBAL "all lines on/off" toggle ---
+        # --- Sync GLOBAL "all lines on/off" toggle ---
         elif t == "popup_lines_global":
             enabled = bool(content.get("enabled"))
             await self.channel_layer.group_send(
@@ -215,6 +215,23 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
                         "data": {
                             "path": path,
                             "content": content.get("content", ""),
+                            "by": user.id,
+                        },
+                    },
+                },
+            )
+
+        # --- Sync GLOBAL "code coloration" toggle ---
+        elif t == "colorize_functions":
+            enabled = bool(content.get("enabled"))
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "broadcast",
+                    "payload": {
+                        "type": "colorize_functions",
+                        "data": {
+                            "enabled": enabled,
                             "by": user.id,
                         },
                     },

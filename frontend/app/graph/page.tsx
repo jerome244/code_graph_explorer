@@ -576,6 +576,12 @@ export default function GraphPage() {
           remoteDraftsRef.current[path] = String(content ?? "");
           setPopups((cur) => cur.map((p) => (p.path === path ? { ...p, draft: remoteDraftsRef.current[path], dirty: true } : p)));
         }
+        // --- NEW: code coloration toggle from peers
+        else if (msg.type === "colorize_functions") {
+          const { enabled, by } = msg.data || {};
+          if (by === me?.id) return;
+          setColorizeFunctions(!!enabled);
+        }
       } catch {}
     };
 
@@ -1561,9 +1567,16 @@ export default function GraphPage() {
         >
           {selected ? <strong>{selected}</strong> : <span>Select a file from the tree or graph</span>}
 
-          {/* NEW: code coloration toggle */}
+          {/* NEW: code coloration toggle (now synced via WS) */}
           <button
-            onClick={() => setColorizeFunctions(v => !v)}
+            onClick={() => {
+              const next = !colorizeFunctions;
+              setColorizeFunctions(next);
+              const ws = wsRef.current;
+              if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify({ type: "colorize_functions", enabled: next }));
+              }
+            }}
             title={colorizeFunctions ? "Turn code coloration off" : "Colorize function calls & declarations"}
             style={{
               fontSize: 11,

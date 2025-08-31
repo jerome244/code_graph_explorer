@@ -27,6 +27,25 @@ import { htmlEscape, regexEscape, highlightWithFunctions } from "./utils";
 import Row from './Row';
 import Sidebar from "./Sidebar";
 
+
+// Prefer source files over headers when multiple declaring files are open
+const rankFile = (p: string) => {
+  const e = (p.split(".").pop() || "").toLowerCase();
+  if (e === "c" || e === "cc" || e === "cpp" || e === "cxx") return 0; // definitions first
+  if (e === "h" || e === "hh" || e === "hpp" || e === "hxx") return 2; // headers last
+  return 1;
+};
+
+// Build a non-looping mid-point cubic Bezier (prevents figure-8 crossings)
+const buildPath = (x1: number, y1: number, x2: number, y2: number) => {
+  const dx = x2 - x1, dy = y2 - y1;
+  if (Math.hypot(dx, dy) < 6) return null; // skip tiny lines
+  const mx = (x1 + x2) / 2;                 // shared x control point ⇒ smooth S
+  return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
+};
+
+
+
 // ------------------------------ Page ------------------------------
 
 export default function GraphPage() {
@@ -1048,7 +1067,7 @@ export default function GraphPage() {
     return (window as any).CSS?.escape ? (window as any).CSS.escape(val) : val.replace(/"/g, '\\"');
   };
 
-  type PopupLink = { x1: number; y1: number; x2: number; y2: number; label: string; color: string };
+  type PopupLink = { x1: number; y1: number; x2: number; y2: number; label: string; color: string; d?: string };
   const [popupLinks, setPopupLinks] = useState<PopupLink[]>([]);
 
   useEffect(() => {
@@ -1115,6 +1134,23 @@ export default function GraphPage() {
         const byFile: Record<string, { declared: string[]; called: string[] }> = funcIndex?.byFile || {};
         const paletteByName: Record<string, { color?: string }> = funcIndex?.index || {};
 
+        // STEP 2 — choose one open declaring file per function (prefer .c/.cc/.cpp over headers)
+        const byName: Record<string, { color?: string; declaredIn?: string[]; calledIn?: string[] }> =
+          (funcIndex?.index as any) || {};
+
+        const openSet = new Set(popupsRef.current.map(p => p.path));
+
+        const preferredOpenDecl: Record<string, string> = {};
+        for (const [name, meta] of Object.entries(byName)) {
+          const decls = (meta.declaredIn || []);
+          const openDecls = decls.filter(p => openSet.has(p));
+          if (openDecls.length) {
+            // rankFile() was added in Step 1 (outside the component)
+            preferredOpenDecl[name] = openDecls.sort((a, b) => rankFile(a) - rankFile(b))[0];
+          }
+        }
+
+
         // fallback anchors on popup edges
         const rects = new Map<string, DOMRect>();
         for (const p of popupsRef.current) {
@@ -1149,22 +1185,36 @@ export default function GraphPage() {
 
             const names = Array.from(match).sort((a, b) => a.localeCompare(b));
 
-            names.forEach((name, k) => {
-              const color = paletteByName[name]?.color || "#111827";
+            // draw to B only if B is the chosen declaring popup for that function
+            const filtered = names.filter((name) => {
+              const pref = preferredOpenDecl[name];
+              return !pref || pref === B.path;
+            });
+            if (filtered.length === 0) continue;
+
+            filtered.forEach((name, k) => {
+              const color =
+                (funcIndex?.index as any)?.[name]?.color ||
+                paletteByName[name]?.color ||
+                "#111827";
 
               const src = findFuncPoint(A.path, name, "call") || anchorRight(rectA);
               const dst = findFuncPoint(B.path, name, "decl") || anchorLeft(rectB);
 
-              // small vertical deflection if there are multiple lines for readability
-              const yOffset = (k - (names.length - 1) / 2) * 8;
+              const yOffset = (k - (filtered.length - 1) / 2) * 8;
+
+              const d = buildPath(src.x, src.y + yOffset, dst.x, dst.y + yOffset);
+              if (!d) return;
 
               links.push({
                 x1: src.x, y1: src.y + yOffset,
                 x2: dst.x, y2: dst.y + yOffset,
+                d,                 // <— prebuilt non-looping path
                 label: name,
                 color,
-              });
+              } as any);
             });
+
           }
         }
 
@@ -1820,30 +1870,37 @@ export default function GraphPage() {
 
         {/* Link overlay (caller → declarer) — inline so it works in fullscreen */}
         {overlayEnabled && (
-          <svg
-            style={{
-              position: "fixed",
-              inset: 0,
-              width: "100vw",
-              height: "100vh",
-              zIndex: 9999,
-              pointerEvents: "none",
-            }}
-          >
-            {popupLinks.map((l, i) => (
-              <g key={i}>
-                <path
-                  d={`M ${l.x1} ${l.y1} C ${l.x1 + 60} ${l.y1}, ${l.x2 - 60} ${l.y2}, ${l.x2} ${l.y2}`}
-                  fill="none"
-                  stroke={l.color}
-                  strokeWidth={2}
-                  strokeOpacity={0.95}
-                  strokeLinecap="round"
-                />
-              </g>
-            ))}
-          </svg>
+        <svg
+          style={{
+            position: "fixed",
+            inset: 0,
+            width: "100vw",
+            height: "100vh",
+            zIndex: 9999,
+            pointerEvents: "none",
+          }}
+        >
+          {popupLinks.map((l, i) => (
+            <path
+              key={i}
+              d={
+                (l as any).d ??
+                `M ${l.x1} ${l.y1} C ${(l.x1 + l.x2) / 2} ${l.y1}, ${(l.x1 + l.x2) / 2} ${l.y2}, ${l.x2} ${l.y2}`
+              }
+              fill="none"
+              stroke={l.color}
+              strokeWidth={2.25}
+              strokeOpacity={1}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
+              shapeRendering="geometricPrecision"
+            />
+          ))}
+        </svg>
+
         )}
+
 
       </section>
     </div>

@@ -2014,604 +2014,629 @@ const setLocalAudioEnabled = (on: boolean) => {
       </aside>
 
 
-      {/* Graph area */}
-      <section style={{ position: "relative", overflow: "hidden", background: "#fff" }}>
-        {/* Selection + global toggles */}
-        <div
-          style={{
-            position: "absolute",
-            top: 8,
-            left: 8,
-            zIndex: 10,
-            background: "white",
-            padding: "4px 8px",
-            borderRadius: 8,
-            border: "1px solid #e5e7eb",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-          }}
-        >
-          {selected ? <strong>{selected}</strong> : <span>Select a file from the tree or graph</span>}
-
-          {/* NEW: code coloration toggle (now synced via WS) */}
-          <button
-            onClick={() => {
-              const next = !colorizeFunctions;
-              setColorizeFunctions(next);
-              const ws = wsRef.current;
-              if (ws && ws.readyState === 1) {
-                ws.send(JSON.stringify({ type: "colorize_functions", enabled: next }));
-              }
-            }}
-            title={colorizeFunctions ? "Turn code coloration off" : "Colorize function calls & declarations"}
-            style={{
-              fontSize: 11,
-              padding: "4px 6px",
-              borderRadius: 6,
-              border: "1px solid #e5e7eb",
-              background: colorizeFunctions ? "#ecfeff" : "white",
-              cursor: "pointer",
-            }}
-          >
-            {colorizeFunctions ? "Code coloration: on" : "Code coloration: off"}
-          </button>
-
-          {/* Global lines toggle */}
-          <button
-            onClick={() => {
-              if (popups.length < 2) return;
-              const next = !showLinesGlobal;                 // compute next first
-              setShowLinesGlobal(next);
-              // flip all per-popup toggles to match global
-              setPopupLinesEnabled(() => {
-                if (!next) return {}; // all off
-                const m: Record<string, boolean> = {};
-                for (const p of popupsRef.current) m[p.path] = true;
-                return m; // all on
-              });
-              // broadcast global toggle
-              const ws = wsRef.current;
-              if (ws && ws.readyState === 1) {
-                ws.send(JSON.stringify({ type: "popup_lines_global", enabled: next }));
-              }
-            }}
-            disabled={popups.length < 2}
-            title={popups.length < 2 ? "Open two popups to link calls to declarations" : (showLinesGlobal ? "Turn ALL lines off" : "Turn ALL lines on")}
-            style={{
-              fontSize: 11,
-              padding: "4px 6px",
-              borderRadius: 6,
-              border: "1px solid #e5e7eb",
-              background: showLinesGlobal ? "#eef2ff" : "white",
-              cursor: popups.length < 2 ? "not-allowed" : "pointer",
-            }}
-          >
-            {showLinesGlobal ? "All lines: on" : "All lines: off"}
-          </button>
-
-          <button
-            onClick={() => setSidebarOpen(v => !v)}
-            aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-            aria-expanded={sidebarOpen}
-            aria-controls="sidebar"
-            title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-            style={{
-              display: "grid",
-              placeItems: "center",
-              width: 28,
-              height: 28,
-              borderRadius: 6,
-              border: "1px solid #e5e7eb",
-              background: "white",
-              cursor: "pointer",
-            }}
-          >
-            <span aria-hidden="true" style={{ fontSize: 14, lineHeight: 1 }}>
-              {sidebarOpen ? "⟨" : "⟩"}
-            </span>
-          </button>
-
-{/* ------- Project Chat (realtime) ------- */}
-<button
-  onClick={() => setChatOpen(o => !o)}
-  style={{
-    position: "fixed",
-    right: 16,
-    bottom: chatOpen ? 330 : 16,
-    zIndex: 40,
-    borderRadius: 999,
-    padding: "10px 14px",
-    border: "1px solid #e5e7eb",
-    background: "white",
-    boxShadow: "0 8px 20px rgba(0,0,0,0.10)",
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: "pointer",
-  }}
-  title={chatOpen ? "Hide chat" : "Show chat"}
-  type="button"
->
-  💬 {chatOpen ? "Hide chat" : "Project chat"}
-</button>
-
-{chatOpen && (
+{/* Graph area */}
+<section style={{ position: "relative", overflow: "hidden", background: "#fff" }}>
+  {/* Selection + global toggles */}
   <div
+    style={{
+      position: "absolute",
+      top: 8,
+      left: 8,
+      zIndex: 50,
+      background: "white",
+      padding: "4px 8px",
+      borderRadius: 8,
+      border: "1px solid #e5e7eb",
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+    }}
+  >
+    {selected ? <strong>{selected}</strong> : <span>Select a file from the tree or graph</span>}
+
+    {/* NEW: code coloration toggle (now synced via WS) */}
+    <button
+      onClick={() => {
+        const next = !colorizeFunctions;
+        setColorizeFunctions(next);
+        const ws = wsRef.current;
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: "colorize_functions", enabled: next }));
+        }
+      }}
+      title={colorizeFunctions ? "Turn code coloration off" : "Colorize function calls & declarations"}
+      style={{
+        fontSize: 11,
+        padding: "4px 6px",
+        borderRadius: 6,
+        border: "1px solid #e5e7eb",
+        background: colorizeFunctions ? "#ecfeff" : "white",
+        cursor: "pointer",
+      }}
+    >
+      {colorizeFunctions ? "Code coloration: on" : "Code coloration: off"}
+    </button>
+
+    {/* Global lines toggle */}
+    <button
+      onClick={() => {
+        if (popups.length < 2) return;
+        const next = !showLinesGlobal;
+        setShowLinesGlobal(next);
+        setPopupLinesEnabled(() => {
+          if (!next) return {};
+          const m: Record<string, boolean> = {};
+          for (const p of popupsRef.current) m[p.path] = true;
+          return m;
+        });
+        const ws = wsRef.current;
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: "popup_lines_global", enabled: next }));
+        }
+      }}
+      disabled={popups.length < 2}
+      title={
+        popups.length < 2
+          ? "Open two popups to link calls to declarations"
+          : showLinesGlobal
+          ? "Turn ALL lines off"
+          : "Turn ALL lines on"
+      }
+      style={{
+        fontSize: 11,
+        padding: "4px 6px",
+        borderRadius: 6,
+        border: "1px solid #e5e7eb",
+        background: showLinesGlobal ? "#eef2ff" : "white",
+        cursor: popups.length < 2 ? "not-allowed" : "pointer",
+      }}
+    >
+      {showLinesGlobal ? "All lines: on" : "All lines: off"}
+    </button>
+
+    <button
+      onClick={() => setSidebarOpen(v => !v)}
+      aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+      aria-expanded={sidebarOpen}
+      aria-controls="sidebar"
+      title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+      style={{
+        display: "grid",
+        placeItems: "center",
+        width: 28,
+        height: 28,
+        borderRadius: 6,
+        border: "1px solid #e5e7eb",
+        background: "white",
+        cursor: "pointer",
+      }}
+    >
+      <span aria-hidden="true" style={{ fontSize: 14, lineHeight: 1 }}>
+        {sidebarOpen ? "⟨" : "⟩"}
+      </span>
+    </button>
+  </div>
+
+  {/* ------- Project Chat (realtime) ------- */}
+  <button
+    onClick={() => setChatOpen(o => !o)}
+    type="button"
+    aria-controls="project-chat"
+    aria-expanded={chatOpen}
     style={{
       position: "fixed",
       right: 16,
-      bottom: 16,
-      width: 360,
-      maxHeight: "60vh",
-      display: "flex",
-      flexDirection: "column",
-      background: "white",
+      bottom: 16,        // keep pinned to corner
+      zIndex: 65,        // above chat panel & overlays
+      borderRadius: 999,
+      padding: "10px 14px",
       border: "1px solid #e5e7eb",
-      borderRadius: 12,
-      boxShadow: "0 14px 34px rgba(0,0,0,0.18)",
-      overflow: "hidden",
-      zIndex: 40,
+      background: "white",
+      boxShadow: "0 8px 20px rgba(0,0,0,0.10)",
+      fontSize: 14,
+      fontWeight: 600,
+      cursor: "pointer",
     }}
-    role="region"
-    aria-label="Project chat"
+    title={chatOpen ? "Hide chat" : "Show chat"}
   >
-    {/* Header (relative so the dropdown anchors correctly) */}
-    <div style={{
-      position: "relative",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      padding: "10px 12px",
-      borderBottom: "1px solid #e5e7eb",
-      background: "#f9fafb",
-      fontSize: 13,
-      fontWeight: 700,
-    }}>
-      <div>Project chat</div>
+    💬 {chatOpen ? "Hide chat" : "Project chat"}
+  </button>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <div title="Online collaborators" style={{ fontWeight: 600, opacity: 0.8 }}>
-          {peers.length} online
-        </div>
+  {chatOpen && (
+    <div
+      id="project-chat"
+      role="region"
+      aria-label="Project chat"
+      style={{
+        position: "fixed",
+        right: 16,
+        bottom: 16,
+        width: 360,
+        maxHeight: "60vh",
+        display: "flex",
+        flexDirection: "column",
+        background: "white",
+        border: "1px solid #e5e7eb",
+        borderRadius: 12,
+        boxShadow: "0 14px 34px rgba(0,0,0,0.18)",
+        overflow: "hidden",
+        zIndex: 60,   // below the floating toggle
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "10px 12px",
+          borderBottom: "1px solid #e5e7eb",
+          background: "#f9fafb",
+          fontSize: 13,
+          fontWeight: 700,
+          gap: 8,
+        }}
+      >
+        <div>Project chat</div>
 
-        {/* Incoming call → show Accept/Decline */}
-        {call.status === "ringing" && call.peer ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 12 }}>Incoming call from <b>{call.peer.username}</b></span>
-            <button
-              onClick={acceptCall}
-              style={{ border: "1px solid #16a34a", background: "#16a34a", color: "white", padding: "4px 8px", borderRadius: 6, fontSize: 12 }}
-              type="button"
-              title="Accept call"
-            >
-              Accept
-            </button>
-            <button
-              onClick={declineCall}
-              style={{ border: "1px solid #ef4444", background: "white", color: "#ef4444", padding: "4px 8px", borderRadius: 6, fontSize: 12 }}
-              type="button"
-              title="Decline"
-            >
-              Decline
-            </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div title="Online collaborators" style={{ fontWeight: 600, opacity: 0.8 }}>
+            {peers.length} online
           </div>
-        ) : call.status !== "idle" && call.peer ? (
-          // Outgoing (calling) or Connected → show mute/hang up
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 12, color: "#6b7280" }}>
-              {call.status === "connected" ? (call.muted ? "Muted" : "Live") : "Calling…"}
-            </span>
-            <button
-              onClick={toggleMute}
-              style={{ border: "1px solid #e5e7eb", background: "white", padding: "4px 6px", borderRadius: 6, fontSize: 12 }}
-              type="button"
-              title={call.muted ? "Unmute mic" : "Mute mic"}
-            >
-              {call.muted ? "Unmute" : "Mute"}
-            </button>
-            <button
-              onClick={() => endCall(true)}
-              style={{ border: "1px solid #ef4444", background: "#ef4444", color: "white", padding: "4px 6px", borderRadius: 6, fontSize: 12 }}
-              type="button"
-              title="Hang up"
-            >
-              Hang up
-            </button>
-          </div>
-        ) : (
-          // No active call → launcher + dropdown
-          <div style={{ position: "relative" }}>
-            <button
-              onClick={() => setCallMenuOpen(o => !o)}
-              style={{ border: "1px solid #e5e7eb", background: "white", padding: "6px 8px", borderRadius: 6, fontSize: 12, cursor: "pointer" }}
-              title="Start a voice call"
-              type="button"
-            >
-              📞 Call…
-            </button>
-            {callMenuOpen && (
-              <div
-                style={{
-                  position: "absolute",
-                  right: 0,
-                  top: 36,
-                  zIndex: 1000,
-                  background: "white",
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 8,
-                  boxShadow: "0 8px 18px rgba(0,0,0,.08)",
-                  minWidth: 220,
-                  overflow: "hidden",
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
+
+          {/* Incoming → Accept/Decline */}
+          {call.status === "ringing" && call.peer ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 12 }}>
+                Incoming call from <b>{call.peer.username}</b>
+              </span>
+              <button
+                onClick={acceptCall}
+                type="button"
+                title="Accept call"
+                style={{ border: "1px solid #16a34a", background: "#16a34a", color: "white", padding: "4px 8px", borderRadius: 6, fontSize: 12 }}
               >
-                {peers.filter(p => p.id !== me?.id).length === 0 ? (
-                  <div style={{ padding: 10, fontSize: 13, color: "#6b7280" }}>No peers online</div>
-                ) : peers.filter(p => p.id !== me?.id).map(p => (
-                  <button
-                    key={p.id}
-                    onClick={() => { setCallMenuOpen(false); startCall(p); }}
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      alignItems: "center",
-                      padding: "10px 12px",
-                      width: "100%",
-                      background: "white",
-                      border: 0,
-                      borderTop: "1px solid #f3f4f6",
-                      cursor: "pointer",
-                      fontSize: 13
-                    }}
-                    type="button"
-                  >
-                    <span style={{ width: 10, height: 10, background: p.color, borderRadius: 999 }} />
-                    <span>{p.username}</span>
-                  </button>
-                ))}
+                Accept
+              </button>
+              <button
+                onClick={declineCall}
+                type="button"
+                title="Decline"
+                style={{ border: "1px solid #ef4444", background: "white", color: "#ef4444", padding: "4px 8px", borderRadius: 6, fontSize: 12 }}
+              >
+                Decline
+              </button>
+            </div>
+          ) : call.status !== "idle" && call.peer ? (
+            // Calling/Connected
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 12, color: "#6b7280" }}>
+                {call.status === "connected" ? (call.muted ? "Muted" : "Live") : "Calling…"}
+              </span>
+              <button
+                onClick={toggleMute}
+                type="button"
+                title={call.muted ? "Unmute mic" : "Mute mic"}
+                style={{ border: "1px solid #e5e7eb", background: "white", padding: "4px 6px", borderRadius: 6, fontSize: 12 }}
+              >
+                {call.muted ? "Unmute" : "Mute"}
+              </button>
+              <button
+                onClick={() => endCall(true)}
+                type="button"
+                title="Hang up"
+                style={{ border: "1px solid #ef4444", background: "#ef4444", color: "white", padding: "4px 6px", borderRadius: 6, fontSize: 12 }}
+              >
+                Hang up
+              </button>
+            </div>
+          ) : (
+            // No active call → launcher
+            <div style={{ position: "relative" }}>
+              <button
+                onClick={() => setCallMenuOpen(o => !o)}
+                type="button"
+                title="Start a voice call"
+                style={{ border: "1px solid #e5e7eb", background: "white", padding: "6px 8px", borderRadius: 6, fontSize: 12, cursor: "pointer" }}
+              >
+                📞 Call…
+              </button>
+              {callMenuOpen && (
+                <div
+                  style={{
+                    position: "absolute",
+                    right: 0,
+                    top: 36,
+                    zIndex: 1000,
+                    background: "white",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 8,
+                    boxShadow: "0 8px 18px rgba(0,0,0,.08)",
+                    minWidth: 220,
+                    overflow: "hidden",
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  {peers.filter(p => p.id !== me?.id).length === 0 ? (
+                    <div style={{ padding: 10, fontSize: 13, color: "#6b7280" }}>No peers online</div>
+                  ) : peers.filter(p => p.id !== me?.id).map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => { setCallMenuOpen(false); startCall(p); }}
+                      type="button"
+                      style={{
+                        display: "flex",
+                        gap: 8,
+                        alignItems: "center",
+                        padding: "10px 12px",
+                        width: "100%",
+                        background: "white",
+                        border: 0,
+                        borderTop: "1px solid #f3f4f6",
+                        cursor: "pointer",
+                        fontSize: 13
+                      }}
+                    >
+                      <span style={{ width: 10, height: 10, background: p.color, borderRadius: 999 }} />
+                      <span>{p.username}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Header close (always present) */}
+          <button
+            onClick={() => setChatOpen(false)}
+            type="button"
+            title="Hide chat"
+            style={{
+              border: "1px solid #e5e7eb",
+              background: "white",
+              padding: "6px 8px",
+              borderRadius: 6,
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            ×
+          </button>
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div
+        ref={chatBodyRef}
+        style={{
+          flex: "1 1 auto",
+          overflowY: "auto",
+          padding: 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        {chatLog.map(m => (
+          <div key={m.id} style={{ display: "grid", gridTemplateColumns: "28px 1fr", gap: 8 }}>
+            <div
+              title={m.user.username}
+              style={{
+                width: 28, height: 28, borderRadius: 999, background: m.user.color,
+                display: "grid", placeItems: "center", color: "white", fontSize: 12, fontWeight: 700,
+              }}
+            >
+              {m.user.username[0]?.toUpperCase()}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <span style={{ fontWeight: 700, fontSize: 13 }}>{m.user.username}</span>
+                <time
+                  dateTime={m.ts}
+                  style={{ fontSize: 11, color: "#6b7280", whiteSpace: "nowrap" }}
+                  title={new Date(m.ts).toLocaleString()}
+                >
+                  {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </time>
               </div>
-            )}
+              <div style={{ fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {m.text}
+              </div>
+            </div>
+          </div>
+        ))}
+        {chatLog.length === 0 && (
+          <div style={{ color: "#6b7280", fontSize: 13, textAlign: "center", padding: "12px 0" }}>
+            No messages yet — say hi 👋
           </div>
         )}
       </div>
 
-    </div>
-
-    {/* Messages */}
-    <div
-      ref={chatBodyRef}
-      style={{
-        flex: "1 1 auto",
-        overflowY: "auto",
-        padding: 12,
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-      }}
-    >
-      {chatLog.map(m => (
-        <div key={m.id} style={{ display: "grid", gridTemplateColumns: "28px 1fr", gap: 8 }}>
-          <div
-            title={m.user.username}
-            style={{
-              width: 28, height: 28, borderRadius: 999, background: m.user.color,
-              display: "grid", placeItems: "center", color: "white", fontSize: 12, fontWeight: 700,
-            }}
-          >
-            {m.user.username[0]?.toUpperCase()}
-          </div>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontWeight: 700, fontSize: 13 }}>{m.user.username}</span>
-              <time
-                dateTime={m.ts}
-                style={{ fontSize: 11, color: "#6b7280", whiteSpace: "nowrap" }}
-                title={new Date(m.ts).toLocaleString()}
-              >
-                {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              </time>
-            </div>
-            <div style={{ fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-              {m.text}
-            </div>
-          </div>
-        </div>
-      ))}
-      {chatLog.length === 0 && (
-        <div style={{ color: "#6b7280", fontSize: 13, textAlign: "center", padding: "12px 0" }}>
-          No messages yet — say hi 👋
-        </div>
-      )}
-    </div>
-
-    {/* Composer */}
-    <form
-      onSubmit={(e) => { e.preventDefault(); sendChat(); }}
-      style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid #e5e7eb" }}
-    >
-      <input
-        value={chatDraft}
-        onChange={e => setChatDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            sendChat();
-          }
-        }}
-        placeholder={authed ? "Message project…" : "Sign in to chat"}
-        disabled={!authed}
-        aria-label="Type a message"
-        style={{
-          flex: 1,
-          fontSize: 14,
-          padding: "10px 12px",
-          border: "1px solid #e5e7eb",
-          borderRadius: 8,
-          outline: "none",
-        }}
-      />
-      <button
-        type="submit"
-        disabled={!authed || !chatDraft.trim()}
-        style={{
-          fontSize: 14,
-          padding: "10px 12px",
-          borderRadius: 8,
-          background: "#2563eb",
-          color: "white",
-          border: "1px solid #1d4ed8",
-          opacity: (!authed || !chatDraft.trim()) ? 0.5 : 1,
-          cursor: (!authed || !chatDraft.trim()) ? "not-allowed" : "pointer",
-        }}
-        title={authed ? "Send message" : "Sign in to chat"}
+      {/* Composer */}
+      <form
+        onSubmit={(e) => { e.preventDefault(); sendChat(); }}
+        style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid #e5e7eb" }}
       >
-        Send
-      </button>
-    </form>
-  </div>
-)}
-
-{/* Remote audio output (once, outside the chat panel) */}
-<audio ref={remoteAudioRef} autoPlay playsInline />
-
-{/* Tiny floating call pill when chat is closed */}
-{!chatOpen && call.status !== "idle" && call.peer && (
-  <div
-    style={{
-      position: "fixed",
-      right: 16,
-      bottom: 60, // sits just above the chat toggle
-      zIndex: 35,
-      background: "white",
-      border: "1px solid #e5e7eb",
-      borderRadius: 9999,
-      padding: "6px 10px",
-      boxShadow: "0 8px 20px rgba(0,0,0,0.10)",
-      display: "flex",
-      alignItems: "center",
-      gap: 8
-    }}
-    role="status"
-    aria-live="polite"
-  >
-    <span style={{ width: 8, height: 8, borderRadius: 9999, background: call.muted ? "#9ca3af" : "#16a34a" }} />
-    <span style={{ fontSize: 12, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }}>
-      {call.peer.username}
-    </span>
-    <button
-      onClick={toggleMute}
-      style={{ border: "1px solid #e5e7eb", background: "white", borderRadius: 6, padding: "2px 6px", fontSize: 12 }}
-      type="button"
-      title={call.muted ? "Unmute mic" : "Mute mic"}
-    >
-      {call.muted ? "Unmute" : "Mute"}
-    </button>
-    <button
-      onClick={() => endCall(true)}
-      style={{ border: "1px solid #ef4444", background: "#ef4444", color: "white", borderRadius: 6, padding: "2px 6px", fontSize: 12 }}
-      type="button"
-      title="Hang up"
-    >
-      ✕
-    </button>
-  </div>
-)}
-
-
-
-
-
-
-        </div>
-
-        {/* Cytoscape canvas */}
-        <div
-          ref={containerRef}
+        <input
+          value={chatDraft}
+          onChange={e => setChatDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              sendChat();
+            }
+          }}
+          placeholder={authed ? "Message project…" : "Sign in to chat"}
+          disabled={!authed}
+          aria-label="Type a message"
           style={{
-            position: "relative",
-            width: "100%",
-            height: "100%",
-            background: "transparent",
-            zIndex: 10,        // ← add this
+            flex: 1,
+            fontSize: 14,
+            padding: "10px 12px",
+            border: "1px solid #e5e7eb",
+            borderRadius: 8,
+            outline: "none",
           }}
         />
-
-
-        {/* Drawing overlay (double-click background to add; right-click for menu; dbl-click rect to edit) */}
-        <ShapeOverlay containerRef={containerRef} shapes={shapes} onChange={setShapesWS} />
-        
-        {/* Presence avatars */}
-        {peers.length > 0 && (
-          <div style={{ position: "absolute", right: 12, top: 12, display: "flex", gap: 6, zIndex: 30 }}>
-            {peers.map(p => (
-              <div
-                key={p.id}
-                title={p.username}
-                style={{
-                  width: 24, height: 24, borderRadius: 9999, background: p.color, color: "white",
-                  display: "grid", placeItems: "center", fontSize: 12, boxShadow: "0 0 0 2px white"
-                }}
-              >
-                {p.username[0]?.toUpperCase()}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Remote cursors */}
-        <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 25 }}>
-          {peers.filter(p => p.x != null && p.y != null).map(p => (
-            <div key={"cursor-"+p.id} style={{ position:"absolute", left: (p.x||0) + "px", top: (p.y||0)+"px", transform:"translate(-50%, -50%)" }}>
-              <div style={{ width: 8, height: 8, borderRadius: 9999, background: p.color }} />
-              <div style={{ position: "absolute", top: 10, left: 8, background: "rgba(255,255,255,0.9)", border: "1px solid #e5e7eb", borderRadius: 6, padding: "2px 6px", fontSize: 10 }}>
-                {p.username}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Editable popups (resizable + synced) with per-popup line toggle */}
-        {popups.map((pp) => {
-          const linesOn = !!popupLinesEnabled[pp.path];
-          return (
-            <div
-              key={pp.path}
-              data-popup-path={pp.path}
-              style={{
-                position: "absolute",
-                left: Math.max(8, pp.x) + "px",
-                top: Math.max(8, pp.y) + "px",
-                transform: "translate(-50%, -110%)",
-                background: "white",
-                border: "1px solid #e5e7eb",
-                borderRadius: 8,
-                boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-                width: pp.w ? pp.w : "clamp(240px, 26vw, 520px)",
-                height: pp.h ? pp.h : undefined,
-                minHeight: 140,
-                maxHeight: pp.h ? undefined : "40vh",
-                display: "flex",
-                flexDirection: "column",
-                overflow: "hidden",
-                zIndex: 20,
-                resize: "both",
-                boxSizing: "border-box",
-              }}
-              onWheel={(e) => e.stopPropagation()}
-              onMouseDown={(e) => e.stopPropagation()}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  padding: "6px 10px",
-                  borderBottom: "1px solid #e5e7eb",
-                  background: "#f9fafb",
-                  borderTopLeftRadius: 8,
-                  borderTopRightRadius: 8,
-                  fontSize: 12,
-                  flex: "0 0 auto",
-                  gap: 8,
-                }}
-              >
-                <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "30vw" }}>
-                  {basename(pp.path)}
-                </strong>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <button
-                    onClick={() => {
-                      if (popups.length < 2) return;
-                      const next = !popupLinesEnabled[pp.path];
-                      setPopupLinesEnabled(prev => ({ ...prev, [pp.path]: next }));
-                      sendPopupLines(pp.path, next);
-                    }}
-                    disabled={popups.length < 2}
-                    title={popups.length < 2 ? "Open another popup to link" : (linesOn ? "Hide lines for this popup" : "Show lines for this popup")}
-                    style={{
-                      border: "1px solid #ddd",
-                      background: linesOn ? "#eef2ff" : "white",
-                      padding: "4px 6px",
-                      borderRadius: 6,
-                      fontSize: 11,
-                      cursor: popups.length < 2 ? "not-allowed" : "pointer",
-                    }}
-                  >
-                    {linesOn ? "Lines: on" : "Lines: off"}
-                  </button>
-                  {pp.dirty && <span style={{ fontSize: 11, color: "#9a3412" }}>● unsaved</span>}
-                  <button
-                    onClick={() => {
-                      if (pp.dirty) savePopup(pp.path);
-                      setPopups((cur) => cur.filter((p) => p.path !== pp.path));
-                      setPopupLinesEnabled((prev) => { if (!(pp.path in prev)) return prev; const n = { ...prev }; delete n[pp.path]; return n; });
-                      const ws = wsRef.current;
-                      const t = textTimersRef.current.get(pp.path);
-                      if (t) { window.clearTimeout(t); textTimersRef.current.delete(pp.path); }
-                      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_close", path: pp.path }));
-                    }}
-                    style={{ background: "none", border: 0, cursor: "pointer", fontSize: 16, lineHeight: 1 }}
-                    aria-label="Close"
-                    title="Close"
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-
-              {/* Inline colorized code editor */}
-              <div style={{ display: "block", width: "100%", flex: "1 1 auto", height: "auto" }}>
-                <InlineEditor
-                  path={pp.path}
-                  value={pp.draft}
-                  funcIndex={funcIndex}
-                  colorize={colorizeFunctions}
-                  onChange={(v) => {
-                    setPopups((cur) => cur.map((p) => (p.path === pp.path ? { ...p, draft: v, dirty: true } : p)));
-                    scheduleTextSend(pp.path, v);
-                  }}
-                  onBlur={() => savePopup(pp.path)}
-                />
-              </div>
-            </div>
-          );
-        })}
-
-        {/* Link overlay (caller → declarer) — inline so it works in fullscreen */}
-        {overlayEnabled && (
-        <svg
+        <button
+          type="submit"
+          disabled={!authed || !chatDraft.trim()}
           style={{
-            position: "fixed",
-            inset: 0,
-            width: "100vw",
-            height: "100vh",
-            zIndex: 9999,
-            pointerEvents: "none",
+            fontSize: 14,
+            padding: "10px 12px",
+            borderRadius: 8,
+            background: "#2563eb",
+            color: "white",
+            border: "1px solid #1d4ed8",
+            opacity: (!authed || !chatDraft.trim()) ? 0.5 : 1,
+            cursor: (!authed || !chatDraft.trim()) ? "not-allowed" : "pointer",
+          }}
+          title={authed ? "Send message" : "Sign in to chat"}
+        >
+          Send
+        </button>
+      </form>
+    </div>
+  )}
+
+  {/* Remote audio output (once, outside the chat panel) */}
+  <audio ref={remoteAudioRef} autoPlay playsInline />
+
+  {/* Tiny floating call pill when chat is closed */}
+  {!chatOpen && call.status !== "idle" && call.peer && (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        position: "fixed",
+        right: 16,
+        bottom: 60, // sits above the chat toggle
+        zIndex: 55,
+        background: "white",
+        border: "1px solid #e5e7eb",
+        borderRadius: 9999,
+        padding: "6px 10px",
+        boxShadow: "0 8px 20px rgba(0,0,0,0.10)",
+        display: "flex",
+        alignItems: "center",
+        gap: 8
+      }}
+    >
+      <span style={{ width: 8, height: 8, borderRadius: 9999, background: call.muted ? "#9ca3af" : "#16a34a" }} />
+      <span style={{ fontSize: 12, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }}>
+        {call.peer.username}
+      </span>
+      <button
+        onClick={toggleMute}
+        type="button"
+        title={call.muted ? "Unmute mic" : "Mute mic"}
+        style={{ border: "1px solid #e5e7eb", background: "white", borderRadius: 6, padding: "2px 6px", fontSize: 12 }}
+      >
+        {call.muted ? "Unmute" : "Mute"}
+      </button>
+      <button
+        onClick={() => endCall(true)}
+        type="button"
+        title="Hang up"
+        style={{ border: "1px solid #ef4444", background: "#ef4444", color: "white", borderRadius: 6, padding: "2px 6px", fontSize: 12 }}
+      >
+        ✕
+      </button>
+    </div>
+  )}
+
+  {/* Cytoscape canvas */}
+  <div
+    ref={containerRef}
+    style={{
+      position: "relative",
+      width: "100%",
+      height: "100%",
+      background: "transparent",
+      zIndex: 10,
+    }}
+  />
+
+  {/* Drawing overlay (double-click background to add; right-click for menu; dbl-click rect to edit) */}
+  <ShapeOverlay containerRef={containerRef} shapes={shapes} onChange={setShapesWS} />
+
+  {/* Presence avatars */}
+  {peers.length > 0 && (
+    <div style={{ position: "absolute", right: 12, top: 12, display: "flex", gap: 6, zIndex: 30 }}>
+      {peers.map(p => (
+        <div
+          key={p.id}
+          title={p.username}
+          style={{
+            width: 24, height: 24, borderRadius: 9999, background: p.color, color: "white",
+            display: "grid", placeItems: "center", fontSize: 12, boxShadow: "0 0 0 2px white"
           }}
         >
-          {popupLinks.map((l, i) => (
-            <path
-              key={i}
-              d={
-                (l as any).d ??
-                `M ${l.x1} ${l.y1} C ${(l.x1 + l.x2) / 2} ${l.y1}, ${(l.x1 + l.x2) / 2} ${l.y2}, ${l.x2} ${l.y2}`
+          {p.username[0]?.toUpperCase()}
+        </div>
+      ))}
+    </div>
+  )}
+
+  {/* Remote cursors */}
+  <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 25 }}>
+    {peers.filter(p => p.x != null && p.y != null).map(p => (
+      <div key={"cursor-"+p.id} style={{ position:"absolute", left: (p.x||0) + "px", top: (p.y||0)+"px", transform:"translate(-50%, -50%)" }}>
+        <div style={{ width: 8, height: 8, borderRadius: 9999, background: p.color }} />
+        <div style={{ position: "absolute", top: 10, left: 8, background: "rgba(255,255,255,0.9)", border: "1px solid #e5e7eb", borderRadius: 6, padding: "2px 6px", fontSize: 10 }}>
+          {p.username}
+        </div>
+      </div>
+    ))}
+  </div>
+
+  {/* Editable popups (resizable + synced) with per-popup line toggle */}
+  {popups.map((pp) => {
+    const linesOn = !!popupLinesEnabled[pp.path];
+    return (
+      <div
+        key={pp.path}
+        data-popup-path={pp.path}
+        style={{
+          position: "absolute",
+          left: Math.max(8, pp.x) + "px",
+          top: Math.max(8, pp.y) + "px",
+          transform: "translate(-50%, -110%)",
+          background: "white",
+          border: "1px solid #e5e7eb",
+          borderRadius: 8,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
+          width: pp.w ? pp.w : "clamp(240px, 26vw, 520px)",
+          height: pp.h ? pp.h : undefined,
+          minHeight: 140,
+          maxHeight: pp.h ? undefined : "40vh",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          zIndex: 20,
+          resize: "both",
+          boxSizing: "border-box",
+        }}
+        onWheel={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            padding: "6px 10px",
+            borderBottom: "1px solid #e5e7eb",
+            background: "#f9fafb",
+            borderTopLeftRadius: 8,
+            borderTopRightRadius: 8,
+            fontSize: 12,
+            flex: "0 0 auto",
+            gap: 8,
+          }}
+        >
+          <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "30vw" }}>
+            {basename(pp.path)}
+          </strong>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              onClick={() => {
+                if (popups.length < 2) return;
+                const next = !popupLinesEnabled[pp.path];
+                setPopupLinesEnabled(prev => ({ ...prev, [pp.path]: next }));
+                sendPopupLines(pp.path, next);
+              }}
+              disabled={popups.length < 2}
+              title={
+                popups.length < 2
+                  ? "Open another popup to link"
+                  : linesOn
+                  ? "Hide lines for this popup"
+                  : "Show lines for this popup"
               }
-              fill="none"
-              stroke={l.color}
-              strokeWidth={2.25}
-              strokeOpacity={1}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              vectorEffect="non-scaling-stroke"
-              shapeRendering="geometricPrecision"
-            />
-          ))}
-        </svg>
+              style={{
+                border: "1px solid #ddd",
+                background: linesOn ? "#eef2ff" : "white",
+                padding: "4px 6px",
+                borderRadius: 6,
+                fontSize: 11,
+                cursor: popups.length < 2 ? "not-allowed" : "pointer",
+              }}
+            >
+              {linesOn ? "Lines: on" : "Lines: off"}
+            </button>
+            {pp.dirty && <span style={{ fontSize: 11, color: "#9a3412" }}>● unsaved</span>}
+            <button
+              onClick={() => {
+                if (pp.dirty) savePopup(pp.path);
+                setPopups((cur) => cur.filter((p) => p.path !== pp.path));
+                setPopupLinesEnabled((prev) => { if (!(pp.path in prev)) return prev; const n = { ...prev }; delete n[pp.path]; return n; });
+                const ws = wsRef.current;
+                const t = textTimersRef.current.get(pp.path);
+                if (t) { window.clearTimeout(t); textTimersRef.current.delete(pp.path); }
+                if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_close", path: pp.path }));
+              }}
+              style={{ background: "none", border: 0, cursor: "pointer", fontSize: 16, lineHeight: 1 }}
+              aria-label="Close"
+              title="Close"
+            >
+              ×
+            </button>
+          </div>
+        </div>
 
-        )}
+        {/* Inline colorized code editor */}
+        <div style={{ display: "block", width: "100%", flex: "1 1 auto", height: "auto" }}>
+          <InlineEditor
+            path={pp.path}
+            value={pp.draft}
+            funcIndex={funcIndex}
+            colorize={colorizeFunctions}
+            onChange={(v) => {
+              setPopups((cur) => cur.map((p) => (p.path === pp.path ? { ...p, draft: v, dirty: true } : p)));
+              scheduleTextSend(pp.path, v);
+            }}
+            onBlur={() => savePopup(pp.path)}
+          />
+        </div>
+      </div>
+    );
+  })}
 
+  {/* Link overlay (caller → declarer) — inline so it works in fullscreen */}
+  {overlayEnabled && (
+    <svg
+      style={{
+        position: "fixed",
+        inset: 0,
+        width: "100vw",
+        height: "100vh",
+        zIndex: 9999,
+        pointerEvents: "none",
+      }}
+    >
+      {popupLinks.map((l, i) => (
+        <path
+          key={i}
+          d={
+            (l as any).d ??
+            `M ${l.x1} ${l.y1} C ${(l.x1 + l.x2) / 2} ${l.y1}, ${(l.x1 + l.x2) / 2} ${l.y2}, ${l.x2} ${l.y2}`
+          }
+          fill="none"
+          stroke={l.color}
+          strokeWidth={2.25}
+          strokeOpacity={1}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+          shapeRendering="geometricPrecision"
+        />
+      ))}
+    </svg>
+  )}
+</section>
 
-      </section>
     </div>
   );
 }

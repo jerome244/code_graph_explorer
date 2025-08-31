@@ -32,16 +32,20 @@ export default async function Nav() {
         boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
       }}
     >
-      {/* Navigation Links */}
+      {/* Navigation Links (PUBLIC) */}
       <nav style={{ display: "flex", gap: 24 }}>
         <Link href={me ? "/dashboard" : "/"} style={navLinkStyle}>
           {me ? "Dashboard" : "Home"}
         </Link>
+
+        {/* Public links — no login required */}
         <Link href="/graph" style={navLinkStyle}>
           Graph
         </Link>
+        <Link href="/games" style={navLinkStyle}>
+          Games
+        </Link>
       </nav>
-
 
       {/* User Options */}
       <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
@@ -65,7 +69,7 @@ export default async function Nav() {
   );
 }
 
-const navLinkStyle = {
+const navLinkStyle: React.CSSProperties = {
   fontSize: "16px",
   fontWeight: 600,
   color: "#4b5563",
@@ -73,7 +77,7 @@ const navLinkStyle = {
   transition: "color 0.3s ease",
 };
 
-const authLinkStyle = {
+const authLinkStyle: React.CSSProperties = {
   fontSize: "14px",
   fontWeight: 500,
   color: "#2563eb",
@@ -83,7 +87,7 @@ const authLinkStyle = {
   transition: "background-color 0.3s ease",
 };
 
-const userGreetingStyle = {
+const userGreetingStyle: React.CSSProperties = {
   fontSize: "14px",
   color: "#4b5563",
   fontWeight: 600,

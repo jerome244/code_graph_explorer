@@ -1,4 +1,4 @@
-// /frontend/app/graph/ShapeOverlay.tsx
+// app/graph/ShapeOverlay.tsx
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
@@ -10,7 +10,8 @@ type ShapeRect = {
   y: number;
   w: number;
   h: number;
-  color: string; // rectangle color
+  color: string;  // border/accent color; "#ffffff" => solid white fill with gray border
+  label: string;  // editable text
 };
 type ShapeLine = { id: string; type: "line"; x1: number; y1: number; x2: number; y2: number };
 export type Shape = ShapeRect | ShapeLine;
@@ -22,31 +23,36 @@ type DragState = {
   dy: number;
 };
 
-const PALETTE = ["#EF4444", "#F59E0B", "#10B981", "#3B82F6", "#8B5CF6", "#EC4899", "#6B7280", "#111827"]; // red, amber, green, blue, violet, pink, gray, near-black
+// Add white as a selectable color (first entry)
+const PALETTE = ["#FFFFFF", "#EF4444", "#F59E0B", "#10B981", "#3B82F6", "#8B5CF6", "#EC4899", "#6B7280", "#111827"];
 
 function hexToRgba(hex: string, alpha: number) {
   const h = hex.replace("#", "");
+  const to255 = (pair: string) => parseInt(pair, 16);
   if (h.length === 3) {
-    const r = parseInt(h[0] + h[0], 16);
-    const g = parseInt(h[1] + h[1], 16);
-    const b = parseInt(h[2] + h[2], 16);
+    const r = to255(h[0] + h[0]);
+    const g = to255(h[1] + h[1]);
+    const b = to255(h[2] + h[2]);
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
   if (h.length === 6) {
-    const r = parseInt(h.slice(0, 2), 16);
-    const g = parseInt(h.slice(2, 4), 16);
-    const b = parseInt(h.slice(4, 6), 16);
+    const r = to255(h.slice(0, 2));
+    const g = to255(h.slice(2, 4));
+    const b = to255(h.slice(4, 6));
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
   return hex;
 }
 
 export default function ShapeOverlay({ containerRef }: { containerRef: React.RefObject<HTMLDivElement> }) {
-  // Double-click "create" menu
+  // Double-click "Create" menu (background only)
   const [createMenu, setCreateMenu] = useState<{ x: number; y: number } | null>(null);
 
   // Right-click shape menu
   const [shapeMenu, setShapeMenu] = useState<{ x: number; y: number; id: string; type: "rect" | "line" } | null>(null);
+
+  // Which rectangle is currently being edited (double-click to enter)
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Shapes
   const [shapes, setShapes] = useState<Shape[]>([]);
@@ -58,20 +64,18 @@ export default function ShapeOverlay({ containerRef }: { containerRef: React.Ref
   const rectObservers = useRef<Map<string, ResizeObserver>>(new Map());
   const resizeRAF = useRef<Map<string, number>>(new Map());
 
-  // Double-click anywhere on the graph container to open create menu
+  // Double-click on background to open create menu (ignore shapes)
   useEffect(() => {
     const root = containerRef.current;
     if (!root) return;
 
     const onDbl = (e: MouseEvent) => {
       const el = e.target as HTMLElement;
-      if (el.closest("[data-shape-id]")) return; // ignore if dblclick on existing shape
-
+      if (el.closest("[data-shape-id]")) return; // ignore dblclicks on shapes (used for editing)
       const rect = root.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      setCreateMenu({ x, y });
+      setCreateMenu({ x: e.clientX - rect.left, y: e.clientY - rect.top });
       setShapeMenu(null);
+      setEditingId(null);
       e.stopPropagation();
       e.preventDefault();
     };
@@ -84,8 +88,7 @@ export default function ShapeOverlay({ containerRef }: { containerRef: React.Ref
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       const el = e.target as HTMLElement;
-      const insideMenu =
-        !!el.closest("[data-create-menu]") || !!el.closest("[data-shape-menu]");
+      const insideMenu = !!el.closest("[data-create-menu]") || !!el.closest("[data-shape-menu]");
       if (!insideMenu) {
         setCreateMenu(null);
         setShapeMenu(null);
@@ -95,20 +98,18 @@ export default function ShapeOverlay({ containerRef }: { containerRef: React.Ref
     return () => window.removeEventListener("mousedown", onDown, true);
   }, []);
 
-  // Global drag handlers (FIX: capture d before setShapes)
+  // Global drag handlers (capture drag state once for TS)
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
-      const d = dragRef.current; // capture once
+      const d = dragRef.current;
       if (!d) return;
 
-      setShapes((cur) => {
-        return cur.map((s) => {
+      setShapes((cur) =>
+        cur.map((s) => {
           if (s.id !== d.id) return s;
 
           if (s.type === "rect" && d.kind === "rect") {
-            const x = e.clientX - d.dx;
-            const y = e.clientY - d.dy;
-            return { ...s, x, y };
+            return { ...s, x: e.clientX - d.dx, y: e.clientY - d.dy };
           }
 
           if (s.type === "line") {
@@ -128,8 +129,8 @@ export default function ShapeOverlay({ containerRef }: { containerRef: React.Ref
           }
 
           return s;
-        });
-      });
+        })
+      );
 
       e.preventDefault();
     };
@@ -169,8 +170,8 @@ export default function ShapeOverlay({ containerRef }: { containerRef: React.Ref
         const r = el.getBoundingClientRect();
         const w = r.width;
         const h = r.height;
-        const prevId = resizeRAF.current.get(id);
-        if (prevId) cancelAnimationFrame(prevId);
+        const prev = resizeRAF.current.get(id);
+        if (prev) cancelAnimationFrame(prev);
         const rafId = requestAnimationFrame(() => {
           setShapes((cur) => cur.map((s) => (s.id === id && s.type === "rect" ? { ...s, w, h } : s)));
         });
@@ -181,16 +182,40 @@ export default function ShapeOverlay({ containerRef }: { containerRef: React.Ref
     }
 
     return () => {
-      for (const [, raf] of resizeRAF.current) cancelAnimationFrame(raf); // cleanup
+      for (const [, raf] of resizeRAF.current) cancelAnimationFrame(raf);
     };
   }, [shapes, containerRef]);
+
+  // Auto-focus editor when entering edit mode
+  useEffect(() => {
+    if (!editingId) return;
+    const el = document.querySelector<HTMLDivElement>(`[data-editor-for="${editingId}"]`);
+    if (el) {
+      el.focus();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+  }, [editingId]);
 
   // Shape ops
   const addRect = (x: number, y: number) => {
     const id = "rect-" + Math.random().toString(36).slice(2, 9);
     setShapes((cur) => [
       ...cur,
-      { id, type: "rect", x: Math.max(8, x - 60), y: Math.max(8, y - 40), w: 180, h: 120, color: "#6366f1" },
+      {
+        id,
+        type: "rect",
+        x: Math.max(8, x - 60),
+        y: Math.max(8, y - 40),
+        w: 200,
+        h: 120,
+        color: "#ffffff", // default WHITE
+        label: "",
+      },
     ]);
     setCreateMenu(null);
   };
@@ -204,6 +229,7 @@ export default function ShapeOverlay({ containerRef }: { containerRef: React.Ref
   const removeShape = (id: string) => {
     setShapes((cur) => cur.filter((s) => s.id !== id));
     setShapeMenu(null);
+    if (editingId === id) setEditingId(null);
   };
 
   const setRectColor = (id: string, color: string) => {
@@ -211,26 +237,25 @@ export default function ShapeOverlay({ containerRef }: { containerRef: React.Ref
     setShapeMenu(null);
   };
 
+  const setRectLabel = (id: string, label: string) => {
+    const cleaned = label.replace(/\s+$/g, "");
+    setShapes((cur) => cur.map((s) => (s.id === id && s.type === "rect" ? { ...s, label: cleaned } : s)));
+  };
+
   // Helpers
-  const openShapeMenuAtEvent = (
-    e: React.MouseEvent,
-    id: string,
-    type: "rect" | "line"
-  ) => {
+  const openShapeMenuAtEvent = (e: React.MouseEvent, id: string, type: "rect" | "line") => {
     e.preventDefault();
     e.stopPropagation();
     const root = containerRef.current;
     if (!root) return;
     const rect = root.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
     setCreateMenu(null);
-    setShapeMenu({ x, y, id, type });
+    setShapeMenu({ x: e.clientX - rect.left, y: e.clientY - rect.top, id, type });
   };
 
   return (
     <>
-      {/* Double-click "Create" menu */}
+      {/* Background double-click "Create" menu */}
       {createMenu && (
         <div
           style={{
@@ -348,7 +373,11 @@ export default function ShapeOverlay({ containerRef }: { containerRef: React.Ref
       <div style={{ position: "absolute", inset: 0, zIndex: 19, pointerEvents: "none" }}>
         {shapes.map((s) => {
           if (s.type === "rect") {
-            const bg = hexToRgba(s.color, 0.12);
+            const isEditing = editingId === s.id;
+            const isWhite = s.color.toLowerCase() === "#ffffff" || s.color.toLowerCase() === "white";
+            const borderColor = isWhite ? "#d1d5db" : s.color;          // gray border when white
+            const bg = isWhite ? "#ffffff" : hexToRgba(s.color, 0.12);  // solid white vs tinted
+
             return (
               <div
                 key={s.id}
@@ -360,39 +389,75 @@ export default function ShapeOverlay({ containerRef }: { containerRef: React.Ref
                   top: s.y,
                   width: s.w,
                   height: s.h,
-                  border: `2px dashed ${s.color}`,
+                  border: `2px dashed ${borderColor}`,
                   background: bg,
                   borderRadius: 8,
                   resize: "both",
                   overflow: "hidden",
                   boxSizing: "border-box",
                   pointerEvents: "auto",
-                  cursor: "move",
                   userSelect: "none",
+                  display: "flex",
                 }}
+                // NORMAL GRAB: start dragging on mousedown (unless resizing corner or editing)
                 onMouseDown={(e) => {
-                  // if the user is actually on the bottom-right corner, let CSS resize work
                   const el = e.currentTarget as HTMLElement;
-                  const rect = el.getBoundingClientRect();
-                  const isOnResizeCorner = e.clientX > rect.right - 16 && e.clientY > rect.bottom - 16;
-                  if (!isOnResizeCorner) {
-                    dragRef.current = {
-                      id: s.id,
-                      kind: "rect",
-                      dx: e.clientX - s.x,
-                      dy: e.clientY - s.y,
-                    };
-                  }
+                  const r = el.getBoundingClientRect();
+                  const isOnResizeCorner = e.clientX > r.right - 16 && e.clientY > r.bottom - 16;
+                  if (isEditing || isOnResizeCorner) return;
+                  if (e.detail >= 2) return; // let dblclick handler take over for editing
+                  dragRef.current = { id: s.id, kind: "rect", dx: e.clientX - s.x, dy: e.clientY - s.y };
                   e.stopPropagation();
+                }}
+                // EDIT ON DOUBLE-LEFT-CLICK
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  setEditingId(s.id);
+                  setCreateMenu(null);
+                  setShapeMenu(null);
                 }}
                 onContextMenu={(e) => openShapeMenuAtEvent(e, s.id, "rect")}
                 onWheel={(e) => e.stopPropagation()}
-                title="Drag to move. Use the corner to resize. Right-click for options."
-              />
+                title="Drag to move. Resize from corner. Double-click to edit text. Right-click for options."
+              >
+                {/* Editable content area */}
+                <div
+                  style={{
+                    pointerEvents: isEditing ? "auto" : "none",
+                    outline: "none",
+                    flex: 1,
+                    padding: 8,
+                    whiteSpace: "pre-wrap",
+                    overflow: "auto",
+                    cursor: isEditing ? "text" : "move",
+                    fontSize: 13,
+                    lineHeight: 1.35,
+                    color: "#111827",
+                  }}
+                  className="rect-editor"
+                  contentEditable={isEditing}
+                  suppressContentEditableWarning
+                  spellCheck={false}
+                  data-editor-for={s.id}
+                  onBlur={(e) => {
+                    const text = e.currentTarget.textContent ?? "";
+                    setRectLabel(s.id, text);
+                    setEditingId(null);
+                  }}
+                  onKeyDown={(e) => {
+                    // ESC or Ctrl/Cmd+Enter to finish editing
+                    if (e.key === "Escape" || (e.key === "Enter" && (e.ctrlKey || e.metaKey))) {
+                      (e.currentTarget as HTMLDivElement).blur();
+                    }
+                  }}
+                >
+                  {s.label || ""}
+                </div>
+              </div>
             );
           }
 
-          // line
+          // ------- line -------
           const w = Math.abs(s.x2 - s.x1) + 24;
           const h = Math.abs(s.y2 - s.y1) + 24;
           const left = Math.min(s.x1, s.x2) - 12;
@@ -409,7 +474,6 @@ export default function ShapeOverlay({ containerRef }: { containerRef: React.Ref
               data-kind="line"
               style={{ position: "absolute", left, top, width: w, height: h, pointerEvents: "auto", overflow: "visible" }}
               onMouseDown={(e) => {
-                // drag whole line
                 dragRef.current = { id: s.id, kind: "line", dx: e.clientX - s.x1, dy: e.clientY - s.y1 };
                 e.stopPropagation();
               }}
@@ -417,7 +481,6 @@ export default function ShapeOverlay({ containerRef }: { containerRef: React.Ref
               onWheel={(e) => e.stopPropagation()}
             >
               <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#111827" strokeWidth={2} vectorEffect="non-scaling-stroke" />
-              {/* endpoints */}
               <circle
                 cx={x1}
                 cy={y1}

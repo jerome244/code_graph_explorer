@@ -1,8 +1,7 @@
 import Link from "next/link";
 import dynamic from "next/dynamic";
 
-// Avoid SSR issues by loading the 3D canvas on the client only
-const Minecraft3D = dynamic(() => import("./Minecraft3D"), { ssr: false });
+const Game = dynamic(() => import("./Game"), { ssr: false });
 
 export default function MinecraftPage() {
   return (
@@ -13,16 +12,15 @@ export default function MinecraftPage() {
         </Link>
       </nav>
 
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 8 }}>
-        Minecraft-like (3D)
-      </h1>
+      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 8 }}>Minecraft-like (3D)</h1>
       <p style={{ marginBottom: 16, color: "#6b7280" }}>
-        Left-click a block face to place; right-click (or hold <kbd>Shift</kbd>) to remove.
-        Use mouse to orbit/zoom. Keys <kbd>1–7</kbd> to switch block type.
-        Save/Load uses your browser storage.
+        Loads in <strong>Play</strong>: click once to start mouse-look.
+        Move with <kbd>ZQSD</kbd>/<kbd>WASD</kbd>, jump with <kbd>Space</kbd>, <kbd>Esc</kbd> to release the mouse.
+        Switch back to Build with the button.
+        In <strong>Build</strong>: Left-click place, Right-click / <kbd>Shift</kbd> remove, 1–7 to change block.
       </p>
 
-      <Minecraft3D />
+      <Game />
     </main>
   );
 }

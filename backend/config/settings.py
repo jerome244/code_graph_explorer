@@ -3,16 +3,19 @@ from datetime import timedelta
 import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# --- Core ---
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-insecure")
 DEBUG = os.environ.get("DEBUG", "1") == "1"
 ALLOWED_HOSTS = ["*"]
 
+# --- Apps ---
 INSTALLED_APPS = [
-    # --- Channels realtime apps (must come before contrib apps or after — order doesn't matter) ---
+    # Realtime / websockets
     "channels",
     "realtime",
 
-    # --- Django & third-party ---
+    # Django + 3rd party
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -22,11 +25,12 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
 
-    # --- Project apps ---
+    # Project apps
     "users",
     "projects",
 ]
 
+# --- Middleware ---
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
@@ -38,6 +42,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+# --- Templates / URLs / Gateways ---
 ROOT_URLCONF = "config.urls"
 TEMPLATES = [
     {
@@ -55,10 +60,10 @@ TEMPLATES = [
     },
 ]
 
-# WSGI is still fine to keep for any WSGI hosting; ASGI below is used for websockets:
-WSGI_APPLICATION = "config.wsgi.application"
+WSGI_APPLICATION = "config.wsgi.application"      # keep for any WSGI hosting
+ASGI_APPLICATION = "config.asgi.application"      # used by Channels
 
-# DB: default SQLite for quick start; swap to Postgres via env vars when ready
+# --- DB (SQLite by default; Postgres if env provided) ---
 if os.environ.get("DB_NAME"):
     DATABASES = {
         "default": {
@@ -71,8 +76,14 @@ if os.environ.get("DB_NAME"):
         }
     }
 else:
-    DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
+# --- Auth / REST / JWT ---
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -84,6 +95,7 @@ LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
+
 STATIC_URL = "static/"
 
 REST_FRAMEWORK = {
@@ -91,9 +103,6 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
 }
-
-from rest_framework.settings import api_settings  # noqa
-
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
@@ -101,14 +110,16 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": False,
 }
 
-CORS_ALLOW_ALL_ORIGINS = True  # for dev; tighten in prod
+# --- CORS (dev wide-open; tighten in prod) ---
+CORS_ALLOW_ALL_ORIGINS = True
+# CSRF_TRUSTED_ORIGINS = ["https://your-frontend-domain.com"]
 
-# ---------- Channels / ASGI ----------
-ASGI_APPLICATION = "config.asgi.application"
-
-# In-memory layer is fine for local/dev. Use Redis in production (channels_redis).
+# --- Channels layer ---
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer",
+        "BACKEND": "channels.layers.InMemoryChannelLayer",  # dev
+        # For prod, switch to Redis:
+        # "BACKEND": "channels_redis.core.RedisChannelLayer",
+        # "CONFIG": {"hosts": [("127.0.0.1", 6379)]},
     }
 }

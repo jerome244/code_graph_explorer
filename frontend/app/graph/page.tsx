@@ -358,7 +358,7 @@ export default function GraphPage() {
   type ChatUser = { id: number; username: string; color: string };
   type ChatMsg = { id: string; text: string; ts: string; user: ChatUser };
 
-  const [chatOpen, setChatOpen] = useState(true);
+  const [chatOpen, setChatOpen] = useState(false);
   const [chatLog, setChatLog] = useState<ChatMsg[]>([]);
   const [chatDraft, setChatDraft] = useState("");
   const chatBodyRef = useRef<HTMLDivElement>(null);

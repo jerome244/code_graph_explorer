@@ -352,7 +352,9 @@ export default function ShapeOverlay({
                 key={s.id}
                 data-shape-id={s.id}
                 data-kind="rect"
-                style={{ position: "absolute", left, top, width, height, overflow: "visible", pointerEvents: "auto" }}
+                // IMPORTANT: svg wrapper ignores pointer events so nodes remain clickable,
+                // only child elements (ring/handles/fill when Shift) capture events.
+                style={{ position: "absolute", left, top, width, height, overflow: "visible", pointerEvents: "none" }}
               >
                 {/* FILL: pass-through unless Shift held */}
                 <rect
@@ -434,7 +436,8 @@ export default function ShapeOverlay({
               key={s.id}
               data-shape-id={s.id}
               data-kind="line"
-              style={{ position: "absolute", left, top, width: w, height: h, overflow: "visible", pointerEvents: "auto" }}
+              // same trick: svg ignores pointer events; only stroke/handles are interactive
+              style={{ position: "absolute", left, top, width: w, height: h, overflow: "visible", pointerEvents: "none" }}
             >
               <line
                 x1={x1} y1={y1} x2={x2} y2={y2}

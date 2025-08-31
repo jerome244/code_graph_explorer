@@ -203,6 +203,10 @@ export default function GraphPage() {
   const anyPopupLineOn = Object.values(popupLinesEnabled).some(Boolean);
   const overlayEnabled = showLinesGlobal || anyPopupLineOn;
   const [colorizeFunctions, setColorizeFunctions] = useState(false);
+  
+  // Sidebar collapse
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
 
   // --- GitHub import state ---
   const [ghRepo, setGhRepo] = useState(""); // "owner/repo"
@@ -1256,27 +1260,35 @@ export default function GraphPage() {
   };
 
   return (
-    <div
-      ref={outerRef}
-      style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(220px, 28vw) minmax(0,1fr)",
-        height: "100vh",
-        width: "100vw",
-        overflow: "hidden",
-        background: "#fff", 
-      }}
-    >
-      {/* Sidebar */}
-      <aside
+      <div
+        ref={outerRef}
         style={{
-          borderRight: "2px solid #e5e7eb",  // Thicker border
-          padding: 20,  // Increased padding
-          overflow: "auto",
-          width: "280px",  // Increase sidebar width for more space
-          backgroundColor: "#f9fafb",  // Slight background color for the sidebar
+          display: "grid",
+          gridTemplateColumns: sidebarOpen
+            ? "minmax(220px, 28vw) minmax(0,1fr)"
+            : "0 minmax(0,1fr)",
+          height: "100vh",
+          width: "100vw",
+          overflow: "hidden",
+          background: "#fff",
+          transition: "grid-template-columns 200ms ease",
         }}
       >
+
+      {/* Sidebar */}
+        <aside
+          id="sidebar"
+          style={{
+            borderRight: sidebarOpen ? "2px solid #e5e7eb" : "0",
+            padding: sidebarOpen ? 20 : 0,
+            overflow: sidebarOpen ? "auto" : "hidden",
+            width: "100%",              // let the grid column control width
+            backgroundColor: "#f9fafb",
+            transition: "padding 200ms ease, border-color 200ms ease",
+            pointerEvents: sidebarOpen ? "auto" : "none", // disable clicks when hidden
+          }}
+        >
+
         <h2 style={{ marginTop: 0, fontSize: 20, fontWeight: 600, color: "#333" }}>Project</h2>
         
         <input
@@ -1726,6 +1738,29 @@ export default function GraphPage() {
           >
             {showLinesGlobal ? "All lines: on" : "All lines: off"}
           </button>
+
+          <button
+            onClick={() => setSidebarOpen(v => !v)}
+            aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+            aria-expanded={sidebarOpen}
+            aria-controls="sidebar"
+            title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+            style={{
+              display: "grid",
+              placeItems: "center",
+              width: 28,
+              height: 28,
+              borderRadius: 6,
+              border: "1px solid #e5e7eb",
+              background: "white",
+              cursor: "pointer",
+            }}
+          >
+            <span aria-hidden="true" style={{ fontSize: 14, lineHeight: 1 }}>
+              {sidebarOpen ? "⟨" : "⟩"}
+            </span>
+          </button>
+
         </div>
 
         {/* Cytoscape canvas */}

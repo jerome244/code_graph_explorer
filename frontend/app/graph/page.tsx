@@ -5,6 +5,7 @@ import JSZip from "jszip";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as cytoscapeImport from "cytoscape";
 const cytoscape = (cytoscapeImport as any).default ?? (cytoscapeImport as any);
+import ShapeOverlay from "./ShapeOverlay";
 
 // Parsing + path helpers moved to a separate module
 import {
@@ -1953,6 +1954,9 @@ export default function GraphPage() {
         {/* Cytoscape canvas */}
         <div ref={containerRef} style={{ position: "relative", width: "100%", height: "100%", background: "#fff" }} />
 
+        {/* Drawing overlay (double-click to add shapes) */}
+        <ShapeOverlay containerRef={containerRef} />
+        
         {/* Presence avatars */}
         {peers.length > 0 && (
           <div style={{ position: "absolute", right: 12, top: 12, display: "flex", gap: 6, zIndex: 30 }}>

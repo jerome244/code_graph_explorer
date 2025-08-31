@@ -291,6 +291,31 @@ export default function GraphPage() {
   const textTimersRef = useRef<Map<string, number>>(new Map());
   const remoteDraftsRef = useRef<Record<string, string>>({});
 
+  // --- Realtime chat ---
+  type ChatUser = { id: number; username: string; color: string };
+  type ChatMsg = { id: string; text: string; ts: string; user: ChatUser };
+
+  const [chatOpen, setChatOpen] = useState(true);
+  const [chatLog, setChatLog] = useState<ChatMsg[]>([]);
+  const [chatDraft, setChatDraft] = useState("");
+  const chatBodyRef = useRef<HTMLDivElement>(null);
+
+  const scrollChatToBottom = useCallback(() => {
+    const el = chatBodyRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+  useEffect(() => { scrollChatToBottom(); }, [chatLog, scrollChatToBottom]);
+
+  const sendChat = useCallback(() => {
+    const text = chatDraft.trim();
+    if (!text) return;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: "chat", text }));
+    setChatDraft("");
+  }, [chatDraft]);
+
+
   // who am I (for ignoring echoes)
   useEffect(() => {
     (async () => {
@@ -452,9 +477,17 @@ export default function GraphPage() {
           const { enabled, by } = msg.data || {};
           if (by === me?.id) return;
           setColorizeFunctions(!!enabled);
+        
+
+        } else if (msg.type === "chat_history") {
+          setChatLog((msg.messages || []) as ChatMsg[]);
+        } else if (msg.type === "chat") {
+          const m = (msg.data || {}) as ChatMsg;
+          if (m && m.id) setChatLog((cur) => [...cur, m]);
         }
-      } catch {}
+      } catch (err) { /* ignore parse/socket errors */ }
     };
+
 
     return () => { try { ws.close(); } catch {}; wsRef.current = null; wsReadyRef.current = false; };
   }, [authed, projectId, me?.id]);
@@ -1760,6 +1793,160 @@ export default function GraphPage() {
               {sidebarOpen ? "⟨" : "⟩"}
             </span>
           </button>
+
+          {/* ------- Project Chat (realtime) ------- */}
+          <button
+            onClick={() => setChatOpen(o => !o)}
+            style={{
+              position: "fixed",
+              right: 16,
+              bottom: chatOpen ? 330 : 16,
+              zIndex: 40,
+              borderRadius: 999,
+              padding: "10px 14px",
+              border: "1px solid #e5e7eb",
+              background: "white",
+              boxShadow: "0 8px 20px rgba(0,0,0,0.10)",
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+            title={chatOpen ? "Hide chat" : "Show chat"}
+          >
+            💬 {chatOpen ? "Hide chat" : "Project chat"}
+          </button>
+
+          {chatOpen && (
+            <div
+              style={{
+                position: "fixed",
+                right: 16,
+                bottom: 16,
+                width: 360,
+                maxHeight: "60vh",
+                display: "flex",
+                flexDirection: "column",
+                background: "white",
+                border: "1px solid #e5e7eb",
+                borderRadius: 12,
+                boxShadow: "0 14px 34px rgba(0,0,0,0.18)",
+                overflow: "hidden",
+                zIndex: 40,
+              }}
+              role="region"
+              aria-label="Project chat"
+            >
+              {/* Header */}
+              <div style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "10px 12px",
+                borderBottom: "1px solid #e5e7eb",
+                background: "#f9fafb",
+                fontSize: 13,
+                fontWeight: 700,
+              }}>
+                <div>Project chat</div>
+                <div title="Online collaborators" style={{ fontWeight: 600, opacity: 0.8 }}>
+                  {peers.length} online
+                </div>
+              </div>
+
+              {/* Messages */}
+              <div
+                ref={chatBodyRef}
+                style={{
+                  flex: "1 1 auto",
+                  overflowY: "auto",
+                  padding: 12,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                {chatLog.map(m => (
+                  <div key={m.id} style={{ display: "grid", gridTemplateColumns: "28px 1fr", gap: 8 }}>
+                    <div
+                      title={m.user.username}
+                      style={{
+                        width: 28, height: 28, borderRadius: 999, background: m.user.color,
+                        display: "grid", placeItems: "center", color: "white", fontSize: 12, fontWeight: 700,
+                      }}
+                    >
+                      {m.user.username[0]?.toUpperCase()}
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                        <span style={{ fontWeight: 700, fontSize: 13 }}>{m.user.username}</span>
+                        <time
+                          dateTime={m.ts}
+                          style={{ fontSize: 11, color: "#6b7280", whiteSpace: "nowrap" }}
+                          title={new Date(m.ts).toLocaleString()}
+                        >
+                          {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </time>
+                      </div>
+                      <div style={{ fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                        {m.text}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {chatLog.length === 0 && (
+                  <div style={{ color: "#6b7280", fontSize: 13, textAlign: "center", padding: "12px 0" }}>
+                    No messages yet — say hi 👋
+                  </div>
+                )}
+              </div>
+
+              {/* Composer */}
+              <form
+                onSubmit={(e) => { e.preventDefault(); sendChat(); }}
+                style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid #e5e7eb" }}
+              >
+                <input
+                  value={chatDraft}
+                  onChange={e => setChatDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      sendChat();
+                    }
+                  }}
+                  placeholder={authed ? "Message project…" : "Sign in to chat"}
+                  disabled={!authed}
+                  aria-label="Type a message"
+                  style={{
+                    flex: 1,
+                    fontSize: 14,
+                    padding: "10px 12px",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 8,
+                    outline: "none",
+                  }}
+                />
+                <button
+                  type="submit"
+                  disabled={!authed || !chatDraft.trim()}
+                  style={{
+                    fontSize: 14,
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    background: "#2563eb",
+                    color: "white",
+                    border: "1px solid #1d4ed8",
+                    opacity: (!authed || !chatDraft.trim()) ? 0.5 : 1,
+                    cursor: (!authed || !chatDraft.trim()) ? "not-allowed" : "pointer",
+                  }}
+                  title={authed ? "Send message" : "Sign in to chat"}
+                >
+                  Send
+                </button>
+              </form>
+            </div>
+          )}
+
 
         </div>
 

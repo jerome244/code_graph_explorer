@@ -37,9 +37,10 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
     """
     Group: proj_<project_id>
     Frontend sends: {"type": "...", ...payload...}
-    We re-broadcast to the group as: {"type": "<same>", "data": {..., "by": <sender_id>}}
+    We re-broadcast to the group as: {"type": "<same>", ...}
     Presence events: presence_state / presence_join / presence_leave
     Chat events: chat_history (on connect), chat (live)
+    Shapes events: shapes_full (on connect), shape_op / shape_ops relay, optional shape_commit
     """
 
     # ---------- Access control helper ----------
@@ -112,6 +113,10 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
             "type": "chat_history",
             "messages": CHAT_HISTORY.get(self.group_name, []),
         })
+
+        # Send current shapes snapshot to me
+        shapes = await self._fetch_shapes()
+        await self.send_json({"type": "shapes_full", "shapes": shapes})
 
         # Announce my join to others
         await self.channel_layer.group_send(
@@ -336,6 +341,33 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
                 {"type": "broadcast", "payload": {"type": "chat", "data": msg}},
             )
 
+        # --- Realtime shapes sync ---
+        elif t == "shape_op":
+            # forward one op (add/remove/patch/replace_all) to everyone
+            await self.channel_layer.group_send(
+                self.group_name,
+                {"type": "broadcast", "payload": content},
+            )
+
+        elif t == "shape_ops":
+            # forward a batch of ops to everyone
+            await self.channel_layer.group_send(
+                self.group_name,
+                {"type": "broadcast", "payload": content},
+            )
+
+        elif t == "shape_request_full":
+            # send a fresh snapshot to just this client
+            shapes = await self._fetch_shapes()
+            await self.send_json({"type": "shapes_full", "shapes": shapes})
+
+        elif t == "shape_commit":
+            # optional: persist shapes to DB when client explicitly asks
+            shapes = content.get("shapes")
+            if isinstance(shapes, list):
+                await self._save_shapes(shapes)
+                await self.send_json({"type": "shape_commit_ok"})
+
         # Unknown → ignore silently
         else:
             return
@@ -344,3 +376,31 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
     async def broadcast(self, event):
         # Just forward the payload as-is to the socket
         await self.send_json(event["payload"])
+
+    # ---------- Shapes helpers ----------
+    @database_sync_to_async
+    def _fetch_shapes(self):
+        if Project is None:
+            return []
+        try:
+            fields = {f.name for f in Project._meta.get_fields()}
+            if "shapes" not in fields:
+                return []
+            obj = Project.objects.get(id=int(self.project_id))
+            return getattr(obj, "shapes", []) or []
+        except Project.DoesNotExist:
+            return []
+        except Exception:
+            return []
+
+    @database_sync_to_async
+    def _save_shapes(self, shapes):
+        if Project is None:
+            return
+        try:
+            fields = {f.name for f in Project._meta.get_fields()}
+            if "shapes" not in fields:
+                return
+            Project.objects.filter(id=int(self.project_id)).update(shapes=shapes)
+        except Exception:
+            pass

@@ -98,6 +98,62 @@ export default function GraphPage() {
   const shapesRef = useRef<Shape[]>([]);
   useEffect(() => { shapesRef.current = shapes; }, [shapes]);
 
+  // ---- realtime shapes sync helpers ----
+  const shapesClientId = useMemo(
+    () => ("randomUUID" in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2)),
+    []
+  );
+  const applyingRemoteShapesRef = useRef(false);
+
+  const sendShapeOps = useCallback((ops: any[]) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== 1 || !ops.length) return;
+    ws.send(JSON.stringify({ type: "shape_ops", ops, client_id: shapesClientId }));
+  }, [shapesClientId]);
+
+  // Wrap setShapes with a diff + broadcast (ignored while applying remote)
+  const setShapesWS: React.Dispatch<React.SetStateAction<Shape[]>> = useCallback((updater) => {
+    setShapes((prev) => {
+      const next = typeof updater === "function" ? (updater as (p: Shape[]) => Shape[])(prev) : updater;
+
+      if (!applyingRemoteShapesRef.current) {
+        const prevMap = new Map(prev.map((s) => [s.id, s]));
+        const nextMap = new Map(next.map((s) => [s.id, s]));
+        const ops: any[] = [];
+
+        // additions
+        for (const [id, s] of nextMap) if (!prevMap.has(id)) ops.push({ op: "add", shape: s });
+        // removals
+        for (const [id] of prevMap) if (!nextMap.has(id)) ops.push({ op: "remove", id });
+        // patches
+        for (const [id, s2] of nextMap) {
+          const s1 = prevMap.get(id);
+          if (!s1) continue;
+          const f: any = {};
+          if (s1.type === "rect" && s2.type === "rect") {
+            if (s1.x !== s2.x) f.x = s2.x;
+            if (s1.y !== s2.y) f.y = s2.y;
+            if (s1.w !== s2.w) f.w = s2.w;
+            if (s1.h !== s2.h) f.h = s2.h;
+            if (s1.color !== s2.color) f.color = s2.color;
+            if (s1.label !== s2.label) f.label = s2.label;
+          } else if (s1.type === "line" && s2.type === "line") {
+            if (s1.x1 !== s2.x1) f.x1 = s2.x1;
+            if (s1.y1 !== s2.y1) f.y1 = s2.y1;
+            if (s1.x2 !== s2.x2) f.x2 = s2.x2;
+            if (s1.y2 !== s2.y2) f.y2 = s2.y2;
+          }
+          if (Object.keys(f).length) ops.push({ op: "patch", id, fields: f });
+        }
+
+        if (ops.length) sendShapeOps(ops);
+      }
+
+      return next;
+    });
+  }, [sendShapeOps, setShapes]);
+
+
 
   // Snapshot x/y + hidden per node
   function snapshotPositions(): PositionsMap {
@@ -354,7 +410,12 @@ export default function GraphPage() {
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
-    ws.onopen = () => { wsReadyRef.current = true; };
+    ws.onopen = () => {
+      wsReadyRef.current = true;
+      // ask backend for shapes snapshot (server may also push it automatically)
+      ws.send(JSON.stringify({ type: "shape_request_full", client_id: shapesClientId }));
+    };
+
     ws.onclose = () => { wsReadyRef.current = false; peersRef.current.clear(); setPeers([]); };
     ws.onerror = () => { /* noop */ };
     ws.onmessage = (ev) => {
@@ -484,9 +545,55 @@ export default function GraphPage() {
           const { enabled, by } = msg.data || {};
           if (by === me?.id) return;
           setColorizeFunctions(!!enabled);
-        
 
-        } else if (msg.type === "chat_history") {
+        // ======== SHAPES: realtime sync ========
+        } 
+        // ignore my own shape echoes (server relays as-is)
+        else if (msg.client_id && msg.client_id === shapesClientId) {
+          return;
+        }
+        // full snapshot
+        else if (msg.type === "shapes_full") {
+          applyingRemoteShapesRef.current = true;
+          setShapes(Array.isArray(msg.shapes) ? msg.shapes : []);
+          queueMicrotask(() => { applyingRemoteShapesRef.current = false; });
+          return;
+        }
+        // single op
+        else if (msg.type === "shape_op") {
+          applyingRemoteShapesRef.current = true;
+          const { op } = msg;
+          if (op === "add") {
+            setShapes((cur) => [...cur, msg.shape]);
+          } else if (op === "remove") {
+            setShapes((cur) => cur.filter((s) => s.id !== msg.id));
+          } else if (op === "patch") {
+            setShapes((cur) => cur.map((s) => (s.id === msg.id ? { ...s, ...msg.fields } : s)));
+          } else if (op === "replace_all") {
+            setShapes(Array.isArray(msg.shapes) ? msg.shapes : []);
+          }
+          applyingRemoteShapesRef.current = false;
+          return;
+        }
+        // batch ops
+        else if (msg.type === "shape_ops") {
+          const ops = Array.isArray(msg.ops) ? msg.ops : [];
+          applyingRemoteShapesRef.current = true;
+          setShapes((cur) => {
+            let next = cur;
+            for (const m of ops) {
+              if (m.op === "add") next = [...next, m.shape];
+              else if (m.op === "remove") next = next.filter((s) => s.id !== m.id);
+              else if (m.op === "patch") next = next.map((s) => (s.id === m.id ? { ...s, ...m.fields } : s));
+            }
+            return next;
+          });
+          applyingRemoteShapesRef.current = false;
+          return;
+        }
+        // ======== /SHAPES ========
+
+        else if (msg.type === "chat_history") {
           setChatLog((msg.messages || []) as ChatMsg[]);
         } else if (msg.type === "chat") {
           const m = (msg.data || {}) as ChatMsg;
@@ -494,6 +601,7 @@ export default function GraphPage() {
         }
       } catch (err) { /* ignore parse/socket errors */ }
     };
+
 
 
     return () => { try { ws.close(); } catch {}; wsRef.current = null; wsReadyRef.current = false; };
@@ -1974,7 +2082,7 @@ export default function GraphPage() {
         <div ref={containerRef} style={{ position: "relative", width: "100%", height: "100%", background: "#fff" }} />
 
         {/* Drawing overlay (double-click background to add; right-click for menu; dbl-click rect to edit) */}
-        <ShapeOverlay containerRef={containerRef} shapes={shapes} onChange={setShapes} />
+        <ShapeOverlay containerRef={containerRef} shapes={shapes} onChange={setShapesWS} />
         
         {/* Presence avatars */}
         {peers.length > 0 && (

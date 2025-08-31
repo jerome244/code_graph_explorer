@@ -368,6 +368,21 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
                 await self._save_shapes(shapes)
                 await self.send_json({"type": "shape_commit_ok"})
 
+        # --- WebRTC audio signaling (1:1) ---
+        elif t in ("rtc_offer", "rtc_answer", "rtc_ice", "rtc_hangup"):
+            to = content.get("to")
+            payload = {"type": t, "from": user.id, "to": to}
+            if "sdp" in content:
+                payload["sdp"] = content.get("sdp")
+            if "candidate" in content:
+                payload["candidate"] = content.get("candidate")
+            if "reason" in content:
+                payload["reason"] = content.get("reason")  # e.g. "hangup" | "decline" | "busy"
+            await self.channel_layer.group_send(
+                self.group_name,
+                {"type": "broadcast", "payload": payload},
+            )
+
         # Unknown → ignore silently
         else:
             return

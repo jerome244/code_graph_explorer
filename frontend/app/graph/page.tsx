@@ -90,6 +90,9 @@ export default function GraphPage() {
     fileMapRef.current = fileMap;
   }, [fileMap]);
 
+  // phone call
+  const [callMenuOpen, setCallMenuOpen] = useState(false);
+
   // Positions (+ hidden) persisted on save
   const positionsRef = useRef<PositionsMap>({});
 
@@ -354,6 +357,129 @@ export default function GraphPage() {
   const textTimersRef = useRef<Map<string, number>>(new Map());
   const remoteDraftsRef = useRef<Record<string, string>>({});
 
+  // --- WebRTC audio call (1:1) ---
+  type CallStatus = "idle" | "calling" | "ringing" | "connected";
+  const [call, setCall] = useState<{
+    status: CallStatus;
+    peer?: Peer;
+    muted: boolean;
+    incomingOffer?: RTCSessionDescriptionInit | null;
+  }>({ status: "idle", muted: false, incomingOffer: null });
+
+  const closePC = () => {
+    try { pcRef.current?.close(); } catch {}
+    pcRef.current = null;
+  };
+
+  const endCall = (notify = true) => {
+    if (notify && call.peer) {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "rtc_hangup", to: call.peer.id, reason: "hangup" }));
+    }
+    closePC();
+    localStreamRef.current?.getTracks().forEach((t) => t.stop());
+    localStreamRef.current = null;
+    setCall({ status: "idle", muted: false, incomingOffer: null });
+  };
+
+  useEffect(() => {
+    return () => { // cleanup on unmount
+      try { pcRef.current?.close(); } catch {}
+      localStreamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  const ensureMedia = async () => {
+    if (localStreamRef.current) return localStreamRef.current;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    localStreamRef.current = stream;
+    return stream;
+  };
+
+  const createPC = (toId: number) => {
+    const pc = new RTCPeerConnection(rtcConfig);
+    pc.onicecandidate = (ev) => {
+      if (ev.candidate) {
+        const ws = wsRef.current;
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: "rtc_ice", to: toId, candidate: ev.candidate.toJSON() }));
+        }
+      }
+    };
+    pc.ontrack = (ev) => {
+      if (remoteAudioRef.current) remoteAudioRef.current.srcObject = ev.streams[0];
+    };
+    pcRef.current = pc;
+    return pc;
+  };
+
+  const startCall = async (peer: Peer) => {
+    try {
+      const stream = await ensureMedia();
+      const pc = createPC(peer.id);
+      stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+      setCall({ status: "calling", peer, muted: false, incomingOffer: null });
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const ws = wsRef.current;
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "rtc_offer", to: peer.id, sdp: offer }));
+    } catch (err) {
+      console.error(err);
+      endCall(false);
+      alert("Could not start call. Check mic permission/device.");
+    }
+  };
+
+  const acceptCall = async () => {
+    const offer = call.incomingOffer;
+    const peer = call.peer;
+    if (!offer || !peer) return;
+    try {
+      const stream = await ensureMedia();
+      const pc = createPC(peer.id);
+      stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      const ws = wsRef.current;
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "rtc_answer", to: peer.id, sdp: answer }));
+      setCall((v) => ({ ...v, status: "connected", incomingOffer: null }));
+      pendingCandidatesRef.current.forEach((c) =>
+        pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {})
+      );
+      pendingCandidatesRef.current = [];
+    } catch (err) {
+      console.error(err);
+      endCall(true);
+    }
+  };
+
+  const declineCall = () => {
+    if (call.peer) {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "rtc_hangup", to: call.peer.id, reason: "decline" }));
+    }
+    setCall({ status: "idle", peer: undefined, muted: false, incomingOffer: null });
+  };
+
+  const toggleMute = () => {
+    const on = localStreamRef.current?.getAudioTracks().some((t) => t.enabled);
+    localStreamRef.current?.getAudioTracks().forEach((t) => (t.enabled = !on));
+    setCall((v) => ({ ...v, muted: !on }));
+  };
+
+
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const rtcConfig = useMemo(
+    () => ({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] }),
+    []
+  );
+
+
+
   // --- Realtime chat ---
   type ChatUser = { id: number; username: string; color: string };
   type ChatMsg = { id: string; text: string; ts: string; user: ChatUser };
@@ -599,6 +725,54 @@ export default function GraphPage() {
           const m = (msg.data || {}) as ChatMsg;
           if (m && m.id) setChatLog((cur) => [...cur, m]);
         }
+
+        // ---- WebRTC signaling ----
+        else if (msg.type === "rtc_offer") {
+          const to = msg.to, from = msg.from;
+          if (to !== me?.id) return;
+          // busy? auto-decline
+          if (call.status !== "idle") {
+            const ws = wsRef.current;
+            if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "rtc_hangup", to: from, reason: "busy" }));
+            return;
+          }
+          const peer = peersRef.current.get(from);
+          setCall({ status: "ringing", peer, muted: false, incomingOffer: msg.sdp });
+          setChatOpen(true); // optional: pop open chat on incoming call
+        }
+        else if (msg.type === "rtc_answer") {
+          const to = msg.to;
+          if (to !== me?.id) return;
+          if (!pcRef.current) return;
+          pcRef.current.setRemoteDescription(new RTCSessionDescription(msg.sdp)).catch(() => {});
+          setCall((v) => ({ ...v, status: "connected" }));
+          // apply queued ICE
+          pendingCandidatesRef.current.forEach((c) =>
+            pcRef.current?.addIceCandidate(new RTCIceCandidate(c)).catch(() => {})
+          );
+          pendingCandidatesRef.current = [];
+        }
+        else if (msg.type === "rtc_ice") {
+          const to = msg.to;
+          if (to !== me?.id) return;
+          const cand: RTCIceCandidateInit | undefined = msg.candidate;
+          if (!cand) return;
+          if (pcRef.current && pcRef.current.remoteDescription) {
+            pcRef.current.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+          } else {
+            pendingCandidatesRef.current.push(cand);
+          }
+        }
+        else if (msg.type === "rtc_hangup") {
+          const to = msg.to, from = msg.from;
+          if (to !== me?.id) return;
+          endCall(false);
+          const r = msg.reason;
+          if (r === "decline") setInfo(`${peersRef.current.get(from)?.username ?? "Peer"} declined the call`);
+          if (r === "busy") setInfo(`${peersRef.current.get(from)?.username ?? "Peer"} is busy`);
+        }
+
+
       } catch (err) { /* ignore parse/socket errors */ }
     };
 
@@ -1940,6 +2114,7 @@ export default function GraphPage() {
               cursor: "pointer",
             }}
             title={chatOpen ? "Hide chat" : "Show chat"}
+            type="button"
           >
             💬 {chatOpen ? "Hide chat" : "Project chat"}
           </button>
@@ -1964,8 +2139,9 @@ export default function GraphPage() {
               role="region"
               aria-label="Project chat"
             >
-              {/* Header */}
+              {/* Header (relative so the dropdown anchors correctly) */}
               <div style={{
+                position: "relative",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
@@ -1976,8 +2152,75 @@ export default function GraphPage() {
                 fontWeight: 700,
               }}>
                 <div>Project chat</div>
-                <div title="Online collaborators" style={{ fontWeight: 600, opacity: 0.8 }}>
-                  {peers.length} online
+
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div title="Online collaborators" style={{ fontWeight: 600, opacity: 0.8 }}>
+                    {peers.length} online
+                  </div>
+
+                  {/* Call launcher + anchored dropdown */}
+                  <div style={{ position: "relative" }}>
+                    <button
+                      data-call-button
+                      onClick={() => setCallMenuOpen(o => !o)}
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        background: "white",
+                        padding: "6px 8px",
+                        borderRadius: 6,
+                        fontSize: 12,
+                        cursor: "pointer",
+                      }}
+                      title="Start a voice call"
+                      type="button"
+                    >
+                      📞 Call…
+                    </button>
+
+                    {callMenuOpen && (
+                      <div
+                        data-call-menu
+                        style={{
+                          position: "absolute",
+                          right: 0,
+                          top: 36,                 // appears just under the button
+                          zIndex: 1000,
+                          background: "white",
+                          border: "1px solid #e5e7eb",
+                          borderRadius: 8,
+                          boxShadow: "0 8px 18px rgba(0,0,0,.08)",
+                          minWidth: 220,
+                          overflow: "hidden",
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        {peers.filter(p => p.id !== me?.id).length === 0 ? (
+                          <div style={{ padding: 10, fontSize: 13, color: "#6b7280" }}>No peers online</div>
+                        ) : peers.filter(p => p.id !== me?.id).map(p => (
+                          <button
+                            key={p.id}
+                            onClick={() => { setCallMenuOpen(false); startCall(p); }}
+                            style={{
+                              display: "flex",
+                              gap: 8,
+                              alignItems: "center",
+                              padding: "10px 12px",
+                              width: "100%",
+                              background: "white",
+                              border: 0,
+                              borderTop: "1px solid #f3f4f6",
+                              cursor: "pointer",
+                              fontSize: 13
+                            }}
+                            type="button"
+                          >
+                            <span style={{ width: 10, height: 10, background: p.color, borderRadius: 999 }} />
+                            <span>{p.username}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -2074,6 +2317,81 @@ export default function GraphPage() {
               </form>
             </div>
           )}
+
+          /* NEW: remote audio output (place once, outside/after the chat panel) */
+          <audio ref={remoteAudioRef} autoPlay playsInline />
+
+          /* NEW: Call mini-panel */
+          {call.status !== "idle" && call.peer && (
+            <div
+              style={{
+                position: "fixed",
+                right: 16,
+                bottom: chatOpen ? 330 : 16,
+                zIndex: 45,
+                background: "white",
+                border: "1px solid #e5e7eb",
+                borderRadius: 12,
+                boxShadow: "0 12px 30px rgba(0,0,0,0.15)",
+                padding: 12,
+                display: "flex",
+                alignItems: "center",
+                gap: 10
+              }}
+              role="dialog"
+              aria-live="polite"
+            >
+              <div style={{ width: 28, height: 28, borderRadius: 999, background: call.peer.color, color: "#fff", display: "grid", placeItems: "center", fontWeight: 700 }}>
+                {call.peer.username[0]?.toUpperCase()}
+              </div>
+              <div style={{ minWidth: 140 }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{call.peer.username}</div>
+                <div style={{ fontSize: 12, color: "#6b7280" }}>
+                  {call.status === "calling" && "Calling…"}
+                  {call.status === "ringing" && "Incoming call…"}
+                  {call.status === "connected" && (call.muted ? "Connected (muted)" : "Connected")}
+                </div>
+              </div>
+              {call.status === "ringing" ? (
+                <>
+                  <button
+                    onClick={acceptCall}
+                    style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #16a34a", background: "#16a34a", color: "white", fontSize: 12 }}
+                    type="button"
+                  >
+                    Accept
+                  </button>
+                  <button
+                    onClick={declineCall}
+                    style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #ef4444", background: "white", color: "#ef4444", fontSize: 12 }}
+                    type="button"
+                  >
+                    Decline
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={toggleMute}
+                    style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #e5e7eb", background: "white", fontSize: 12 }}
+                    type="button"
+                  >
+                    {call.muted ? "Unmute" : "Mute"}
+                  </button>
+                  <button
+                    onClick={() => endCall(true)}
+                    style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #ef4444", background: "#ef4444", color: "white", fontSize: 12 }}
+                    type="button"
+                  >
+                    Hang up
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+
+
 
 
         </div>

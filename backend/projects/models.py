@@ -11,7 +11,8 @@ class Project(models.Model):
     name = models.CharField(max_length=200)
     # { [filePath]: {x: number, y: number} }
     positions = models.JSONField(blank=True, default=dict)
-
+    shapes = models.JSONField(blank=True, default=list)
+    
     # Viewers (read-only)
     shared_with = models.ManyToManyField(
         settings.AUTH_USER_MODEL,

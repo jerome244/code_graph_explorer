@@ -57,13 +57,17 @@ class ProjectListItemSerializer(serializers.ModelSerializer):
 
 class ProjectCreateSerializer(serializers.ModelSerializer):
     files = ProjectFileSerializer(many=True, write_only=True, required=False)
+    shapes = serializers.JSONField(required=False)  # NEW: accept shapes on create
 
     class Meta:
         model = Project
-        fields = ("id", "name", "positions", "files")
+        fields = ("id", "name", "positions", "shapes", "files")
 
     def create(self, validated_data):
         files = validated_data.pop("files", [])
+        # Ensure defaults if omitted
+        validated_data.setdefault("positions", {})
+        validated_data.setdefault("shapes", [])
         proj = Project.objects.create(**validated_data)
         if files:
             ProjectFile.objects.bulk_create(
@@ -81,6 +85,7 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
     shared_with = MinimalUserSerializer(many=True, read_only=True)
     editors = MinimalUserSerializer(many=True, read_only=True)
     my_role = serializers.SerializerMethodField()
+    shapes = serializers.JSONField(required=False)  # NEW: expose shapes on read/update
 
     class Meta:
         model = Project
@@ -88,6 +93,7 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "positions",
+            "shapes",      # NEW
             "updated_at",
             "files",
             "owner",

@@ -5,7 +5,7 @@ import JSZip from "jszip";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as cytoscapeImport from "cytoscape";
 const cytoscape = (cytoscapeImport as any).default ?? (cytoscapeImport as any);
-import ShapeOverlay from "./ShapeOverlay";
+import ShapeOverlay, { Shape } from "./ShapeOverlay";
 
 // Parsing + path helpers moved to a separate module
 import {
@@ -92,6 +92,12 @@ export default function GraphPage() {
 
   // Positions (+ hidden) persisted on save
   const positionsRef = useRef<PositionsMap>({});
+
+  // Shapes persisted with the project
+  const [shapes, setShapes] = useState<Shape[]>([]);
+  const shapesRef = useRef<Shape[]>([]);
+  useEffect(() => { shapesRef.current = shapes; }, [shapes]);
+
 
   // Snapshot x/y + hidden per node
   function snapshotPositions(): PositionsMap {
@@ -657,8 +663,14 @@ export default function GraphPage() {
     const r = await fetch("/api/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: projectName.trim(), files, positions }),
+      body: JSON.stringify({
+        name: projectName.trim(),
+        files,
+        positions,
+        shapes: shapesRef.current,      // ← NEW
+      }),
     });
+
     if (!r.ok) {
       alert("Failed to create project");
       return;
@@ -684,8 +696,12 @@ export default function GraphPage() {
     const rp = await fetch(`/api/projects/${projectId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ positions: snapshotPositions() }),
+      body: JSON.stringify({
+        positions: snapshotPositions(),
+        shapes: shapesRef.current,      // ← NEW
+      }),
     });
+
 
     setInfo(r.ok && rp.ok ? "All changes & layout saved" : "Save failed (files or layout)");
   }
@@ -703,6 +719,9 @@ export default function GraphPage() {
     // restore positions (+ hidden)
     positionsRef.current = (proj.positions ?? {}) as PositionsMap;
 
+    // NEW: restore shapes
+    setShapes((proj.shapes ?? []) as Shape[]);
+    
     const newMap: Record<string, string> = {};
     for (const f of proj.files || []) newMap[f.path] = f.content ?? "";
     fileMapRef.current = newMap;
@@ -1954,8 +1973,8 @@ export default function GraphPage() {
         {/* Cytoscape canvas */}
         <div ref={containerRef} style={{ position: "relative", width: "100%", height: "100%", background: "#fff" }} />
 
-        {/* Drawing overlay (double-click to add shapes) */}
-        <ShapeOverlay containerRef={containerRef} />
+        {/* Drawing overlay (double-click background to add; right-click for menu; dbl-click rect to edit) */}
+        <ShapeOverlay containerRef={containerRef} shapes={shapes} onChange={setShapes} />
         
         {/* Presence avatars */}
         {peers.length > 0 && (

@@ -28,7 +28,7 @@ function RemotePlayers({
       {Object.entries(players).map(([id, pl]) => (
         <group key={id} position={[pl.p[0], pl.p[1], pl.p[2]]} rotation={[0, pl.ry || 0, 0]}>
           <mesh position={[0, 0.9, 0]} castShadow>
-            {/* @ts-ignore: available in r3f/three */}
+            {/* @ts-ignore */}
             <capsuleGeometry args={[0.3, 0.9, 2, 8]} />
             <meshStandardMaterial roughness={1} metalness={0} />
           </mesh>
@@ -56,9 +56,7 @@ export default function Game() {
   }, [blocks]);
 
   const blocksRef = React.useRef(blocks);
-  React.useEffect(() => {
-    blocksRef.current = blocks;
-  }, [blocks]);
+  React.useEffect(() => { blocksRef.current = blocks; }, [blocks]);
 
   /* ---------- Multiplayer (WS) ---------- */
   const room =
@@ -67,6 +65,9 @@ export default function Game() {
       : "lobby";
 
   const [clientId, setClientId] = React.useState<string | null>(null);
+  const selfIdRef = React.useRef<string | null>(null);
+  const [gotSnapshot, setGotSnapshot] = React.useState(false);
+
   const [others, setOthers] = React.useState<
     Record<string, { p: [number, number, number]; ry: number; name?: string }>
   >({});
@@ -74,7 +75,6 @@ export default function Game() {
   const [wsReady, setWsReady] = React.useState(false);
 
   function getJwtToken() {
-    // Adjust if you store tokens differently
     return (
       (typeof window !== "undefined" &&
         (localStorage.getItem("access") || localStorage.getItem("access_token"))) ||
@@ -83,18 +83,16 @@ export default function Game() {
   }
 
   function wsBase() {
-    // Prefer explicit envs
     const fromEnv =
       process.env.NEXT_PUBLIC_WS_URL ||
       process.env.NEXT_PUBLIC_DJANGO_WS_BASE ||
       (process.env.DJANGO_API_BASE ? process.env.DJANGO_API_BASE.replace(/^http/, "ws") : null);
     if (fromEnv) return fromEnv.replace(/\/$/, "");
-
-    // Sensible dev fallback
     if (typeof window !== "undefined") {
-      if (window.location.hostname === "localhost" && window.location.port === "3000") {
-        return "ws://localhost:8000";
-      }
+      const isDevLocal =
+        window.location.hostname === "localhost" &&
+        (window.location.port === "3000" || window.location.port === "3001");
+      if (isDevLocal) return "ws://localhost:8000";
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
       return `${proto}://${window.location.host}`;
     }
@@ -114,35 +112,44 @@ export default function Game() {
       wsRef.current = ws;
 
       ws.onopen = () => {
-        // console.log("[WS] open", url);
         setWsReady(true);
+        // reset identification gates on each (re)connect
+        setGotSnapshot(false);
+        setClientId(null);
+        selfIdRef.current = null;
         retry = 0;
       };
-      ws.onclose = (e) => {
-        // console.warn("[WS] close", e.code, e.reason);
+      ws.onclose = () => {
         setWsReady(false);
         if (closed) return;
         const delay = Math.min(2000 * (retry++ + 1), 8000);
         setTimeout(connect, delay);
       };
       ws.onerror = () => {
-        try {
-          ws.close();
-        } catch {}
+        try { ws.close(); } catch {}
       };
 
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
+
+          // Ignore everything until we know who we are
+          if (msg.type !== "snapshot" && !selfIdRef.current) return;
+
           switch (msg.type) {
             case "snapshot": {
-              setClientId(msg.your_id || null);
+              const yourId = msg.your_id || null;
+              setClientId(yourId);
+              selfIdRef.current = yourId;
+              setGotSnapshot(true);
+
               const world = (msg.world || {}) as Record<string, BlockId>;
               setBlocks(world);
               blocksRef.current = world;
+
               const pmap: Record<string, any> = {};
               for (const [id, pl] of Object.entries<any>(msg.players || {})) {
-                if (id !== msg.your_id)
+                if (id !== yourId)
                   pmap[id] = { p: pl.p as [number, number, number], ry: pl.ry || 0, name: pl.name };
               }
               setOthers(pmap);
@@ -160,7 +167,7 @@ export default function Game() {
             }
             case "state": {
               const id = msg.id as string;
-              if (!id || id === clientId) break;
+              if (!id || id === selfIdRef.current) break; // ignore self echoes
               setOthers((prev) => ({
                 ...prev,
                 [id]: { p: msg.p as [number, number, number], ry: msg.ry || 0, name: msg.name },
@@ -169,8 +176,8 @@ export default function Game() {
             }
             case "join": {
               const id = msg.id as string;
+              if (!id || id === selfIdRef.current) break; // ignore self join
               const pl = msg.player || {};
-              if (!id || id === clientId) break;
               setOthers((prev) => ({
                 ...prev,
                 [id]: { p: pl.p || [10, 3, 10], ry: pl.ry || 0, name: pl.name },
@@ -192,10 +199,7 @@ export default function Game() {
     };
 
     connect();
-    return () => {
-      closed = true;
-      wsRef.current?.close();
-    };
+    return () => { closed = true; wsRef.current?.close(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room]);
 
@@ -248,7 +252,7 @@ export default function Game() {
     };
   }, []);
 
-  /* ---------- Pointer lock & menu (declare BEFORE effects using `locked`) ---------- */
+  /* ---------- Pointer lock & menu ---------- */
   const plcRef = React.useRef<any>(null);
   const playerRef = React.useRef<PlayerAPI>(null);
   const camRef = React.useRef<THREE.PerspectiveCamera | null>(null);
@@ -257,13 +261,12 @@ export default function Game() {
   const [menuOpen, setMenuOpen] = React.useState(false);
   const importInputRef = React.useRef<HTMLInputElement | null>(null);
 
-  // Stream local player state ~10 Hz (after `locked` exists)
+  // Stream local player state ~10 Hz
   React.useEffect(() => {
-    let raf = 0;
-    let last = 0;
+    let raf = 0, last = 0;
     const loop = (t: number) => {
       raf = requestAnimationFrame(loop);
-      if (!locked || !camRef.current) return;
+      if (!locked || !camRef.current || !gotSnapshot) return; // wait for snapshot
       if (t - last < 100) return;
       last = t;
 
@@ -280,15 +283,13 @@ export default function Game() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [locked, selected, wsSend]);
+  }, [locked, selected, wsSend, gotSnapshot]);
 
-  // Track recent Space (grace window for pillar placing)
+  // Track recent Space (pillar place grace window)
   const lastJumpPress = React.useRef(0);
   const recentlyJumped = React.useCallback(() => performance.now() - lastJumpPress.current < 160, []);
   React.useEffect(() => {
-    const onDown = (e: KeyboardEvent) => {
-      if (e.code === "Space") lastJumpPress.current = performance.now();
-    };
+    const onDown = (e: KeyboardEvent) => { if (e.code === "Space") lastJumpPress.current = performance.now(); };
     window.addEventListener("keydown", onDown);
     return () => window.removeEventListener("keydown", onDown);
   }, []);
@@ -298,30 +299,18 @@ export default function Game() {
     const onKey = async (e: KeyboardEvent) => {
       if (e.code.startsWith("Digit")) {
         const n = Number(e.code.replace("Digit", ""));
-        if (n >= 1 && n <= BLOCKS.length) {
-          e.preventDefault();
-          setSelected(BLOCKS[n - 1].id);
-        }
+        if (n >= 1 && n <= BLOCKS.length) { e.preventDefault(); setSelected(BLOCKS[n - 1].id); }
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        saveWorld(blocks);
-        alert("World saved locally.");
-        return;
+        e.preventDefault(); saveWorld(blocks); alert("World saved locally."); return;
       }
       if (e.key === "Escape" || e.code === "KeyP") {
         e.preventDefault();
         if (menuOpen) {
-          if (mustFs && !isFs) {
-            try {
-              await requestFullscreen();
-            } catch {}
-          }
-          setMenuOpen(false);
-          plcRef.current?.lock?.();
+          if (mustFs && !isFs) { try { await requestFullscreen(); } catch {} }
+          setMenuOpen(false); plcRef.current?.lock?.();
         } else {
-          setMenuOpen(true);
-          plcRef.current?.unlock?.();
+          setMenuOpen(true); plcRef.current?.unlock?.();
         }
       }
     };
@@ -356,8 +345,7 @@ export default function Game() {
     const k = keyOf(pos);
     setBlocks((prev) => {
       const next = { ...prev };
-      if (id === "EMPTY") delete next[k];
-      else next[k] = id;
+      if (id === "EMPTY") delete next[k]; else next[k] = id;
       return next;
     });
     if (id === "EMPTY") delete (blocksRef.current as any)[k];
@@ -367,55 +355,28 @@ export default function Game() {
     (pos: Vec3, id: BlockId) => {
       placeAtNow(pos, id);
       const k = keyOf(pos);
-      if (id === "EMPTY") broadcastRemove(k);
-      else broadcastPlace(k, id);
+      if (id === "EMPTY") broadcastRemove(k); else broadcastPlace(k, id);
     },
     [broadcastPlace, broadcastRemove]
   );
 
-  const onSave = () => {
-    saveWorld(blocks);
-    alert("World saved in your browser.");
-  };
-  const onLoad = () => {
-    const m = loadWorld();
-    if (!m) return alert("No saved world found.");
-    setBlocks(m);
-    blocksRef.current = m;
-  };
-  const onClear = () => {
-    if (!confirm("Clear the world? This won't remove your saved copy.")) return;
-    setBlocks({});
-    blocksRef.current = {};
-  };
+  const onSave = () => { saveWorld(blocks); alert("World saved in your browser."); };
+  const onLoad = () => { const m = loadWorld(); if (!m) return alert("No saved world found."); setBlocks(m); blocksRef.current = m; };
+  const onClear = () => { if (!confirm("Clear the world? This won't remove your saved copy.")) return; setBlocks({}); blocksRef.current = {}; };
   const onExport = () => {
     const blob = new Blob([JSON.stringify(blocks)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "minecraft-world-3d.json";
-    a.click();
-    URL.revokeObjectURL(url);
+    const url = URL.createObjectURL(blob); const a = document.createElement("a");
+    a.href = url; a.download = "minecraft-world-3d.json"; a.click(); URL.revokeObjectURL(url);
   };
   const onImport = async (f: File) => {
-    try {
-      const text = await f.text();
-      const parsed = JSON.parse(text);
-      if (!parsed || typeof parsed !== "object") throw new Error();
-      setBlocks(parsed);
-      blocksRef.current = parsed;
-    } catch {
-      alert("Invalid world file.");
-    }
+    try { const text = await f.text(); const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== "object") throw new Error(); setBlocks(parsed); blocksRef.current = parsed;
+    } catch { alert("Invalid world file."); }
   };
 
   const startPlay = React.useCallback(async () => {
-    try {
-      setMustFs(true);
-      if (!isFs) await requestFullscreen();
-    } catch {}
-    setMenuOpen(false);
-    plcRef.current?.lock?.();
+    try { setMustFs(true); if (!isFs) await requestFullscreen(); } catch {}
+    setMenuOpen(false); plcRef.current?.lock?.();
   }, [isFs, requestFullscreen]);
 
   /* ---------- Live world queries ---------- */
@@ -441,9 +402,7 @@ export default function Game() {
   function voxelRaycast(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number) {
     // 3D DDA
     const pos = new THREE.Vector3(Math.floor(origin.x), Math.floor(origin.y), Math.floor(origin.z));
-    const stepX = dir.x > 0 ? 1 : -1,
-      stepY = dir.y > 0 ? 1 : -1,
-      stepZ = dir.z > 0 ? 1 : -1;
+    const stepX = dir.x > 0 ? 1 : -1, stepY = dir.y > 0 ? 1 : -1, stepZ = dir.z > 0 ? 1 : -1;
     const invX = dir.x !== 0 ? 1 / Math.abs(dir.x) : Infinity;
     const invY = dir.y !== 0 ? 1 / Math.abs(dir.y) : Infinity;
     const invZ = dir.z !== 0 ? 1 / Math.abs(dir.z) : Infinity;
@@ -453,101 +412,62 @@ export default function Game() {
     let tMaxZ = dir.z > 0 ? (1 - frac(origin.z)) * invZ : frac(origin.z) * invZ;
     let t = 0;
     for (let i = 0; i < 256; i++) {
-      if (tMaxX < tMaxY && tMaxX < tMaxZ) {
-        pos.x += stepX;
-        t = tMaxX;
-        tMaxX += invX;
-        if (t > maxDist) break;
-        if (isFilled(pos.x, pos.y, pos.z))
-          return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [-stepX, 0, 0] as Vec3 };
-      } else if (tMaxY < tMaxZ) {
-        pos.y += stepY;
-        t = tMaxY;
-        tMaxY += invY;
-        if (t > maxDist) break;
-        if (isFilled(pos.x, pos.y, pos.z))
-          return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [0, -stepY, 0] as Vec3 };
-      } else {
-        pos.z += stepZ;
-        t = tMaxZ;
-        tMaxZ += invZ;
-        if (t > maxDist) break;
-        if (isFilled(pos.x, pos.y, pos.z))
-          return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [0, 0, -stepZ] as Vec3 };
-      }
+      if (tMaxX < tMaxY && tMaxX < tMaxZ) { pos.x += stepX; t = tMaxX; tMaxX += invX;
+        if (t > maxDist) break; if (isFilled(pos.x, pos.y, pos.z)) return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [-stepX, 0, 0] as Vec3 }; }
+      else if (tMaxY < tMaxZ) { pos.y += stepY; t = tMaxY; tMaxY += invY;
+        if (t > maxDist) break; if (isFilled(pos.x, pos.y, pos.z)) return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [0, -stepY, 0] as Vec3 }; }
+      else { pos.z += stepZ; t = tMaxZ; tMaxZ += invZ;
+        if (t > maxDist) break; if (isFilled(pos.x, pos.y, pos.z)) return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [0, 0, -stepZ] as Vec3 }; }
     }
     return { hit: null as Vec3 | null, face: null as Vec3 | null };
   }
 
-  const handleBuildClick = React.useCallback(
-    (button: number, shift: boolean) => {
-      if (!locked || menuOpen || !camRef.current) return;
+  const handleBuildClick = React.useCallback((button: number, shift: boolean) => {
+    if (!locked || menuOpen || !camRef.current) return;
 
-      const cam = camRef.current!;
-      const origin = new THREE.Vector3().copy(cam.position);
-      const dir = new THREE.Vector3();
-      cam.getWorldDirection(dir).normalize();
+    const cam = camRef.current!;
+    const origin = new THREE.Vector3().copy(cam.position);
+    const dir = new THREE.Vector3(); cam.getWorldDirection(dir).normalize();
 
-      const { hit, face } = voxelRaycast(origin, dir, INTERACT_DIST);
-      if (!hit || !face) return;
+    const { hit, face } = voxelRaycast(origin, dir, INTERACT_DIST);
+    if (!hit || !face) return;
 
-      // Remove: right-click or Shift
-      if (button === 2 || shift) {
-        placeAtNowAndBroadcast(hit, "EMPTY");
-        return;
+    // Remove: right-click or Shift
+    if (button === 2 || shift) { placeAtNowAndBroadcast(hit, "EMPTY"); return; }
+
+    // March outward along face normal until first empty cell
+    let tx = hit[0] + face[0], ty = hit[1] + face[1], tz = hit[2] + face[2];
+    for (let i = 0; i < 32 && isFilled(tx, ty, tz); i++) { tx += face[0]; ty += face[1]; tz += face[2]; }
+    const target: Vec3 = [tx, ty, tz];
+
+    // If target sits under player horizontally, require airborne OR very-recent Space tap
+    const feet = playerRef.current?.getFeet();
+    if (feet) {
+      const cx = target[0] + 0.5, cz = target[2] + 0.5;
+      const dx = Math.abs(feet.x - cx), dz = Math.abs(feet.z - cz);
+      const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
+      if (inside && !(isAirborneNow() || recentlyJumped())) return;
+    }
+
+    // Place block
+    placeAtNowAndBroadcast(target, selected);
+
+    // Nudge up if we built under ourselves
+    if (feet) {
+      const cx = target[0] + 0.5, cz = target[2] + 0.5;
+      const dx = Math.abs(feet.x - cx), dz = Math.abs(feet.z - cz);
+      const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
+      const topY = target[1] + 1.0;
+      if (inside && feet.y < topY + 0.001) {
+        const need = (topY + 0.02) - feet.y;
+        if (need > 0) playerRef.current?.nudgeUp(need, true);
       }
+    }
+  }, [locked, menuOpen, selected, isFilled, isAirborneNow, recentlyJumped, placeAtNowAndBroadcast]);
 
-      // March outward along face normal until first empty cell
-      let tx = hit[0] + face[0],
-        ty = hit[1] + face[1],
-        tz = hit[2] + face[2];
-      for (let i = 0; i < 32 && isFilled(tx, ty, tz); i++) {
-        tx += face[0];
-        ty += face[1];
-        tz += face[2];
-      }
-      const target: Vec3 = [tx, ty, tz];
-
-      // If target sits under player horizontally, require airborne OR very-recent Space tap
-      const feet = playerRef.current?.getFeet();
-      if (feet) {
-        const cx = target[0] + 0.5,
-          cz = target[2] + 0.5;
-        const dx = Math.abs(feet.x - cx),
-          dz = Math.abs(feet.z - cz);
-        const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
-        if (inside && !(isAirborneNow() || recentlyJumped())) return;
-      }
-
-      // Place block
-      placeAtNowAndBroadcast(target, selected);
-
-      // Nudge up if we built under ourselves
-      if (feet) {
-        const cx = target[0] + 0.5,
-          cz = target[2] + 0.5;
-        const dx = Math.abs(feet.x - cx),
-          dz = Math.abs(feet.z - cz);
-        const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
-        const topY = target[1] + 1.0;
-        if (inside && feet.y < topY + 0.001) {
-          const need = topY + 0.02 - feet.y;
-          if (need > 0) playerRef.current?.nudgeUp(need, true);
-        }
-      }
-    },
-    [locked, menuOpen, selected, isFilled, isAirborneNow, recentlyJumped, placeAtNowAndBroadcast]
-  );
-
-  function CameraGrab({
-    target,
-  }: {
-    target: React.MutableRefObject<THREE.PerspectiveCamera | null>;
-  }) {
+  function CameraGrab({ target }: { target: React.MutableRefObject<THREE.PerspectiveCamera | null> }) {
     const { camera } = useThree();
-    React.useEffect(() => {
-      target.current = camera as THREE.PerspectiveCamera;
-    }, [camera]);
+    React.useEffect(() => { target.current = camera as THREE.PerspectiveCamera; }, [camera]);
     return null;
   }
 
@@ -578,8 +498,7 @@ export default function Game() {
               background: b.color,
             }}
           >
-            {b.label}
-            {b.key && <span style={badge}>{b.key}</span>}
+            {b.label}{b.key && <span style={badge}>{b.key}</span>}
           </button>
         ))}
       </div>
@@ -592,49 +511,31 @@ export default function Game() {
         shadows
         camera={{ position: [WORLD_SIZE * 0.8, WORLD_SIZE * 0.6, WORLD_SIZE * 0.8], fov: 50 }}
         onPointerDownCapture={(e: any) => {
-          if (!locked && !menuOpen) {
-            setMustFs(true);
-            startPlay();
-            e.stopPropagation();
-            return;
-          }
-          const btn = e.button ?? 0;
-          const shift = !!e.shiftKey;
+          if (!locked && !menuOpen) { setMustFs(true); startPlay(); e.stopPropagation(); return; }
+          const btn = e.button ?? 0; const shift = !!e.shiftKey;
           handleBuildClick(btn, shift);
         }}
       >
         <Sky sunPosition={[100, 20, 100]} />
         <ambientLight intensity={0.5} />
-        <directionalLight
-          castShadow
-          position={[20, 25, 10]}
-          intensity={0.8}
-          shadow-mapSize-width={2048}
-          shadow-mapSize-height={2048}
-        />
+        <directionalLight castShadow position={[20, 25, 10]} intensity={0.8} shadow-mapSize-width={2048} shadow-mapSize-height={2048} />
 
         <PointerLockControls
           ref={plcRef}
-          onLock={() => {
-            setLocked(true);
-            setMenuOpen(false);
-          }}
-          onUnlock={() => {
-            setLocked(false);
-            setMenuOpen(true);
-          }}
+          onLock={() => { setLocked(true); setMenuOpen(false); }}
+          onUnlock={() => { setLocked(false); setMenuOpen(true); }}
         />
 
         <CameraGrab target={camRef} />
 
-        {/* world (child handlers are no-ops; main click is captured at Canvas) */}
+        {/* world */}
         <GroundPlane size={WORLD_SIZE} onPlace={() => {}} />
         {blockEntries.map(({ id, pos }) => (
           <Voxel key={keyOf(pos)} id={id} pos={pos} onPlaceAdjacent={() => {}} onRemove={() => {}} />
         ))}
 
-        {/* remote players */}
-        <RemotePlayers players={others} />
+        {/* remote players (filter out self defensively) */}
+        <RemotePlayers players={Object.fromEntries(Object.entries(others).filter(([id]) => id !== clientId))} />
 
         <Player ref={playerRef} active={locked} solid={solid} worldSize={WORLD_SIZE} />
         <Environment preset="city" />
@@ -654,13 +555,7 @@ export default function Game() {
 
       {/* Start overlay */}
       {!locked && !menuOpen && (
-        <button
-          onClick={async () => {
-            setMustFs(true);
-            await startPlay();
-          }}
-          style={startOverlay}
-        >
+        <button onClick={async () => { setMustFs(true); await startPlay(); }} style={startOverlay}>
           Click to start (fullscreen + mouse-look)
         </button>
       )}
@@ -670,56 +565,20 @@ export default function Game() {
         <div style={menuOverlay} onMouseDown={(e) => e.stopPropagation()}>
           <div style={menuPanel}>
             <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>Paused</div>
-            <button
-              style={menuBtn}
-              onClick={async () => {
-                if (mustFs && !isFs) {
-                  try {
-                    await requestFullscreen();
-                  } catch {}
-                }
-                setMenuOpen(false);
-                plcRef.current?.lock?.();
-              }}
-            >
-              Resume (lock mouse)
-            </button>
-            <button style={menuBtn} onClick={onSave}>
-              Save
-            </button>
-            <button style={menuBtn} onClick={onLoad}>
-              Load
-            </button>
-            <button style={menuBtn} onClick={onExport}>
-              Export
-            </button>
-            <button style={menuBtn} onClick={() => importInputRef.current?.click()}>
-              Import…
-            </button>
+            <button style={menuBtn} onClick={async () => {
+              if (mustFs && !isFs) { try { await requestFullscreen(); } catch {} }
+              setMenuOpen(false); plcRef.current?.lock?.();
+            }}>Resume (lock mouse)</button>
+            <button style={menuBtn} onClick={onSave}>Save</button>
+            <button style={menuBtn} onClick={onLoad}>Load</button>
+            <button style={menuBtn} onClick={onExport}>Export</button>
+            <button style={menuBtn} onClick={() => importInputRef.current?.click()}>Import…</button>
             <input
-              ref={importInputRef}
-              type="file"
-              accept="application/json"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                const f = e.currentTarget.files?.[0];
-                if (f)
-                  (async () => {
-                    await onImport(f);
-                  })();
-                e.currentTarget.value = "";
-              }}
+              ref={importInputRef} type="file" accept="application/json" style={{ display: "none" }}
+              onChange={(e) => { const f = e.currentTarget.files?.[0]; if (f) (async () => { await onImport(f); })(); e.currentTarget.value = ""; }}
             />
-            <button style={{ ...menuBtn, borderColor: "#dc2626" }} onClick={onClear}>
-              Clear world
-            </button>
-            <button
-              style={menuBtn}
-              onClick={async () => {
-                setMustFs(false);
-                await exitFullscreen();
-              }}
-            >
+            <button style={{ ...menuBtn, borderColor: "#dc2626" }} onClick={onClear}>Clear world</button>
+            <button style={menuBtn} onClick={async () => { setMustFs(false); await exitFullscreen(); }}>
               Exit Fullscreen
             </button>
           </div>
@@ -731,106 +590,46 @@ export default function Game() {
 
 /* ---------- UI styles ---------- */
 const hotbarWrap = (menuOpen: boolean): React.CSSProperties => ({
-  position: "absolute",
-  left: 12,
-  top: 12,
-  display: "flex",
-  gap: 8,
-  flexWrap: "wrap",
-  pointerEvents: menuOpen ? "none" : "auto",
-  zIndex: 20,
+  position: "absolute", left: 12, top: 12, display: "flex", gap: 8, flexWrap: "wrap",
+  pointerEvents: menuOpen ? "none" : "auto", zIndex: 20,
 });
 const hotBtn: React.CSSProperties = {
-  padding: "8px 12px",
-  borderRadius: 8,
-  border: "1px solid #e5e7eb",
-  fontSize: 14,
-  fontWeight: 700,
-  cursor: "pointer",
-  minWidth: 90,
-  textAlign: "center" as const,
+  padding: "8px 12px", borderRadius: 8, border: "1px solid #e5e7eb",
+  fontSize: 14, fontWeight: 700, cursor: "pointer", minWidth: 90, textAlign: "center" as const,
 };
 const badge: React.CSSProperties = {
-  marginLeft: 8,
-  padding: "2px 6px",
-  borderRadius: 999,
-  border: "1px solid #e5e7eb",
-  background: "#fff",
-  fontSize: 12,
+  marginLeft: 8, padding: "2px 6px", borderRadius: 999, border: "1px solid #e5e7eb", background: "#fff", fontSize: 12,
 };
 const wsPill: React.CSSProperties = {
-  position: "absolute",
-  right: 12,
-  top: 12,
-  padding: "4px 8px",
-  borderRadius: 999,
-  background: "rgba(17,24,39,0.8)",
-  color: "#fff",
-  fontSize: 12,
-  zIndex: 25,
+  position: "absolute", right: 12, top: 12, padding: "4px 8px", borderRadius: 999,
+  background: "rgba(17,24,39,0.8)", color: "#fff", fontSize: 12, zIndex: 25,
 };
 const hudHint: React.CSSProperties = {
-  position: "absolute",
-  bottom: 10,
-  left: 12,
-  right: 12,
-  display: "flex",
-  justifyContent: "space-between",
-  fontSize: 12,
-  color: "#111827",
-  opacity: 0.8,
-  pointerEvents: "none",
+  position: "absolute", bottom: 10, left: 12, right: 12, display: "flex",
+  justifyContent: "space-between", fontSize: 12, color: "#111827", opacity: 0.8, pointerEvents: "none",
 };
 const crosshair: React.CSSProperties = {
-  position: "absolute",
-  left: "50%",
-  top: "50%",
-  width: 12,
-  height: 12,
-  transform: "translate(-50%, -50%)",
-  pointerEvents: "none",
-  opacity: 0.7,
+  position: "absolute", left: "50%", top: "50%", width: 12, height: 12,
+  transform: "translate(-50%, -50%)", pointerEvents: "none", opacity: 0.7,
   background:
-    "linear-gradient(#111827,#111827) left center/2px 12px no-repeat, linear-gradient(#111827,#111827) center top/12px 2px no-repeat, linear-gradient(#111827,#111827) right center/2px 12px no-repeat, linear-gradient(#111827,#111827) center bottom/12px 2px no-repeat",
+    "linear-gradient(#111827,#111827) left center/2px 12px no-repeat, \
+     linear-gradient(#111827,#111827) center top/12px 2px no-repeat, \
+     linear-gradient(#111827,#111827) right center/2px 12px no-repeat, \
+     linear-gradient(#111827,#111827) center bottom/12px 2px no-repeat",
 };
 const startOverlay: React.CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  display: "grid",
-  placeItems: "center",
-  background: "rgba(17,24,39,0.35)",
-  color: "#fff",
-  fontWeight: 800,
-  fontSize: 16,
-  border: "none",
-  cursor: "pointer",
-  zIndex: 10,
+  position: "absolute", inset: 0, display: "grid", placeItems: "center",
+  background: "rgba(17,24,39,0.35)", color: "#fff", fontWeight: 800, fontSize: 16,
+  border: "none", cursor: "pointer", zIndex: 10,
 };
 const menuOverlay: React.CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  background: "rgba(17,24,39,0.6)",
-  display: "grid",
-  placeItems: "center",
-  zIndex: 30,
+  position: "absolute", inset: 0, background: "rgba(17,24,39,0.6)", display: "grid", placeItems: "center", zIndex: 30,
 };
 const menuPanel: React.CSSProperties = {
-  background: "#111827",
-  color: "#fff",
-  padding: 16,
-  borderRadius: 12,
-  minWidth: 280,
-  boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
-  display: "grid",
-  gap: 8,
+  background: "#111827", color: "#fff", padding: 16, borderRadius: 12, minWidth: 280,
+  boxShadow: "0 10px 30px rgba(0,0,0,0.4)", display: "grid", gap: 8,
 };
 const menuBtn: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 8,
-  border: "1px solid #374151",
-  background: "#1f2937",
-  color: "#fff",
-  cursor: "pointer",
-  textAlign: "left",
-  fontSize: 14,
+  padding: "10px 12px", borderRadius: 8, border: "1px solid #374151",
+  background: "#1f2937", color: "#fff", cursor: "pointer", textAlign: "left", fontSize: 14,
 };

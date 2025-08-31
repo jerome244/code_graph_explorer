@@ -462,7 +462,7 @@ export default function ShapeOverlay({
       </div>
 
       {/* LABELS layer (ABOVE nodes, non-blocking) */}
-      <div style={{ position: "absolute", inset: 0, zIndex: 100, pointerEvents: "none" }}>
+      <div style={{ position: "absolute", inset: 0, zIndex: 5, pointerEvents: "none" }}>
         {shapes.map((s) => {
           if (s.type !== "rect" || !s.label) return null;
           return (

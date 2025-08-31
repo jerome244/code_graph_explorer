@@ -2425,7 +2425,17 @@ const setLocalAudioEnabled = (on: boolean) => {
         </div>
 
         {/* Cytoscape canvas */}
-        <div ref={containerRef} style={{ position: "relative", width: "100%", height: "100%", background: "#fff" }} />
+        <div
+          ref={containerRef}
+          style={{
+            position: "relative",
+            width: "100%",
+            height: "100%",
+            background: "transparent",
+            zIndex: 10,        // ← add this
+          }}
+        />
+
 
         {/* Drawing overlay (double-click background to add; right-click for menu; dbl-click rect to edit) */}
         <ShapeOverlay containerRef={containerRef} shapes={shapes} onChange={setShapesWS} />

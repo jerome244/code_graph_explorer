@@ -413,16 +413,22 @@ export default function GraphPage() {
     return pc;
   };
 
+  // startCall(peer)
   const startCall = async (peer: Peer) => {
     try {
       const stream = await ensureMedia();
       const pc = createPC(peer.id);
-      stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+
+      // attach tracks
+      stream.getTracks().forEach(t => pc.addTrack(t, stream));
+
+      // ensure initial state (unmuted)
+      setLocalAudioEnabled(true);
+
       setCall({ status: "calling", peer, muted: false, incomingOffer: null });
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      const ws = wsRef.current;
-      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "rtc_offer", to: peer.id, sdp: offer }));
+      wsRef.current?.readyState === 1 && wsRef.current.send(JSON.stringify({ type: "rtc_offer", to: peer.id, sdp: offer }));
     } catch (err) {
       console.error(err);
       endCall(false);
@@ -430,6 +436,8 @@ export default function GraphPage() {
     }
   };
 
+
+  // acceptCall()
   const acceptCall = async () => {
     const offer = call.incomingOffer;
     const peer = call.peer;
@@ -437,22 +445,25 @@ export default function GraphPage() {
     try {
       const stream = await ensureMedia();
       const pc = createPC(peer.id);
-      stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+
+      stream.getTracks().forEach(t => pc.addTrack(t, stream));
+
+      // ensure initial state (unmuted)
+      setLocalAudioEnabled(true);
+
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      const ws = wsRef.current;
-      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "rtc_answer", to: peer.id, sdp: answer }));
-      setCall((v) => ({ ...v, status: "connected", incomingOffer: null }));
-      pendingCandidatesRef.current.forEach((c) =>
-        pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {})
-      );
+      wsRef.current?.readyState === 1 && wsRef.current.send(JSON.stringify({ type: "rtc_answer", to: peer.id, sdp: answer }));
+      setCall(v => ({ ...v, status: "connected", incomingOffer: null }));
+      pendingCandidatesRef.current.forEach(c => pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {}));
       pendingCandidatesRef.current = [];
     } catch (err) {
       console.error(err);
       endCall(true);
     }
   };
+
 
   const declineCall = () => {
     if (call.peer) {
@@ -463,10 +474,10 @@ export default function GraphPage() {
   };
 
   const toggleMute = () => {
-    const on = localStreamRef.current?.getAudioTracks().some((t) => t.enabled);
-    localStreamRef.current?.getAudioTracks().forEach((t) => (t.enabled = !on));
-    setCall((v) => ({ ...v, muted: !on }));
+    const enabledNow = (localStreamRef.current?.getAudioTracks() ?? []).every(t => t.enabled);
+    setLocalAudioEnabled(!enabledNow);
   };
+
 
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -478,6 +489,11 @@ export default function GraphPage() {
     []
   );
 
+const setLocalAudioEnabled = (on: boolean) => {
+  const tracks = localStreamRef.current?.getAudioTracks() ?? [];
+  tracks.forEach(t => (t.enabled = on));
+  setCall(v => ({ ...v, muted: !on }));
+};
 
 
   // --- Realtime chat ---
@@ -2096,299 +2112,311 @@ export default function GraphPage() {
             </span>
           </button>
 
-          {/* ------- Project Chat (realtime) ------- */}
-          <button
-            onClick={() => setChatOpen(o => !o)}
-            style={{
-              position: "fixed",
-              right: 16,
-              bottom: chatOpen ? 330 : 16,
-              zIndex: 40,
-              borderRadius: 999,
-              padding: "10px 14px",
-              border: "1px solid #e5e7eb",
-              background: "white",
-              boxShadow: "0 8px 20px rgba(0,0,0,0.10)",
-              fontSize: 14,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-            title={chatOpen ? "Hide chat" : "Show chat"}
-            type="button"
-          >
-            💬 {chatOpen ? "Hide chat" : "Project chat"}
-          </button>
+{/* ------- Project Chat (realtime) ------- */}
+<button
+  onClick={() => setChatOpen(o => !o)}
+  style={{
+    position: "fixed",
+    right: 16,
+    bottom: chatOpen ? 330 : 16,
+    zIndex: 40,
+    borderRadius: 999,
+    padding: "10px 14px",
+    border: "1px solid #e5e7eb",
+    background: "white",
+    boxShadow: "0 8px 20px rgba(0,0,0,0.10)",
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: "pointer",
+  }}
+  title={chatOpen ? "Hide chat" : "Show chat"}
+  type="button"
+>
+  💬 {chatOpen ? "Hide chat" : "Project chat"}
+</button>
 
-          {chatOpen && (
-            <div
-              style={{
-                position: "fixed",
-                right: 16,
-                bottom: 16,
-                width: 360,
-                maxHeight: "60vh",
-                display: "flex",
-                flexDirection: "column",
-                background: "white",
-                border: "1px solid #e5e7eb",
-                borderRadius: 12,
-                boxShadow: "0 14px 34px rgba(0,0,0,0.18)",
-                overflow: "hidden",
-                zIndex: 40,
-              }}
-              role="region"
-              aria-label="Project chat"
+{chatOpen && (
+  <div
+    style={{
+      position: "fixed",
+      right: 16,
+      bottom: 16,
+      width: 360,
+      maxHeight: "60vh",
+      display: "flex",
+      flexDirection: "column",
+      background: "white",
+      border: "1px solid #e5e7eb",
+      borderRadius: 12,
+      boxShadow: "0 14px 34px rgba(0,0,0,0.18)",
+      overflow: "hidden",
+      zIndex: 40,
+    }}
+    role="region"
+    aria-label="Project chat"
+  >
+    {/* Header (relative so the dropdown anchors correctly) */}
+    <div style={{
+      position: "relative",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "10px 12px",
+      borderBottom: "1px solid #e5e7eb",
+      background: "#f9fafb",
+      fontSize: 13,
+      fontWeight: 700,
+    }}>
+      <div>Project chat</div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div title="Online collaborators" style={{ fontWeight: 600, opacity: 0.8 }}>
+          {peers.length} online
+        </div>
+
+        {/* Incoming call → show Accept/Decline */}
+        {call.status === "ringing" && call.peer ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 12 }}>Incoming call from <b>{call.peer.username}</b></span>
+            <button
+              onClick={acceptCall}
+              style={{ border: "1px solid #16a34a", background: "#16a34a", color: "white", padding: "4px 8px", borderRadius: 6, fontSize: 12 }}
+              type="button"
+              title="Accept call"
             >
-              {/* Header (relative so the dropdown anchors correctly) */}
-              <div style={{
-                position: "relative",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "10px 12px",
-                borderBottom: "1px solid #e5e7eb",
-                background: "#f9fafb",
-                fontSize: 13,
-                fontWeight: 700,
-              }}>
-                <div>Project chat</div>
-
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div title="Online collaborators" style={{ fontWeight: 600, opacity: 0.8 }}>
-                    {peers.length} online
-                  </div>
-
-                  {/* Call launcher + anchored dropdown */}
-                  <div style={{ position: "relative" }}>
-                    <button
-                      data-call-button
-                      onClick={() => setCallMenuOpen(o => !o)}
-                      style={{
-                        border: "1px solid #e5e7eb",
-                        background: "white",
-                        padding: "6px 8px",
-                        borderRadius: 6,
-                        fontSize: 12,
-                        cursor: "pointer",
-                      }}
-                      title="Start a voice call"
-                      type="button"
-                    >
-                      📞 Call…
-                    </button>
-
-                    {callMenuOpen && (
-                      <div
-                        data-call-menu
-                        style={{
-                          position: "absolute",
-                          right: 0,
-                          top: 36,                 // appears just under the button
-                          zIndex: 1000,
-                          background: "white",
-                          border: "1px solid #e5e7eb",
-                          borderRadius: 8,
-                          boxShadow: "0 8px 18px rgba(0,0,0,.08)",
-                          minWidth: 220,
-                          overflow: "hidden",
-                        }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                      >
-                        {peers.filter(p => p.id !== me?.id).length === 0 ? (
-                          <div style={{ padding: 10, fontSize: 13, color: "#6b7280" }}>No peers online</div>
-                        ) : peers.filter(p => p.id !== me?.id).map(p => (
-                          <button
-                            key={p.id}
-                            onClick={() => { setCallMenuOpen(false); startCall(p); }}
-                            style={{
-                              display: "flex",
-                              gap: 8,
-                              alignItems: "center",
-                              padding: "10px 12px",
-                              width: "100%",
-                              background: "white",
-                              border: 0,
-                              borderTop: "1px solid #f3f4f6",
-                              cursor: "pointer",
-                              fontSize: 13
-                            }}
-                            type="button"
-                          >
-                            <span style={{ width: 10, height: 10, background: p.color, borderRadius: 999 }} />
-                            <span>{p.username}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Messages */}
+              Accept
+            </button>
+            <button
+              onClick={declineCall}
+              style={{ border: "1px solid #ef4444", background: "white", color: "#ef4444", padding: "4px 8px", borderRadius: 6, fontSize: 12 }}
+              type="button"
+              title="Decline"
+            >
+              Decline
+            </button>
+          </div>
+        ) : call.status !== "idle" && call.peer ? (
+          // Outgoing (calling) or Connected → show mute/hang up
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 12, color: "#6b7280" }}>
+              {call.status === "connected" ? (call.muted ? "Muted" : "Live") : "Calling…"}
+            </span>
+            <button
+              onClick={toggleMute}
+              style={{ border: "1px solid #e5e7eb", background: "white", padding: "4px 6px", borderRadius: 6, fontSize: 12 }}
+              type="button"
+              title={call.muted ? "Unmute mic" : "Mute mic"}
+            >
+              {call.muted ? "Unmute" : "Mute"}
+            </button>
+            <button
+              onClick={() => endCall(true)}
+              style={{ border: "1px solid #ef4444", background: "#ef4444", color: "white", padding: "4px 6px", borderRadius: 6, fontSize: 12 }}
+              type="button"
+              title="Hang up"
+            >
+              Hang up
+            </button>
+          </div>
+        ) : (
+          // No active call → launcher + dropdown
+          <div style={{ position: "relative" }}>
+            <button
+              onClick={() => setCallMenuOpen(o => !o)}
+              style={{ border: "1px solid #e5e7eb", background: "white", padding: "6px 8px", borderRadius: 6, fontSize: 12, cursor: "pointer" }}
+              title="Start a voice call"
+              type="button"
+            >
+              📞 Call…
+            </button>
+            {callMenuOpen && (
               <div
-                ref={chatBodyRef}
                 style={{
-                  flex: "1 1 auto",
-                  overflowY: "auto",
-                  padding: 12,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
+                  position: "absolute",
+                  right: 0,
+                  top: 36,
+                  zIndex: 1000,
+                  background: "white",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 8,
+                  boxShadow: "0 8px 18px rgba(0,0,0,.08)",
+                  minWidth: 220,
+                  overflow: "hidden",
                 }}
+                onMouseDown={(e) => e.stopPropagation()}
               >
-                {chatLog.map(m => (
-                  <div key={m.id} style={{ display: "grid", gridTemplateColumns: "28px 1fr", gap: 8 }}>
-                    <div
-                      title={m.user.username}
-                      style={{
-                        width: 28, height: 28, borderRadius: 999, background: m.user.color,
-                        display: "grid", placeItems: "center", color: "white", fontSize: 12, fontWeight: 700,
-                      }}
-                    >
-                      {m.user.username[0]?.toUpperCase()}
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                        <span style={{ fontWeight: 700, fontSize: 13 }}>{m.user.username}</span>
-                        <time
-                          dateTime={m.ts}
-                          style={{ fontSize: 11, color: "#6b7280", whiteSpace: "nowrap" }}
-                          title={new Date(m.ts).toLocaleString()}
-                        >
-                          {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                        </time>
-                      </div>
-                      <div style={{ fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                        {m.text}
-                      </div>
-                    </div>
-                  </div>
+                {peers.filter(p => p.id !== me?.id).length === 0 ? (
+                  <div style={{ padding: 10, fontSize: 13, color: "#6b7280" }}>No peers online</div>
+                ) : peers.filter(p => p.id !== me?.id).map(p => (
+                  <button
+                    key={p.id}
+                    onClick={() => { setCallMenuOpen(false); startCall(p); }}
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      alignItems: "center",
+                      padding: "10px 12px",
+                      width: "100%",
+                      background: "white",
+                      border: 0,
+                      borderTop: "1px solid #f3f4f6",
+                      cursor: "pointer",
+                      fontSize: 13
+                    }}
+                    type="button"
+                  >
+                    <span style={{ width: 10, height: 10, background: p.color, borderRadius: 999 }} />
+                    <span>{p.username}</span>
+                  </button>
                 ))}
-                {chatLog.length === 0 && (
-                  <div style={{ color: "#6b7280", fontSize: 13, textAlign: "center", padding: "12px 0" }}>
-                    No messages yet — say hi 👋
-                  </div>
-                )}
               </div>
+            )}
+          </div>
+        )}
+      </div>
 
-              {/* Composer */}
-              <form
-                onSubmit={(e) => { e.preventDefault(); sendChat(); }}
-                style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid #e5e7eb" }}
+    </div>
+
+    {/* Messages */}
+    <div
+      ref={chatBodyRef}
+      style={{
+        flex: "1 1 auto",
+        overflowY: "auto",
+        padding: 12,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      {chatLog.map(m => (
+        <div key={m.id} style={{ display: "grid", gridTemplateColumns: "28px 1fr", gap: 8 }}>
+          <div
+            title={m.user.username}
+            style={{
+              width: 28, height: 28, borderRadius: 999, background: m.user.color,
+              display: "grid", placeItems: "center", color: "white", fontSize: 12, fontWeight: 700,
+            }}
+          >
+            {m.user.username[0]?.toUpperCase()}
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <span style={{ fontWeight: 700, fontSize: 13 }}>{m.user.username}</span>
+              <time
+                dateTime={m.ts}
+                style={{ fontSize: 11, color: "#6b7280", whiteSpace: "nowrap" }}
+                title={new Date(m.ts).toLocaleString()}
               >
-                <input
-                  value={chatDraft}
-                  onChange={e => setChatDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      sendChat();
-                    }
-                  }}
-                  placeholder={authed ? "Message project…" : "Sign in to chat"}
-                  disabled={!authed}
-                  aria-label="Type a message"
-                  style={{
-                    flex: 1,
-                    fontSize: 14,
-                    padding: "10px 12px",
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 8,
-                    outline: "none",
-                  }}
-                />
-                <button
-                  type="submit"
-                  disabled={!authed || !chatDraft.trim()}
-                  style={{
-                    fontSize: 14,
-                    padding: "10px 12px",
-                    borderRadius: 8,
-                    background: "#2563eb",
-                    color: "white",
-                    border: "1px solid #1d4ed8",
-                    opacity: (!authed || !chatDraft.trim()) ? 0.5 : 1,
-                    cursor: (!authed || !chatDraft.trim()) ? "not-allowed" : "pointer",
-                  }}
-                  title={authed ? "Send message" : "Sign in to chat"}
-                >
-                  Send
-                </button>
-              </form>
+                {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </time>
             </div>
-          )}
-
-          /* NEW: remote audio output (place once, outside/after the chat panel) */
-          <audio ref={remoteAudioRef} autoPlay playsInline />
-
-          /* NEW: Call mini-panel */
-          {call.status !== "idle" && call.peer && (
-            <div
-              style={{
-                position: "fixed",
-                right: 16,
-                bottom: chatOpen ? 330 : 16,
-                zIndex: 45,
-                background: "white",
-                border: "1px solid #e5e7eb",
-                borderRadius: 12,
-                boxShadow: "0 12px 30px rgba(0,0,0,0.15)",
-                padding: 12,
-                display: "flex",
-                alignItems: "center",
-                gap: 10
-              }}
-              role="dialog"
-              aria-live="polite"
-            >
-              <div style={{ width: 28, height: 28, borderRadius: 999, background: call.peer.color, color: "#fff", display: "grid", placeItems: "center", fontWeight: 700 }}>
-                {call.peer.username[0]?.toUpperCase()}
-              </div>
-              <div style={{ minWidth: 140 }}>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>{call.peer.username}</div>
-                <div style={{ fontSize: 12, color: "#6b7280" }}>
-                  {call.status === "calling" && "Calling…"}
-                  {call.status === "ringing" && "Incoming call…"}
-                  {call.status === "connected" && (call.muted ? "Connected (muted)" : "Connected")}
-                </div>
-              </div>
-              {call.status === "ringing" ? (
-                <>
-                  <button
-                    onClick={acceptCall}
-                    style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #16a34a", background: "#16a34a", color: "white", fontSize: 12 }}
-                    type="button"
-                  >
-                    Accept
-                  </button>
-                  <button
-                    onClick={declineCall}
-                    style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #ef4444", background: "white", color: "#ef4444", fontSize: 12 }}
-                    type="button"
-                  >
-                    Decline
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    onClick={toggleMute}
-                    style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #e5e7eb", background: "white", fontSize: 12 }}
-                    type="button"
-                  >
-                    {call.muted ? "Unmute" : "Mute"}
-                  </button>
-                  <button
-                    onClick={() => endCall(true)}
-                    style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #ef4444", background: "#ef4444", color: "white", fontSize: 12 }}
-                    type="button"
-                  >
-                    Hang up
-                  </button>
-                </>
-              )}
+            <div style={{ fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {m.text}
             </div>
-          )}
+          </div>
+        </div>
+      ))}
+      {chatLog.length === 0 && (
+        <div style={{ color: "#6b7280", fontSize: 13, textAlign: "center", padding: "12px 0" }}>
+          No messages yet — say hi 👋
+        </div>
+      )}
+    </div>
+
+    {/* Composer */}
+    <form
+      onSubmit={(e) => { e.preventDefault(); sendChat(); }}
+      style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid #e5e7eb" }}
+    >
+      <input
+        value={chatDraft}
+        onChange={e => setChatDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            sendChat();
+          }
+        }}
+        placeholder={authed ? "Message project…" : "Sign in to chat"}
+        disabled={!authed}
+        aria-label="Type a message"
+        style={{
+          flex: 1,
+          fontSize: 14,
+          padding: "10px 12px",
+          border: "1px solid #e5e7eb",
+          borderRadius: 8,
+          outline: "none",
+        }}
+      />
+      <button
+        type="submit"
+        disabled={!authed || !chatDraft.trim()}
+        style={{
+          fontSize: 14,
+          padding: "10px 12px",
+          borderRadius: 8,
+          background: "#2563eb",
+          color: "white",
+          border: "1px solid #1d4ed8",
+          opacity: (!authed || !chatDraft.trim()) ? 0.5 : 1,
+          cursor: (!authed || !chatDraft.trim()) ? "not-allowed" : "pointer",
+        }}
+        title={authed ? "Send message" : "Sign in to chat"}
+      >
+        Send
+      </button>
+    </form>
+  </div>
+)}
+
+{/* Remote audio output (once, outside the chat panel) */}
+<audio ref={remoteAudioRef} autoPlay playsInline />
+
+{/* Tiny floating call pill when chat is closed */}
+{!chatOpen && call.status !== "idle" && call.peer && (
+  <div
+    style={{
+      position: "fixed",
+      right: 16,
+      bottom: 60, // sits just above the chat toggle
+      zIndex: 35,
+      background: "white",
+      border: "1px solid #e5e7eb",
+      borderRadius: 9999,
+      padding: "6px 10px",
+      boxShadow: "0 8px 20px rgba(0,0,0,0.10)",
+      display: "flex",
+      alignItems: "center",
+      gap: 8
+    }}
+    role="status"
+    aria-live="polite"
+  >
+    <span style={{ width: 8, height: 8, borderRadius: 9999, background: call.muted ? "#9ca3af" : "#16a34a" }} />
+    <span style={{ fontSize: 12, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }}>
+      {call.peer.username}
+    </span>
+    <button
+      onClick={toggleMute}
+      style={{ border: "1px solid #e5e7eb", background: "white", borderRadius: 6, padding: "2px 6px", fontSize: 12 }}
+      type="button"
+      title={call.muted ? "Unmute mic" : "Mute mic"}
+    >
+      {call.muted ? "Unmute" : "Mute"}
+    </button>
+    <button
+      onClick={() => endCall(true)}
+      style={{ border: "1px solid #ef4444", background: "#ef4444", color: "white", borderRadius: 6, padding: "2px 6px", fontSize: 12 }}
+      type="button"
+      title="Hang up"
+    >
+      ✕
+    </button>
+  </div>
+)}
+
 
 
 

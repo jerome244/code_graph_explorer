@@ -6,7 +6,7 @@ import { Sky, Environment, PointerLockControls } from "@react-three/drei";
 import * as THREE from "three";
 
 import type { BlockId, Vec3 } from "./lib/types";
-import { BLOCKS } from "./lib/blocks";
+import { BLOCKS, hardnessFor } from "./lib/blocks";
 import { WORLD_SIZE, keyOf, parseKey, seedWorld, loadWorld, saveWorld } from "./lib/world";
 import Player, { PlayerAPI } from "./components/Player";
 import Voxel from "./components/Voxel";
@@ -41,6 +41,14 @@ function RemotePlayers({
     </group>
   );
 }
+
+type MiningState = {
+  key: string;
+  pos: Vec3;
+  id: BlockId;
+  progress: number; // 0..1
+  total: number; // seconds to break
+};
 
 export default function Game() {
   /* ---------- Local world state ---------- */
@@ -399,31 +407,40 @@ export default function Game() {
     return true;
   }, [isFilled]);
 
+  /* --------- Corrected 3D DDA raycast --------- */
   function voxelRaycast(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number) {
-    // 3D DDA
     const pos = new THREE.Vector3(Math.floor(origin.x), Math.floor(origin.y), Math.floor(origin.z));
     const stepX = dir.x > 0 ? 1 : -1, stepY = dir.y > 0 ? 1 : -1, stepZ = dir.z > 0 ? 1 : -1;
     const invX = dir.x !== 0 ? 1 / Math.abs(dir.x) : Infinity;
     const invY = dir.y !== 0 ? 1 / Math.abs(dir.y) : Infinity;
     const invZ = dir.z !== 0 ? 1 / Math.abs(dir.z) : Infinity;
     const frac = (v: number) => v - Math.floor(v);
+
     let tMaxX = dir.x > 0 ? (1 - frac(origin.x)) * invX : frac(origin.x) * invX;
     let tMaxY = dir.y > 0 ? (1 - frac(origin.y)) * invY : frac(origin.y) * invY;
     let tMaxZ = dir.z > 0 ? (1 - frac(origin.z)) * invZ : frac(origin.z) * invZ;
+
     let t = 0;
     for (let i = 0; i < 256; i++) {
-      if (tMaxX < tMaxY && tMaxX < tMaxZ) { pos.x += stepX; t = tMaxX; tMaxX += invX;
-        if (t > maxDist) break; if (isFilled(pos.x, pos.y, pos.z)) return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [-stepX, 0, 0] as Vec3 }; }
-      else if (tMaxY < tMaxZ) { pos.y += stepY; t = tMaxY; tMaxY += invY;
-        if (t > maxDist) break; if (isFilled(pos.x, pos.y, pos.z)) return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [0, -stepY, 0] as Vec3 }; }
-      else { pos.z += stepZ; t = tMaxZ; tMaxZ += invZ;
-        if (t > maxDist) break; if (isFilled(pos.x, pos.y, pos.z)) return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [0, 0, -stepZ] as Vec3 }; }
+      if (tMaxX < tMaxY && tMaxX < tMaxZ) {
+        pos.x += stepX; t = tMaxX; tMaxX += invX;
+        if (t > maxDist) break;
+        if (isFilled(pos.x, pos.y, pos.z)) return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [-stepX, 0, 0] as Vec3 };
+      } else if (tMaxY < tMaxZ) {
+        pos.y += stepY; t = tMaxY; tMaxY += invY;
+        if (t > maxDist) break;
+        if (isFilled(pos.x, pos.y, pos.z)) return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [0, -stepY, 0] as Vec3 };
+      } else {
+        pos.z += stepZ; t = tMaxZ; tMaxZ += invZ;
+        if (t > maxDist) break;
+        if (isFilled(pos.x, pos.y, pos.z)) return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [0, 0, -stepZ] as Vec3 };
+      }
     }
     return { hit: null as Vec3 | null, face: null as Vec3 | null };
   }
 
-  // NEW MAPPING: Left = remove, Right = place
-  const handleBuildClick = React.useCallback((button: number) => {
+  /* ---------- Build (right-click place) ---------- */
+  const handleRightClickPlace = React.useCallback(() => {
     if (!locked || menuOpen || !camRef.current) return;
 
     const cam = camRef.current!;
@@ -433,44 +450,118 @@ export default function Game() {
     const { hit, face } = voxelRaycast(origin, dir, INTERACT_DIST);
     if (!hit || !face) return;
 
-    // Remove with LEFT click
-    if (button === 0) {
-      placeAtNowAndBroadcast(hit, "EMPTY");
-      return;
+    // March outward along face normal until first empty cell
+    let tx = hit[0] + face[0], ty = hit[1] + face[1], tz = hit[2] + face[2];
+    for (let i = 0; i < 32 && isFilled(tx, ty, tz); i++) { tx += face[0]; ty += face[1]; tz += face[2]; }
+    const target: Vec3 = [tx, ty, tz];
+
+    // If target sits under player horizontally, require airborne OR very-recent Space tap
+    const feet = playerRef.current?.getFeet();
+    if (feet) {
+      const cx = target[0] + 0.5, cz = target[2] + 0.5;
+      const dx = Math.abs(feet.x - cx), dz = Math.abs(feet.z - cz);
+      const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
+      if (inside && !(isAirborneNow() || recentlyJumped())) return;
     }
 
-    // Place with RIGHT click
-    if (button === 2) {
-      // March outward along face normal until first empty cell
-      let tx = hit[0] + face[0], ty = hit[1] + face[1], tz = hit[2] + face[2];
-      for (let i = 0; i < 32 && isFilled(tx, ty, tz); i++) { tx += face[0]; ty += face[1]; tz += face[2]; }
-      const target: Vec3 = [tx, ty, tz];
+    // Place block
+    placeAtNowAndBroadcast(target, selected);
 
-      // If target sits under player horizontally, require airborne OR very-recent Space tap
-      const feet = playerRef.current?.getFeet();
-      if (feet) {
-        const cx = target[0] + 0.5, cz = target[2] + 0.5;
-        const dx = Math.abs(feet.x - cx), dz = Math.abs(feet.z - cz);
-        const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
-        if (inside && !(isAirborneNow() || recentlyJumped())) return;
-      }
-
-      // Place block
-      placeAtNowAndBroadcast(target, selected);
-
-      // Nudge up if we built under ourselves
-      if (feet) {
-        const cx = target[0] + 0.5, cz = target[2] + 0.5;
-        const dx = Math.abs(feet.x - cx), dz = Math.abs(feet.z - cz);
-        const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
-        const topY = target[1] + 1.0;
-        if (inside && feet.y < topY + 0.001) {
-          const need = (topY + 0.02) - feet.y;
-          if (need > 0) playerRef.current?.nudgeUp(need, true);
-        }
+    // Nudge up if we built under ourselves
+    const feet2 = playerRef.current?.getFeet();
+    if (feet2) {
+      const cx = target[0] + 0.5, cz = target[2] + 0.5;
+      const dx = Math.abs(feet2.x - cx), dz = Math.abs(feet2.z - cz);
+      const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
+      const topY = target[1] + 1.0;
+      if (inside && feet2.y < topY + 0.001) {
+        const need = (topY + 0.02) - feet2.y;
+        if (need > 0) playerRef.current?.nudgeUp(need, true);
       }
     }
   }, [locked, menuOpen, selected, isFilled, isAirborneNow, recentlyJumped, placeAtNowAndBroadcast]);
+
+  /* ---------- Mining (hold left to break) ---------- */
+  const [mining, setMining] = React.useState<MiningState | null>(null);
+  const leftDownRef = React.useRef(false);
+
+  // lock to the first targeted block; tolerate brief LOS loss
+  const miningLockRef = React.useRef<{ key: string; lastSeen: number } | null>(null);
+  const LOS_GRACE_MS = 200;
+
+  // track left button state globally
+  React.useEffect(() => {
+    const onDown = (e: MouseEvent) => { if (e.button === 0 && locked && !menuOpen) leftDownRef.current = true; };
+    const onUp = (e: MouseEvent) => { if (e.button === 0) { leftDownRef.current = false; miningLockRef.current = null; setMining(null); } };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousedown", onDown); window.removeEventListener("mouseup", onUp); };
+  }, [locked, menuOpen]);
+
+  // mining loop
+  React.useEffect(() => {
+    let raf = 0;
+    let last = performance.now();
+
+    const tick = (t: number) => {
+      raf = requestAnimationFrame(tick);
+      const dt = Math.min(0.1, (t - last) / 1000);
+      last = t;
+
+      if (!locked || menuOpen || !camRef.current) return;
+
+      // start lock when holding begins
+      if (leftDownRef.current && !miningLockRef.current) {
+        const cam = camRef.current!;
+        const origin = new THREE.Vector3().copy(cam.position);
+        const dir = new THREE.Vector3(); cam.getWorldDirection(dir).normalize();
+        const { hit } = voxelRaycast(origin, dir, INTERACT_DIST);
+        if (hit) {
+          const k = keyOf(hit);
+          const id = (blocksRef.current as any)[k] as BlockId | undefined;
+          if (id && id !== "EMPTY" && id !== "WATER") {
+            miningLockRef.current = { key: k, lastSeen: performance.now() };
+            setMining({ key: k, pos: hit, id, progress: 0, total: Math.max(0.05, hardnessFor(id)) });
+          }
+        }
+      }
+
+      if (!leftDownRef.current || !miningLockRef.current) return;
+
+      // maintain LOS to locked block (with grace)
+      const cam = camRef.current!;
+      const origin = new THREE.Vector3().copy(cam.position);
+      const dir = new THREE.Vector3(); cam.getWorldDirection(dir).normalize();
+      const { hit } = voxelRaycast(origin, dir, INTERACT_DIST);
+      if (hit && keyOf(hit) === miningLockRef.current.key) {
+        miningLockRef.current.lastSeen = performance.now();
+      } else if (performance.now() - miningLockRef.current.lastSeen > LOS_GRACE_MS) {
+        miningLockRef.current = null;
+        setMining(null);
+        return;
+      }
+
+      // advance progress
+      setMining((m) => {
+        if (!m) return m;
+        const currentId = (blocksRef.current as any)[m.key] as BlockId | undefined;
+        if (!currentId || currentId !== m.id) return null;
+
+        const speed = 1.0; // tool multiplier hook
+        const prog = Math.min(1, m.progress + (dt * speed) / m.total);
+        if (prog >= 1) {
+          placeAtNowAndBroadcast(m.pos, "EMPTY");
+          leftDownRef.current = false; // require re-press
+          miningLockRef.current = null;
+          return null;
+        }
+        return { ...m, progress: prog };
+      });
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [locked, menuOpen, placeAtNowAndBroadcast]);
 
   function CameraGrab({ target }: { target: React.MutableRefObject<THREE.PerspectiveCamera | null> }) {
     const { camera } = useThree();
@@ -519,8 +610,11 @@ export default function Game() {
         camera={{ position: [WORLD_SIZE * 0.8, WORLD_SIZE * 0.6, WORLD_SIZE * 0.8], fov: 50 }}
         onPointerDownCapture={(e: any) => {
           if (!locked && !menuOpen) { setMustFs(true); startPlay(); e.stopPropagation(); return; }
-          const btn = e.button ?? 0;
-          handleBuildClick(btn);
+          if (e.button === 2) handleRightClickPlace(); // right = place
+          if (e.button === 0) leftDownRef.current = true; // left = start mining
+        }}
+        onPointerUpCapture={(e: any) => {
+          if (e.button === 0) { leftDownRef.current = false; miningLockRef.current = null; setMining(null); }
         }}
       >
         <Sky sunPosition={[100, 20, 100]} />
@@ -530,7 +624,7 @@ export default function Game() {
         <PointerLockControls
           ref={plcRef}
           onLock={() => { setLocked(true); setMenuOpen(false); }}
-          onUnlock={() => { setLocked(false); setMenuOpen(true); }}
+          onUnlock={() => { setLocked(false); setMenuOpen(true); leftDownRef.current = false; miningLockRef.current = null; setMining(null); }}
         />
 
         <CameraGrab target={camRef} />
@@ -552,10 +646,22 @@ export default function Game() {
       <div style={hudHint}>
         <span>
           {locked
-            ? "Online · Wheel change block · 1–7 · Left remove · Right place · ZQSD/WASD · Space jump (jump to place under you) · ESC menu"
+            ? "Online · Wheel change block · 1–7 · Hold Left mine (hardness) · Right place · ZQSD/WASD · Space jump (jump to place under you) · ESC menu"
             : "Click to start (fullscreen + mouse-look)"}
         </span>
       </div>
+
+      {/* Mining progress ring */}
+      {locked && mining && (
+        <div style={mineRing(mining.progress)}>
+          <div style={mineRingInner} />
+          <div style={mineText}>
+            {mining.progress < 1
+              ? `${Math.max(0, (mining.total * (1 - mining.progress))).toFixed(1)}s`
+              : "0.0s"}
+          </div>
+        </div>
+      )}
 
       {/* Crosshair */}
       {locked && <div style={crosshair} />}
@@ -624,6 +730,41 @@ const crosshair: React.CSSProperties = {
      linear-gradient(#111827,#111827) right center/2px 12px no-repeat, \
      linear-gradient(#111827,#111827) center bottom/12px 2px no-repeat",
 };
+
+/* Circular mining progress UI */
+const mineRing = (p: number): React.CSSProperties => {
+  const deg = Math.floor(p * 359.9); // never reach 360 to avoid wrap
+  return {
+    position: "absolute",
+    left: "50%",
+    top: "50%",
+    width: 48,
+    height: 48,
+    transform: "translate(-50%, -50%)",
+    borderRadius: "50%",
+    background: `conic-gradient(#10b981 ${deg}deg, rgba(255,255,255,0.12) 0deg)`,
+    border: "2px solid rgba(255,255,255,0.7)",
+    zIndex: 16,
+    pointerEvents: "none",
+  };
+};
+const mineRingInner: React.CSSProperties = {
+  position: "absolute",
+  inset: 4,
+  borderRadius: "50%",
+  background: "rgba(17,24,39,0.5)",
+};
+const mineText: React.CSSProperties = {
+  position: "absolute",
+  width: "100%",
+  bottom: -22,
+  textAlign: "center",
+  fontSize: 12,
+  fontWeight: 800,
+  color: "#111827",
+  opacity: 0.85,
+};
+
 const startOverlay: React.CSSProperties = {
   position: "absolute", inset: 0, display: "grid", placeItems: "center",
   background: "rgba(17,24,39,0.35)", color: "#fff", fontWeight: 800, fontSize: 16,

@@ -21,3 +21,22 @@ export function colorFor(id: BlockId): string {
     case "EMPTY": return "#ffffff";
   }
 }
+
+/**
+ * Approximate time in seconds to break a block when holding LEFT mouse.
+ * Tune these to your liking. Non-solid blocks (WATER/EMPTY) are 0.
+ */
+export const HARDNESS: Record<BlockId, number> = {
+  GRASS: 1.0,
+  DIRT: 1.2,
+  SAND: 0.8,
+  WOOD: 1.6,
+  STONE: 2.2,
+  WATER: 0,
+  EMPTY: 0,
+};
+
+/** Helper: returns a sane default if a block id isn’t listed. */
+export function hardnessFor(id: BlockId): number {
+  return HARDNESS[id] ?? 1.2;
+}

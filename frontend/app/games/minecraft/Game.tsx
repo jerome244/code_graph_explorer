@@ -11,36 +11,13 @@ import { WORLD_SIZE, keyOf, parseKey, seedWorld, loadWorld, saveWorld } from "./
 import Player, { PlayerAPI } from "./components/Player";
 import Voxel from "./components/Voxel";
 import GroundPlane from "./components/GroundPlane";
+import RemotePlayers from "./components/RemotePlayers"; // <-- now imported
 import { PLAYER_RADIUS } from "./lib/collision";
+import { wsBase } from "./lib/ws"; // <-- extracted
 
 const Y_MIN = 0;
 const Y_MAX = 64;
 const INTERACT_DIST = 6.5;
-
-/* -------- Simple remote avatar -------- */
-function RemotePlayers({
-  players,
-}: {
-  players: Record<string, { p: [number, number, number]; ry: number; name?: string }>;
-}) {
-  return (
-    <group>
-      {Object.entries(players).map(([id, pl]) => (
-        <group key={id} position={[pl.p[0], pl.p[1], pl.p[2]]} rotation={[0, pl.ry || 0, 0]}>
-          <mesh position={[0, 0.9, 0]} castShadow>
-            {/* @ts-ignore */}
-            <capsuleGeometry args={[0.3, 0.9, 2, 8]} />
-            <meshStandardMaterial roughness={1} metalness={0} />
-          </mesh>
-          <mesh position={[0, 1.7, 0]} castShadow>
-            <sphereGeometry args={[0.28, 12, 12]} />
-            <meshStandardMaterial roughness={1} metalness={0} />
-          </mesh>
-        </group>
-      ))}
-    </group>
-  );
-}
 
 type MiningState = {
   key: string;
@@ -76,6 +53,7 @@ export default function Game() {
   const selfIdRef = React.useRef<string | null>(null);
   const [gotSnapshot, setGotSnapshot] = React.useState(false);
 
+  // NOTE: matches the inline shape you had (no `id` in each player object)
   const [others, setOthers] = React.useState<
     Record<string, { p: [number, number, number]; ry: number; name?: string }>
   >({});
@@ -88,23 +66,6 @@ export default function Game() {
         (localStorage.getItem("access") || localStorage.getItem("access_token"))) ||
       ""
     );
-  }
-
-  function wsBase() {
-    const fromEnv =
-      process.env.NEXT_PUBLIC_WS_URL ||
-      process.env.NEXT_PUBLIC_DJANGO_WS_BASE ||
-      (process.env.DJANGO_API_BASE ? process.env.DJANGO_API_BASE.replace(/^http/, "ws") : null);
-    if (fromEnv) return fromEnv.replace(/\/$/, "");
-    if (typeof window !== "undefined") {
-      const isDevLocal =
-        window.location.hostname === "localhost" &&
-        (window.location.port === "3000" || window.location.port === "3001");
-      if (isDevLocal) return "ws://localhost:8000";
-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      return `${proto}://${window.location.host}`;
-    }
-    return "ws://localhost:8000";
   }
 
   React.useEffect(() => {
@@ -232,7 +193,10 @@ export default function Game() {
   const exitFullscreen = React.useCallback(async () => {
     const doc: any = document;
     const exit =
-      doc.exitFullscreen || doc.webkitExitFullscreen || doc.msExitFullscreen || doc.mozCancelFullScreen;
+      doc.exitFullscreen ||
+      doc.webkitExitFullscreen ||
+      doc.msExitFullscreen ||
+      doc.mozCancelFullScreen;
     if (exit) await exit.call(document);
   }, []);
   React.useEffect(() => {

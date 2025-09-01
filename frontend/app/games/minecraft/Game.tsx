@@ -43,83 +43,6 @@ export default function Game() {
   const blocksRef = React.useRef(blocks);
   React.useEffect(() => { blocksRef.current = blocks; }, [blocks]);
 
-  /* ---------- Health / Life ---------- */
-  const MAX_HEALTH = 20; // 10 hearts (2 HP per heart)
-  const [health, setHealth] = React.useState(MAX_HEALTH);
-  const [dead, setDead] = React.useState(false);
-
-  // fall tracking
-  const prevGroundedRef = React.useRef(true);
-  const airborneRef = React.useRef(false);
-  const peakYRef = React.useRef(0);
-
-  // Helper: highest solid Y at x,z (so we can respawn just above ground)
-  const topYAt = React.useCallback((x: number, z: number) => {
-    let top = -1;
-    solid.forEach((k) => {
-      const [bx, by, bz] = parseKey(k);
-      if (bx === Math.floor(x) && bz === Math.floor(z)) top = Math.max(top, by);
-    });
-    return top;
-  }, [solid]);
-
-  // Watch player landings to apply fall damage
-  React.useEffect(() => {
-    let raf = 0;
-    const loop = () => {
-      raf = requestAnimationFrame(loop);
-      const p = playerRef.current;
-      if (!p) return;
-
-      const grounded = p.isGrounded();
-      const y = p.getFeet().y;
-
-      // Track airborne arc and the highest Y reached during it
-      if (!grounded) {
-        if (!airborneRef.current) {
-          airborneRef.current = true;
-          peakYRef.current = y;
-        } else {
-          if (y > peakYRef.current) peakYRef.current = y;
-        }
-      }
-
-      // Landing event
-      if (!prevGroundedRef.current && grounded) {
-        const fall = peakYRef.current - y;
-        const excess = fall - 3; // free 3-block drop
-        if (excess > 0.001) {
-          const dmg = Math.max(0, Math.floor(excess)) * 2; // 2 HP per block > 3
-          if (dmg > 0) setHealth(h => Math.max(0, h - dmg));
-        }
-        airborneRef.current = false;
-      }
-      prevGroundedRef.current = grounded;
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  // On death: show overlay + unlock pointer
-  React.useEffect(() => {
-    if (health <= 0) {
-      setDead(true);
-      plcRef.current?.unlock?.();
-    }
-  }, [health]);
-
-  const handleRespawn = React.useCallback(() => {
-    const feet = playerRef.current?.getFeet();
-    const x = feet ? feet.x : WORLD_SIZE / 2;
-    const z = feet ? feet.z : WORLD_SIZE / 2;
-    const top = topYAt(x, z);
-    const spawnY = (top >= 0 ? top + 1.02 : 3); // just above terrain or fallback
-    playerRef.current?.nudgeUp(spawnY, true);
-    setHealth(MAX_HEALTH);
-    setDead(false);
-    // this runs inside a click handler, so pointer lock is allowed
-    plcRef.current?.lock?.();
-  }, [topYAt]);
 
   /* ---------- Multiplayer (WS) ---------- */
   const room =
@@ -306,6 +229,114 @@ export default function Game() {
   const [locked, setLocked] = React.useState(false);
   const [menuOpen, setMenuOpen] = React.useState(false);
   const importInputRef = React.useRef<HTMLInputElement | null>(null);
+
+/* === Health + Fall/Death/Respawn (paste as one block) === */
+const MAX_HEALTH = 20; // 10 hearts (2 HP per heart)
+const [health, setHealth] = React.useState(MAX_HEALTH);
+const [dead, setDead] = React.useState(false);
+
+// fall tracking refs
+const prevGroundedRef = React.useRef(true);
+const airborneRef = React.useRef(false);
+const peakYRef = React.useRef(0);
+
+// extras for the towering fix
+const EPS = 1e-3;
+const MIN_AIR_MS = 120;
+const prevYRef = React.useRef(0);
+const lastGroundedYRef = React.useRef(0);
+const startedDescRef = React.useRef(false);
+const airStartAtRef = React.useRef(0);
+
+// helper: find top solid y at x,z for respawn
+const topYAt = React.useCallback((x: number, z: number) => {
+  try {
+    let top = -1;
+    solid.forEach((k: string) => {
+      const [bx, by, bz] = parseKey(k);
+      if (bx === Math.floor(x) && bz === Math.floor(z)) top = Math.max(top, by);
+    });
+    return top;
+  } catch {
+    return -1;
+  }
+}, [solid]);
+
+// apply fall damage on valid landings (towering-safe)
+React.useEffect(() => {
+  let raf = 0;
+  const loop = () => {
+    raf = requestAnimationFrame(loop);
+    const p = playerRef.current;
+    if (!p) return;
+
+    const grounded = p.isGrounded();
+    const y = p.getFeet().y;
+
+    if (grounded) lastGroundedYRef.current = y;
+
+    // became airborne
+    if (prevGroundedRef.current && !grounded) {
+      airborneRef.current = true;
+      peakYRef.current = y;
+      startedDescRef.current = false;
+      airStartAtRef.current = performance.now();
+    }
+
+    // while airborne
+    if (!grounded && airborneRef.current) {
+      if (y > peakYRef.current) peakYRef.current = y;
+      const vy = y - prevYRef.current; // + up, - down
+      if (vy < -EPS) startedDescRef.current = true;
+    }
+
+    // landed
+    if (!prevGroundedRef.current && grounded && airborneRef.current) {
+      const tAir = performance.now() - airStartAtRef.current;
+      const fall = peakYRef.current - y;
+
+      const climbedOrNoDesc =
+        !startedDescRef.current || y >= lastGroundedYRef.current - 0.25;
+
+      if (!climbedOrNoDesc && tAir > MIN_AIR_MS) {
+        const excess = fall - 3;                 // free 3 blocks
+        if (excess > 0) {
+          const dmg = Math.floor(excess) * 2;    // 1 heart per extra block
+          if (dmg > 0) setHealth(h => Math.max(0, h - dmg));
+        }
+      }
+
+      airborneRef.current = false;
+    }
+
+    prevYRef.current = y;
+    prevGroundedRef.current = grounded;
+  };
+  raf = requestAnimationFrame(loop);
+  return () => cancelAnimationFrame(raf);
+}, []);
+
+// death -> unlock pointer; respawn handler
+React.useEffect(() => {
+  if (health <= 0) {
+    setDead(true);
+    plcRef.current?.unlock?.();
+  }
+}, [health]);
+
+const handleRespawn = React.useCallback(() => {
+  const feet = playerRef.current?.getFeet();
+  const x = feet ? feet.x : 0;
+  const z = feet ? feet.z : 0;
+  const top = topYAt(x, z);
+  const spawnY = (top >= 0 ? top + 1.02 : 3);
+  playerRef.current?.nudgeUp(spawnY, true);
+  setHealth(MAX_HEALTH);
+  setDead(false);
+  plcRef.current?.lock?.();
+}, [topYAt]);
+/* === end Health block === */
+
 
   // Stream local player state ~10 Hz
   React.useEffect(() => {
@@ -943,3 +974,4 @@ const respawnBtn: React.CSSProperties = {
   padding: "10px 12px", borderRadius: 8, border: "1px solid #374151",
   background: "#1f2937", color: "#fff", cursor: "pointer", fontWeight: 700,
 };
+

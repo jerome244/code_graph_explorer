@@ -43,6 +43,84 @@ export default function Game() {
   const blocksRef = React.useRef(blocks);
   React.useEffect(() => { blocksRef.current = blocks; }, [blocks]);
 
+  /* ---------- Health / Life ---------- */
+  const MAX_HEALTH = 20; // 10 hearts (2 HP per heart)
+  const [health, setHealth] = React.useState(MAX_HEALTH);
+  const [dead, setDead] = React.useState(false);
+
+  // fall tracking
+  const prevGroundedRef = React.useRef(true);
+  const airborneRef = React.useRef(false);
+  const peakYRef = React.useRef(0);
+
+  // Helper: highest solid Y at x,z (so we can respawn just above ground)
+  const topYAt = React.useCallback((x: number, z: number) => {
+    let top = -1;
+    solid.forEach((k) => {
+      const [bx, by, bz] = parseKey(k);
+      if (bx === Math.floor(x) && bz === Math.floor(z)) top = Math.max(top, by);
+    });
+    return top;
+  }, [solid]);
+
+  // Watch player landings to apply fall damage
+  React.useEffect(() => {
+    let raf = 0;
+    const loop = () => {
+      raf = requestAnimationFrame(loop);
+      const p = playerRef.current;
+      if (!p) return;
+
+      const grounded = p.isGrounded();
+      const y = p.getFeet().y;
+
+      // Track airborne arc and the highest Y reached during it
+      if (!grounded) {
+        if (!airborneRef.current) {
+          airborneRef.current = true;
+          peakYRef.current = y;
+        } else {
+          if (y > peakYRef.current) peakYRef.current = y;
+        }
+      }
+
+      // Landing event
+      if (!prevGroundedRef.current && grounded) {
+        const fall = peakYRef.current - y;
+        const excess = fall - 3; // free 3-block drop
+        if (excess > 0.001) {
+          const dmg = Math.max(0, Math.floor(excess)) * 2; // 2 HP per block > 3
+          if (dmg > 0) setHealth(h => Math.max(0, h - dmg));
+        }
+        airborneRef.current = false;
+      }
+      prevGroundedRef.current = grounded;
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  // On death: show overlay + unlock pointer
+  React.useEffect(() => {
+    if (health <= 0) {
+      setDead(true);
+      plcRef.current?.unlock?.();
+    }
+  }, [health]);
+
+  const handleRespawn = React.useCallback(() => {
+    const feet = playerRef.current?.getFeet();
+    const x = feet ? feet.x : WORLD_SIZE / 2;
+    const z = feet ? feet.z : WORLD_SIZE / 2;
+    const top = topYAt(x, z);
+    const spawnY = (top >= 0 ? top + 1.02 : 3); // just above terrain or fallback
+    playerRef.current?.nudgeUp(spawnY, true);
+    setHealth(MAX_HEALTH);
+    setDead(false);
+    // this runs inside a click handler, so pointer lock is allowed
+    plcRef.current?.lock?.();
+  }, [topYAt]);
+
   /* ---------- Multiplayer (WS) ---------- */
   const room =
     typeof window !== "undefined"
@@ -689,6 +767,27 @@ export default function Game() {
         </span>
       </div>
 
+      {/* Hearts */}
+      {locked && !dead && (
+        <div style={heartsBar}>
+          {Array.from({ length: 10 }).map((_, i) => (
+            <span key={i} style={heartStyle(health >= (i + 1) * 2)}>&#10084;</span>
+          ))}
+        </div>
+      )}
+
+      {/* Death overlay */}
+      {dead && (
+        <div style={deathOverlay}>
+          <div style={deathPanel}>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>You died</div>
+            <div style={{ opacity: 0.85 }}>Fell too far. Click to respawn.</div>
+            <button style={respawnBtn} onClick={handleRespawn}>Respawn</button>
+          </div>
+        </div>
+      )}
+
+
       {/* Mining progress ring */}
       {locked && mining && (
         <div style={mineRing(mining.progress)}>
@@ -819,4 +918,28 @@ const menuPanel: React.CSSProperties = {
 const menuBtn: React.CSSProperties = {
   padding: "10px 12px", borderRadius: 8, border: "1px solid #374151",
   background: "#1f2937", color: "#fff", cursor: "pointer", textAlign: "left", fontSize: 14,
+};
+
+/* Life heart */
+const heartsBar: React.CSSProperties = {
+  position: "absolute", left: 12, bottom: 36, display: "flex", gap: 6, zIndex: 25,
+  background: "rgba(255,255,255,0.8)", border: "1px solid #e5e7eb",
+  borderRadius: 8, padding: "6px 8px",
+};
+const heartStyle = (on: boolean): React.CSSProperties => ({
+  filter: on ? "none" : "grayscale(1) opacity(0.35)",
+  fontSize: 18, lineHeight: "18px",
+});
+const deathOverlay: React.CSSProperties = {
+  position: "absolute", inset: 0, background: "rgba(153,27,27,0.6)",
+  display: "grid", placeItems: "center", zIndex: 40,
+};
+const deathPanel: React.CSSProperties = {
+  background: "#111827", color: "#fff", padding: 16, borderRadius: 12,
+  minWidth: 260, boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+  display: "grid", gap: 12, textAlign: "center" as const,
+};
+const respawnBtn: React.CSSProperties = {
+  padding: "10px 12px", borderRadius: 8, border: "1px solid #374151",
+  background: "#1f2937", color: "#fff", cursor: "pointer", fontWeight: 700,
 };

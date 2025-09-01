@@ -109,7 +109,7 @@ export default function Game() {
 
   React.useEffect(() => {
     let closed = false;
-       let retry = 0;
+    let retry = 0;
 
     const connect = () => {
       const token = getJwtToken();
@@ -313,7 +313,33 @@ export default function Game() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // Digits + Save + ESC menu
+  // Block browser shortcuts (Ctrl/⌘ + movement keys) while actively playing,
+  // but DO NOT stop propagation — let our movement handlers see the keys.
+  React.useEffect(() => {
+    const MOVEMENT_CODES = new Set([
+      "KeyW","KeyA","KeyS","KeyD",   // WASD
+      "KeyZ","KeyQ",                 // AZERTY (ZQSD)
+      "ArrowUp","ArrowLeft","ArrowDown","ArrowRight",
+      "Space",
+    ]);
+
+    const onKeyDownBlocker = (e: KeyboardEvent) => {
+      if (!locked || menuOpen) return;
+
+      const k = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) &&
+          (MOVEMENT_CODES.has(e.code) || k === "s" || k === "d" || k === "z" || k === "p" || k === "r")) {
+        e.preventDefault(); // stop browser shortcut
+        // DO NOT call stopPropagation(); we still want our movement listeners to get this
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDownBlocker); // bubble phase
+    return () => window.removeEventListener("keydown", onKeyDownBlocker);
+  }, [locked, menuOpen]);
+
+
+  // Digits + Save + ESC menu (with Ctrl+S gated to not fire during active play)
   React.useEffect(() => {
     const onKey = async (e: KeyboardEvent) => {
       if (e.code.startsWith("Digit")) {
@@ -321,7 +347,12 @@ export default function Game() {
         if (n >= 1 && n <= BLOCKS.length) { e.preventDefault(); setSelected(BLOCKS[n - 1].id); }
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-        e.preventDefault(); saveWorld(blocks); alert("World saved locally."); return;
+        e.preventDefault();
+        if (!locked || menuOpen) {
+          saveWorld(blocks);
+          alert("World saved locally.");
+        }
+        return;
       }
       if (e.key === "Escape" || e.code === "KeyP") {
         e.preventDefault();
@@ -335,7 +366,7 @@ export default function Game() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true } as any);
-  }, [blocks, menuOpen, isFs, mustFs, requestFullscreen]);
+  }, [blocks, menuOpen, isFs, mustFs, requestFullscreen, locked]);
 
   // Wheel cycles selected block
   React.useEffect(() => {
@@ -404,7 +435,6 @@ export default function Game() {
     const v = (blocksRef.current as any)[`${x},${y},${z}`];
     return !!(v && v !== "EMPTY" && v !== "WATER");
   }, []);
-
 
   // Grounded-aware airborne check: look directly BELOW feet cell (+small footprint)
   const isAirborneNow = React.useCallback(() => {
@@ -690,7 +720,7 @@ export default function Game() {
       <div style={hudHint}>
         <span>
           {locked
-            ? "Online · Wheel change block · 1–7 · Hold Left mine (chains) · Right place · Under-self: press Space once per block · ZQSD/WASD · ESC menu"
+            ? "Online · Wheel change block · 1–7 · Hold Left mine (chains) · Right place · Shift run · Ctrl crouch · Under-self: press Space once per block · ZQSD/WASD · ESC menu"
             : "Click to start (fullscreen + mouse-look)"}
         </span>
       </div>
@@ -792,6 +822,7 @@ const mineRing = (p: number): React.CSSProperties => {
     pointerEvents: "none",
   };
 };
+
 const mineRingInner: React.CSSProperties = {
   position: "absolute",
   inset: 4,

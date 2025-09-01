@@ -16,20 +16,28 @@ NEXT_PUBLIC_DJANGO_WS_BASE=ws://localhost:8000
 
 
 
-cloudflared tunnel --url http://localhost:3000
+caddy run --config Caddyfile
+
+
+cloudflared tunnel --url http://localhost:8080
 
 
 
 
 
-example 
 
-# point REST + WS to the BACKEND tunnel (notice https / wss)
-DJANGO_API_BASE=https://playlist-salaries-burlington-colleges.trycloudflare.com
-NEXT_PUBLIC_WS_URL=wss://playlist-salaries-burlington-colleges.trycloudflare.com
+.env.local
 
-# keep cookies non-secure during local dev (site is http://localhost:3000)
-COOKIE_SECURE=false
+# Next server → Django (server-to-server). Local is fine.
+DJANGO_API_BASE=http://localhost:8000
 
-# (optional, for older code paths) set this too:
-NEXT_PUBLIC_DJANGO_WS_BASE=wss://playlist-salaries-burlington-colleges.trycloudflare.com
+# Cookies must be Secure because your public URL is HTTPS via cloudflared
+COOKIE_SECURE=true
+
+# Public origin for Django CSRF (read by backend via env)
+PUBLIC_ORIGIN=https://notified-configure-theme-hills.trycloudflare.com
+
+# IMPORTANT: Let the app derive WS base from the current page host.
+# Do NOT point this at localhost when teammates use the public URL.
+# If you must set it explicitly, use your public host with wss://
+# NEXT_PUBLIC_DJANGO_WS_BASE=wss://notified-configure-theme-hills.trycloudflare.com

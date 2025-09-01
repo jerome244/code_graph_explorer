@@ -1,0 +1,27 @@
+{
+	admin 127.0.0.1:2019
+}
+
+:8080 {
+	encode zstd gzip
+
+	# Django direct endpoints
+	@dj path /admin/* /static/* /media/*
+	reverse_proxy @dj http://127.0.0.1:8000 {
+		header_up Host {host}
+		header_up X-Forwarded-Proto https
+	}
+
+	# WebSockets → Django Channels
+	@ws path /ws/*
+	reverse_proxy @ws http://127.0.0.1:8000 {
+		header_up Host {host}
+		header_up X-Forwarded-Proto https
+	}
+
+	# Everything else (incl. /api/*) → Next dev
+	reverse_proxy http://127.0.0.1:3000 {
+		header_up Host {host}
+		header_up X-Forwarded-Proto https
+	}
+}

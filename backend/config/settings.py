@@ -7,7 +7,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # --- Core ---
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-insecure")
 DEBUG = os.environ.get("DEBUG", "1") == "1"
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = ["*"]  # dev: wide open so your tunnel host works
 
 # --- Apps ---
 INSTALLED_APPS = [
@@ -112,7 +112,22 @@ SIMPLE_JWT = {
 
 # --- CORS (dev wide-open; tighten in prod) ---
 CORS_ALLOW_ALL_ORIGINS = True
-# CSRF_TRUSTED_ORIGINS = ["https://your-frontend-domain.com"]
+CORS_ALLOW_CREDENTIALS = True
+
+# --- Behind proxy/tunnel (Caddy → cloudflared) ---
+# Treat requests as HTTPS when X-Forwarded-Proto=https
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Trust the public origin for CSRF (Django admin/forms)
+PUBLIC_ORIGIN = os.environ.get(
+    "PUBLIC_ORIGIN",
+    "https://notified-configure-theme-hills.trycloudflare.com",  # current quick-tunnel URL
+)
+CSRF_TRUSTED_ORIGINS = [PUBLIC_ORIGIN]
+
+# Optional (nice for admin over HTTPS during dev)
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
 
 # --- Channels layer ---
 CHANNEL_LAYERS = {

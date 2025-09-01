@@ -422,7 +422,8 @@ export default function Game() {
     return { hit: null as Vec3 | null, face: null as Vec3 | null };
   }
 
-  const handleBuildClick = React.useCallback((button: number, shift: boolean) => {
+  // NEW MAPPING: Left = remove, Right = place
+  const handleBuildClick = React.useCallback((button: number) => {
     if (!locked || menuOpen || !camRef.current) return;
 
     const cam = camRef.current!;
@@ -432,35 +433,41 @@ export default function Game() {
     const { hit, face } = voxelRaycast(origin, dir, INTERACT_DIST);
     if (!hit || !face) return;
 
-    // Remove: right-click or Shift
-    if (button === 2 || shift) { placeAtNowAndBroadcast(hit, "EMPTY"); return; }
-
-    // March outward along face normal until first empty cell
-    let tx = hit[0] + face[0], ty = hit[1] + face[1], tz = hit[2] + face[2];
-    for (let i = 0; i < 32 && isFilled(tx, ty, tz); i++) { tx += face[0]; ty += face[1]; tz += face[2]; }
-    const target: Vec3 = [tx, ty, tz];
-
-    // If target sits under player horizontally, require airborne OR very-recent Space tap
-    const feet = playerRef.current?.getFeet();
-    if (feet) {
-      const cx = target[0] + 0.5, cz = target[2] + 0.5;
-      const dx = Math.abs(feet.x - cx), dz = Math.abs(feet.z - cz);
-      const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
-      if (inside && !(isAirborneNow() || recentlyJumped())) return;
+    // Remove with LEFT click
+    if (button === 0) {
+      placeAtNowAndBroadcast(hit, "EMPTY");
+      return;
     }
 
-    // Place block
-    placeAtNowAndBroadcast(target, selected);
+    // Place with RIGHT click
+    if (button === 2) {
+      // March outward along face normal until first empty cell
+      let tx = hit[0] + face[0], ty = hit[1] + face[1], tz = hit[2] + face[2];
+      for (let i = 0; i < 32 && isFilled(tx, ty, tz); i++) { tx += face[0]; ty += face[1]; tz += face[2]; }
+      const target: Vec3 = [tx, ty, tz];
 
-    // Nudge up if we built under ourselves
-    if (feet) {
-      const cx = target[0] + 0.5, cz = target[2] + 0.5;
-      const dx = Math.abs(feet.x - cx), dz = Math.abs(feet.z - cz);
-      const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
-      const topY = target[1] + 1.0;
-      if (inside && feet.y < topY + 0.001) {
-        const need = (topY + 0.02) - feet.y;
-        if (need > 0) playerRef.current?.nudgeUp(need, true);
+      // If target sits under player horizontally, require airborne OR very-recent Space tap
+      const feet = playerRef.current?.getFeet();
+      if (feet) {
+        const cx = target[0] + 0.5, cz = target[2] + 0.5;
+        const dx = Math.abs(feet.x - cx), dz = Math.abs(feet.z - cz);
+        const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
+        if (inside && !(isAirborneNow() || recentlyJumped())) return;
+      }
+
+      // Place block
+      placeAtNowAndBroadcast(target, selected);
+
+      // Nudge up if we built under ourselves
+      if (feet) {
+        const cx = target[0] + 0.5, cz = target[2] + 0.5;
+        const dx = Math.abs(feet.x - cx), dz = Math.abs(feet.z - cz);
+        const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
+        const topY = target[1] + 1.0;
+        if (inside && feet.y < topY + 0.001) {
+          const need = (topY + 0.02) - feet.y;
+          if (need > 0) playerRef.current?.nudgeUp(need, true);
+        }
       }
     }
   }, [locked, menuOpen, selected, isFilled, isAirborneNow, recentlyJumped, placeAtNowAndBroadcast]);
@@ -512,8 +519,8 @@ export default function Game() {
         camera={{ position: [WORLD_SIZE * 0.8, WORLD_SIZE * 0.6, WORLD_SIZE * 0.8], fov: 50 }}
         onPointerDownCapture={(e: any) => {
           if (!locked && !menuOpen) { setMustFs(true); startPlay(); e.stopPropagation(); return; }
-          const btn = e.button ?? 0; const shift = !!e.shiftKey;
-          handleBuildClick(btn, shift);
+          const btn = e.button ?? 0;
+          handleBuildClick(btn);
         }}
       >
         <Sky sunPosition={[100, 20, 100]} />
@@ -545,7 +552,7 @@ export default function Game() {
       <div style={hudHint}>
         <span>
           {locked
-            ? "Online · Wheel change block · 1–7 · Left place · Right/Shift remove · ZQSD/WASD · Space jump (jump to place under you) · ESC menu"
+            ? "Online · Wheel change block · 1–7 · Left remove · Right place · ZQSD/WASD · Space jump (jump to place under you) · ESC menu"
             : "Click to start (fullscreen + mouse-look)"}
         </span>
       </div>

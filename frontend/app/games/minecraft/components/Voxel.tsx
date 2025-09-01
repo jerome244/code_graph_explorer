@@ -14,15 +14,29 @@ export default function Voxel({
   const handlePointerDown = (e: ThreeEvent<MouseEvent>) => {
     if (disabled) return;
     e.stopPropagation();
-    const rightClick = e.nativeEvent.button === 2;
-    const shift = (e.nativeEvent as MouseEvent).shiftKey;
-    if (rightClick || shift) return onRemove();
 
-    const n = e.face?.normal?.clone();
-    if (!n) return;
-    const normal = n.applyMatrix3(new THREE.Matrix3().getNormalMatrix((e.object as THREE.Mesh).matrixWorld)).round();
-    const adj: Vec3 = [x + Math.round(normal.x), y + Math.round(normal.y), z + Math.round(normal.z)];
-    onPlaceAdjacent(adj);
+    // NEW MAPPING: Left = remove, Right = place adjacent
+    const button = e.nativeEvent.button;
+
+    // LEFT = remove
+    if (button === 0) {
+      return onRemove();
+    }
+
+    // RIGHT = place adjacent
+    if (button === 2) {
+      const n = e.face?.normal?.clone();
+      if (!n) return;
+      const normal = n
+        .applyMatrix3(new THREE.Matrix3().getNormalMatrix((e.object as THREE.Mesh).matrixWorld))
+        .round();
+      const adj: Vec3 = [
+        x + Math.round(normal.x),
+        y + Math.round(normal.y),
+        z + Math.round(normal.z),
+      ];
+      return onPlaceAdjacent(adj);
+    }
   };
 
   return (

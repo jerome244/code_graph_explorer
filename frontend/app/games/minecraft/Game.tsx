@@ -11,36 +11,13 @@ import { WORLD_SIZE, keyOf, parseKey, seedWorld, loadWorld, saveWorld } from "./
 import Player, { PlayerAPI } from "./components/Player";
 import Voxel from "./components/Voxel";
 import GroundPlane from "./components/GroundPlane";
+import RemotePlayers from "./components/RemotePlayers"; // <-- now imported
 import { PLAYER_RADIUS } from "./lib/collision";
+import { wsBase } from "./lib/ws"; // <-- extracted
 
 const Y_MIN = 0;
 const Y_MAX = 64;
 const INTERACT_DIST = 6.5;
-
-/* -------- Simple remote avatar -------- */
-function RemotePlayers({
-  players,
-}: {
-  players: Record<string, { p: [number, number, number]; ry: number; name?: string }>;
-}) {
-  return (
-    <group>
-      {Object.entries(players).map(([id, pl]) => (
-        <group key={id} position={[pl.p[0], pl.p[1], pl.p[2]]} rotation={[0, pl.ry || 0, 0]}>
-          <mesh position={[0, 0.9, 0]} castShadow>
-            {/* @ts-ignore */}
-            <capsuleGeometry args={[0.3, 0.9, 2, 8]} />
-            <meshStandardMaterial roughness={1} metalness={0} />
-          </mesh>
-          <mesh position={[0, 1.7, 0]} castShadow>
-            <sphereGeometry args={[0.28, 12, 12]} />
-            <meshStandardMaterial roughness={1} metalness={0} />
-          </mesh>
-        </group>
-      ))}
-    </group>
-  );
-}
 
 type MiningState = {
   key: string;
@@ -66,6 +43,7 @@ export default function Game() {
   const blocksRef = React.useRef(blocks);
   React.useEffect(() => { blocksRef.current = blocks; }, [blocks]);
 
+
   /* ---------- Multiplayer (WS) ---------- */
   const room =
     typeof window !== "undefined"
@@ -76,6 +54,7 @@ export default function Game() {
   const selfIdRef = React.useRef<string | null>(null);
   const [gotSnapshot, setGotSnapshot] = React.useState(false);
 
+  // NOTE: matches the inline shape you had (no `id` in each player object)
   const [others, setOthers] = React.useState<
     Record<string, { p: [number, number, number]; ry: number; name?: string }>
   >({});
@@ -88,23 +67,6 @@ export default function Game() {
         (localStorage.getItem("access") || localStorage.getItem("access_token"))) ||
       ""
     );
-  }
-
-  function wsBase() {
-    const fromEnv =
-      process.env.NEXT_PUBLIC_WS_URL ||
-      process.env.NEXT_PUBLIC_DJANGO_WS_BASE ||
-      (process.env.DJANGO_API_BASE ? process.env.DJANGO_API_BASE.replace(/^http/, "ws") : null);
-    if (fromEnv) return fromEnv.replace(/\/$/, "");
-    if (typeof window !== "undefined") {
-      const isDevLocal =
-        window.location.hostname === "localhost" &&
-        (window.location.port === "3000" || window.location.port === "3001");
-      if (isDevLocal) return "ws://localhost:8000";
-      const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      return `${proto}://${window.location.host}`;
-    }
-    return "ws://localhost:8000";
   }
 
   React.useEffect(() => {
@@ -232,7 +194,10 @@ export default function Game() {
   const exitFullscreen = React.useCallback(async () => {
     const doc: any = document;
     const exit =
-      doc.exitFullscreen || doc.webkitExitFullscreen || doc.msExitFullscreen || doc.mozCancelFullScreen;
+      doc.exitFullscreen ||
+      doc.webkitExitFullscreen ||
+      doc.msExitFullscreen ||
+      doc.mozCancelFullScreen;
     if (exit) await exit.call(document);
   }, []);
   React.useEffect(() => {
@@ -264,6 +229,114 @@ export default function Game() {
   const [locked, setLocked] = React.useState(false);
   const [menuOpen, setMenuOpen] = React.useState(false);
   const importInputRef = React.useRef<HTMLInputElement | null>(null);
+
+/* === Health + Fall/Death/Respawn (paste as one block) === */
+const MAX_HEALTH = 20; // 10 hearts (2 HP per heart)
+const [health, setHealth] = React.useState(MAX_HEALTH);
+const [dead, setDead] = React.useState(false);
+
+// fall tracking refs
+const prevGroundedRef = React.useRef(true);
+const airborneRef = React.useRef(false);
+const peakYRef = React.useRef(0);
+
+// extras for the towering fix
+const EPS = 1e-3;
+const MIN_AIR_MS = 120;
+const prevYRef = React.useRef(0);
+const lastGroundedYRef = React.useRef(0);
+const startedDescRef = React.useRef(false);
+const airStartAtRef = React.useRef(0);
+
+// helper: find top solid y at x,z for respawn
+const topYAt = React.useCallback((x: number, z: number) => {
+  try {
+    let top = -1;
+    solid.forEach((k: string) => {
+      const [bx, by, bz] = parseKey(k);
+      if (bx === Math.floor(x) && bz === Math.floor(z)) top = Math.max(top, by);
+    });
+    return top;
+  } catch {
+    return -1;
+  }
+}, [solid]);
+
+// apply fall damage on valid landings (towering-safe)
+React.useEffect(() => {
+  let raf = 0;
+  const loop = () => {
+    raf = requestAnimationFrame(loop);
+    const p = playerRef.current;
+    if (!p) return;
+
+    const grounded = p.isGrounded();
+    const y = p.getFeet().y;
+
+    if (grounded) lastGroundedYRef.current = y;
+
+    // became airborne
+    if (prevGroundedRef.current && !grounded) {
+      airborneRef.current = true;
+      peakYRef.current = y;
+      startedDescRef.current = false;
+      airStartAtRef.current = performance.now();
+    }
+
+    // while airborne
+    if (!grounded && airborneRef.current) {
+      if (y > peakYRef.current) peakYRef.current = y;
+      const vy = y - prevYRef.current; // + up, - down
+      if (vy < -EPS) startedDescRef.current = true;
+    }
+
+    // landed
+    if (!prevGroundedRef.current && grounded && airborneRef.current) {
+      const tAir = performance.now() - airStartAtRef.current;
+      const fall = peakYRef.current - y;
+
+      const climbedOrNoDesc =
+        !startedDescRef.current || y >= lastGroundedYRef.current - 0.25;
+
+      if (!climbedOrNoDesc && tAir > MIN_AIR_MS) {
+        const excess = fall - 3;                 // free 3 blocks
+        if (excess > 0) {
+          const dmg = Math.floor(excess) * 2;    // 1 heart per extra block
+          if (dmg > 0) setHealth(h => Math.max(0, h - dmg));
+        }
+      }
+
+      airborneRef.current = false;
+    }
+
+    prevYRef.current = y;
+    prevGroundedRef.current = grounded;
+  };
+  raf = requestAnimationFrame(loop);
+  return () => cancelAnimationFrame(raf);
+}, []);
+
+// death -> unlock pointer; respawn handler
+React.useEffect(() => {
+  if (health <= 0) {
+    setDead(true);
+    plcRef.current?.unlock?.();
+  }
+}, [health]);
+
+const handleRespawn = React.useCallback(() => {
+  const feet = playerRef.current?.getFeet();
+  const x = feet ? feet.x : 0;
+  const z = feet ? feet.z : 0;
+  const top = topYAt(x, z);
+  const spawnY = (top >= 0 ? top + 1.02 : 3);
+  playerRef.current?.nudgeUp(spawnY, true);
+  setHealth(MAX_HEALTH);
+  setDead(false);
+  plcRef.current?.lock?.();
+}, [topYAt]);
+/* === end Health block === */
+
 
   // Stream local player state ~10 Hz
   React.useEffect(() => {
@@ -725,6 +798,27 @@ export default function Game() {
         </span>
       </div>
 
+      {/* Hearts */}
+      {locked && !dead && (
+        <div style={heartsBar}>
+          {Array.from({ length: 10 }).map((_, i) => (
+            <span key={i} style={heartStyle(health >= (i + 1) * 2)}>&#10084;</span>
+          ))}
+        </div>
+      )}
+
+      {/* Death overlay */}
+      {dead && (
+        <div style={deathOverlay}>
+          <div style={deathPanel}>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>You died</div>
+            <div style={{ opacity: 0.85 }}>Fell too far. Click to respawn.</div>
+            <button style={respawnBtn} onClick={handleRespawn}>Respawn</button>
+          </div>
+        </div>
+      )}
+
+
       {/* Mining progress ring */}
       {locked && mining && (
         <div style={mineRing(mining.progress)}>
@@ -856,3 +950,28 @@ const menuBtn: React.CSSProperties = {
   padding: "10px 12px", borderRadius: 8, border: "1px solid #374151",
   background: "#1f2937", color: "#fff", cursor: "pointer", textAlign: "left", fontSize: 14,
 };
+
+/* Life heart */
+const heartsBar: React.CSSProperties = {
+  position: "absolute", left: 12, bottom: 36, display: "flex", gap: 6, zIndex: 25,
+  background: "rgba(255,255,255,0.8)", border: "1px solid #e5e7eb",
+  borderRadius: 8, padding: "6px 8px",
+};
+const heartStyle = (on: boolean): React.CSSProperties => ({
+  filter: on ? "none" : "grayscale(1) opacity(0.35)",
+  fontSize: 18, lineHeight: "18px",
+});
+const deathOverlay: React.CSSProperties = {
+  position: "absolute", inset: 0, background: "rgba(153,27,27,0.6)",
+  display: "grid", placeItems: "center", zIndex: 40,
+};
+const deathPanel: React.CSSProperties = {
+  background: "#111827", color: "#fff", padding: 16, borderRadius: 12,
+  minWidth: 260, boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+  display: "grid", gap: 12, textAlign: "center" as const,
+};
+const respawnBtn: React.CSSProperties = {
+  padding: "10px 12px", borderRadius: 8, border: "1px solid #374151",
+  background: "#1f2937", color: "#fff", cursor: "pointer", fontWeight: 700,
+};
+

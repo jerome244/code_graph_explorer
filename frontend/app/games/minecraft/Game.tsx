@@ -109,7 +109,7 @@ export default function Game() {
 
   React.useEffect(() => {
     let closed = false;
-    let retry = 0;
+       let retry = 0;
 
     const connect = () => {
       const token = getJwtToken();
@@ -121,7 +121,6 @@ export default function Game() {
 
       ws.onopen = () => {
         setWsReady(true);
-        // reset identification gates on each (re)connect
         setGotSnapshot(false);
         setClientId(null);
         selfIdRef.current = null;
@@ -140,8 +139,6 @@ export default function Game() {
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
-
-          // Ignore everything until we know who we are
           if (msg.type !== "snapshot" && !selfIdRef.current) return;
 
           switch (msg.type) {
@@ -175,7 +172,7 @@ export default function Game() {
             }
             case "state": {
               const id = msg.id as string;
-              if (!id || id === selfIdRef.current) break; // ignore self echoes
+              if (!id || id === selfIdRef.current) break;
               setOthers((prev) => ({
                 ...prev,
                 [id]: { p: msg.p as [number, number, number], ry: msg.ry || 0, name: msg.name },
@@ -184,7 +181,7 @@ export default function Game() {
             }
             case "join": {
               const id = msg.id as string;
-              if (!id || id === selfIdRef.current) break; // ignore self join
+              if (!id || id === selfIdRef.current) break;
               const pl = msg.player || {};
               setOthers((prev) => ({
                 ...prev,
@@ -208,7 +205,6 @@ export default function Game() {
 
     connect();
     return () => { closed = true; wsRef.current?.close(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room]);
 
   const wsSend = React.useCallback((o: any) => {
@@ -274,7 +270,7 @@ export default function Game() {
     let raf = 0, last = 0;
     const loop = (t: number) => {
       raf = requestAnimationFrame(loop);
-      if (!locked || !camRef.current || !gotSnapshot) return; // wait for snapshot
+      if (!locked || !camRef.current || !gotSnapshot) return;
       if (t - last < 100) return;
       last = t;
 
@@ -293,13 +289,28 @@ export default function Game() {
     return () => cancelAnimationFrame(raf);
   }, [locked, selected, wsSend, gotSnapshot]);
 
-  // Track recent Space (pillar place grace window)
+  /* --- Jump gating to stop infinite pillar --- */
+  const JUMP_GRACE_MS = 120; // allow quick jump->place timing
   const lastJumpPress = React.useRef(0);
-  const recentlyJumped = React.useCallback(() => performance.now() - lastJumpPress.current < 160, []);
+  // Require a *new* Space keydown for each under-self placement
+  const spaceSinceUnderSelfPlaceRef = React.useRef(false);
+  // Also limit to one under-self place per airborne arc
+  const underSelfPlacedThisAirborneRef = React.useRef(false);
+
+  const recentlyJumped = React.useCallback(
+    () => performance.now() - lastJumpPress.current < JUMP_GRACE_MS,
+    []
+  );
+
   React.useEffect(() => {
-    const onDown = (e: KeyboardEvent) => { if (e.code === "Space") lastJumpPress.current = performance.now(); };
-    window.addEventListener("keydown", onDown);
-    return () => window.removeEventListener("keydown", onDown);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space") {
+        lastJumpPress.current = performance.now();
+        spaceSinceUnderSelfPlaceRef.current = true; // arm one placement per press
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   // Digits + Save + ESC menu
@@ -394,15 +405,23 @@ export default function Game() {
     return !!(v && v !== "EMPTY" && v !== "WATER");
   }, []);
 
+
+  // Grounded-aware airborne check: look directly BELOW feet cell (+small footprint)
   const isAirborneNow = React.useCallback(() => {
     const feet = playerRef.current?.getFeet();
     if (!feet) return false;
-    const bx = Math.floor(feet.x);
-    const by = Math.floor(feet.y - 0.001);
-    const bz = Math.floor(feet.z);
-    if (isFilled(bx, by, bz)) {
-      const top = by + 1;
-      return feet.y > top + 0.02;
+    const belowY = Math.floor(feet.y - 1.001);
+    const offsets: Array<[number, number]> = [
+      [0, 0],
+      [PLAYER_RADIUS * 0.75, 0],
+      [-PLAYER_RADIUS * 0.75, 0],
+      [0, PLAYER_RADIUS * 0.75],
+      [0, -PLAYER_RADIUS * 0.75],
+    ];
+    for (const [ox, oz] of offsets) {
+      const bx = Math.floor(feet.x + ox);
+      const bz = Math.floor(feet.z + oz);
+      if (isFilled(bx, belowY, bz)) return false; // ground under us -> not airborne
     }
     return true;
   }, [isFilled]);
@@ -455,19 +474,40 @@ export default function Game() {
     for (let i = 0; i < 32 && isFilled(tx, ty, tz); i++) { tx += face[0]; ty += face[1]; tz += face[2]; }
     const target: Vec3 = [tx, ty, tz];
 
-    // If target sits under player horizontally, require airborne OR very-recent Space tap
+    // If target sits under player horizontally, gate it hard
     const feet = playerRef.current?.getFeet();
     if (feet) {
       const cx = target[0] + 0.5, cz = target[2] + 0.5;
       const dx = Math.abs(feet.x - cx), dz = Math.abs(feet.z - cz);
       const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
-      if (inside && !(isAirborneNow() || recentlyJumped())) return;
+
+      if (inside) {
+        const airborne = isAirborneNow();
+        // Must be airborne or just jumped (timing window)...
+        if (!(airborne || recentlyJumped())) return;
+        // ...and only once per airborne arc...
+        if (underSelfPlacedThisAirborneRef.current) return;
+        // ...and require a *fresh* Space keydown (blocks holding Space)
+        if (!spaceSinceUnderSelfPlaceRef.current) return;
+      }
     }
 
     // Place block
     placeAtNowAndBroadcast(target, selected);
 
-    // Nudge up if we built under ourselves
+    // After placing under self: consume Space "ticket" and mark airborne-use
+    if (playerRef.current?.getFeet) {
+      const feet2 = playerRef.current.getFeet();
+      const cx = target[0] + 0.5, cz = target[2] + 0.5;
+      const dx = Math.abs(feet2.x - cx), dz = Math.abs(feet2.z - cz);
+      const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
+      if (inside) {
+        spaceSinceUnderSelfPlaceRef.current = false;     // must press Space again
+        underSelfPlacedThisAirborneRef.current = true;   // only once per airborne arc
+      }
+    }
+
+    // Nudge up if we built under ourselves (small epsilon to settle on top)
     const feet2 = playerRef.current?.getFeet();
     if (feet2) {
       const cx = target[0] + 0.5, cz = target[2] + 0.5;
@@ -475,13 +515,13 @@ export default function Game() {
       const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
       const topY = target[1] + 1.0;
       if (inside && feet2.y < topY + 0.001) {
-        const need = (topY + 0.02) - feet2.y;
+        const need = (topY + 0.005) - feet2.y;
         if (need > 0) playerRef.current?.nudgeUp(need, true);
       }
     }
   }, [locked, menuOpen, selected, isFilled, isAirborneNow, recentlyJumped, placeAtNowAndBroadcast]);
 
-  /* ---------- Mining (hold left to break) ---------- */
+  /* ---------- Mining (hold left to break, chain to next) ---------- */
   const [mining, setMining] = React.useState<MiningState | null>(null);
   const leftDownRef = React.useRef(false);
 
@@ -498,7 +538,7 @@ export default function Game() {
     return () => { window.removeEventListener("mousedown", onDown); window.removeEventListener("mouseup", onUp); };
   }, [locked, menuOpen]);
 
-  // mining loop
+  // mining loop + also reset per-airborne flag when grounded
   React.useEffect(() => {
     let raf = 0;
     let last = performance.now();
@@ -510,7 +550,10 @@ export default function Game() {
 
       if (!locked || menuOpen || !camRef.current) return;
 
-      // start lock when holding begins
+      // Reset "one per airborne" when grounded
+      if (!isAirborneNow()) underSelfPlacedThisAirborneRef.current = false;
+
+      // (re)acquire lock when holding and no active target
       if (leftDownRef.current && !miningLockRef.current) {
         const cam = camRef.current!;
         const origin = new THREE.Vector3().copy(cam.position);
@@ -550,10 +593,11 @@ export default function Game() {
         const speed = 1.0; // tool multiplier hook
         const prog = Math.min(1, m.progress + (dt * speed) / m.total);
         if (prog >= 1) {
+          // break it
           placeAtNowAndBroadcast(m.pos, "EMPTY");
-          leftDownRef.current = false; // require re-press
+          // keep holding state; just drop the lock so next frame re-acquires the next block
           miningLockRef.current = null;
-          return null;
+          return null; // clear current mining UI/progress
         }
         return { ...m, progress: prog };
       });
@@ -561,7 +605,7 @@ export default function Game() {
 
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [locked, menuOpen, placeAtNowAndBroadcast]);
+  }, [locked, menuOpen, placeAtNowAndBroadcast, isAirborneNow]);
 
   function CameraGrab({ target }: { target: React.MutableRefObject<THREE.PerspectiveCamera | null> }) {
     const { camera } = useThree();
@@ -611,7 +655,7 @@ export default function Game() {
         onPointerDownCapture={(e: any) => {
           if (!locked && !menuOpen) { setMustFs(true); startPlay(); e.stopPropagation(); return; }
           if (e.button === 2) handleRightClickPlace(); // right = place
-          if (e.button === 0) leftDownRef.current = true; // left = start mining
+          if (e.button === 0) leftDownRef.current = true; // left = start/continue mining
         }}
         onPointerUpCapture={(e: any) => {
           if (e.button === 0) { leftDownRef.current = false; miningLockRef.current = null; setMining(null); }
@@ -646,7 +690,7 @@ export default function Game() {
       <div style={hudHint}>
         <span>
           {locked
-            ? "Online · Wheel change block · 1–7 · Hold Left mine (hardness) · Right place · ZQSD/WASD · Space jump (jump to place under you) · ESC menu"
+            ? "Online · Wheel change block · 1–7 · Hold Left mine (chains) · Right place · Under-self: press Space once per block · ZQSD/WASD · ESC menu"
             : "Click to start (fullscreen + mouse-look)"}
         </span>
       </div>

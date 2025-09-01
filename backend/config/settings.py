@@ -121,7 +121,7 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # Trust the public origin for CSRF (Django admin/forms)
 PUBLIC_ORIGIN = os.environ.get(
     "PUBLIC_ORIGIN",
-    "https://notified-configure-theme-hills.trycloudflare.com",  # current quick-tunnel URL
+    "https://contractor-julie-partners-toys.trycloudflare.com",  # current quick-tunnel URL
 )
 CSRF_TRUSTED_ORIGINS = [PUBLIC_ORIGIN]
 

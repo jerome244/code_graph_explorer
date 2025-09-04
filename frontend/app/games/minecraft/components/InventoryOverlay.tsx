@@ -12,14 +12,35 @@ function Slot({
   item,
   onChange,
   size = 56,
+  context = "inventory",
+  addToInventory,
+
 }: {
   item: MaybeItem;
   onChange: (next: MaybeItem) => void;
   size?: number;
+  context?: "inventory" | "craft" | "hotbar";
+  addToInventory?: (id: BlockId, count: number) => void;
 }) {
   return (
     <div
+      onMouseDown={(e) => { e.stopPropagation(); }}
+      onClick={(e) => { e.stopPropagation(); }}
+      onWheel={(e) => { e.stopPropagation(); }}
       onMouseDown={(e) => {
+        // Special: return items from craft/hotbar to inventory on right-click when cursor empty
+        if (e.button === 2 && (context === "craft" || context === "hotbar") && item) {
+          const cursorJson0 = sessionStorage.getItem("__cursor_item__");
+          const cursor0: MaybeItem = cursorJson0 ? JSON.parse(cursorJson0) : null;
+          if (!cursor0 && addToInventory) {
+            addToInventory(item.id as BlockId, item.count);
+            onChange(null);
+            sessionStorage.setItem("__cursor_item__", JSON.stringify(null));
+            e.preventDefault();
+            return;
+          }
+        }
+
         e.preventDefault();
         const cursorJson = sessionStorage.getItem("__cursor_item__");
         const cursor: MaybeItem = cursorJson ? JSON.parse(cursorJson) : null;
@@ -123,6 +144,7 @@ export default function InventoryOverlay({
   setCraft,
   hotbar,
   setHotbar,
+  addToInventory,
 }: {
   open: boolean;
   onClose: () => void;
@@ -132,6 +154,7 @@ export default function InventoryOverlay({
   setCraft: (updater: (curr: (MaybeItem)[]) => (MaybeItem)[]) => void;
   hotbar: (MaybeItem)[]; // 9
   setHotbar: (updater: (curr: (MaybeItem)[]) => (MaybeItem)[]) => void;
+  addToInventory: (id: BlockId, amount: number) => void;
 }) {
   // Render the cursor item following the mouse when open
   const [cursor, setCursor] = useState<MaybeItem>(null);
@@ -156,6 +179,19 @@ export default function InventoryOverlay({
         background: "rgba(0,0,0,.45)",
       }}
       onMouseDown={(e) => {
+        // Special: return items from craft/hotbar to inventory on right-click when cursor empty
+        if (e.button === 2 && (context === "craft" || context === "hotbar") && item) {
+          const cursorJson0 = sessionStorage.getItem("__cursor_item__");
+          const cursor0: MaybeItem = cursorJson0 ? JSON.parse(cursorJson0) : null;
+          if (!cursor0 && addToInventory) {
+            addToInventory(item.id as BlockId, item.count);
+            onChange(null);
+            sessionStorage.setItem("__cursor_item__", JSON.stringify(null));
+            e.preventDefault();
+            return;
+          }
+        }
+
         // Clicking the dim outside shouldn't close to avoid losing items.
       }}
     >
@@ -183,7 +219,7 @@ export default function InventoryOverlay({
               }}
             >
               {craft.map((it, idx) => (
-                <Slot
+                <Slot context="craft" addToInventory={addToInventory}
                   key={idx}
                   item={it}
                   onChange={(next) =>
@@ -210,7 +246,7 @@ export default function InventoryOverlay({
               }}
             >
               {inventory.map((it, idx) => (
-                <Slot
+                <Slot context="inventory" addToInventory={addToInventory}
                   key={idx}
                   item={it}
                   onChange={(next) =>
@@ -236,7 +272,7 @@ export default function InventoryOverlay({
               }}
             >
               {hotbar.map((it, idx) => (
-                <Slot
+                <Slot context="hotbar" addToInventory={addToInventory}
                   key={idx}
                   item={it}
                   onChange={(next) =>

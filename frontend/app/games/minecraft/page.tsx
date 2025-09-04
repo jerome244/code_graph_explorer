@@ -348,6 +348,7 @@ const [selected, setSelected] = useState<BlockId>(1);
         setCraft={(u) => setCraft((curr) => u(curr))}
         hotbar={hotbarInv}
         setHotbar={(u) => setHotbarInv((curr) => u(curr))}
+        addToInventory={addItemToInventory}
       />
 </div>
   );

@@ -12,6 +12,7 @@ import Hotbar from "./components/Hotbar";
 import Player from "./components/Player";
 import OtherPlayers from "./components/OtherPlayers";
 import ConnectionStatus from "./components/ConnectionStatus";
+import { cellKey } from "./lib/chunks";
 import InventoryOverlay from "./components/InventoryOverlay";
 
 import { useInfiniteWorld } from "./hooks/useInfiniteWorld";
@@ -108,6 +109,35 @@ export default function GamePage() {
   });
   const [craft, setCraft] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
   const [hotbarInv, setHotbarInv] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
+
+  // Add mined items into inventory (27-slot) with stack size 64
+  const addItemToInventory = useCallback((id: BlockId, amount: number = 1) => {
+    setInv((curr) => {
+      let remain = amount;
+      const next = curr.slice();
+
+      // 1) Fill existing stacks of same id up to 64
+      for (let i = 0; i < next.length && remain > 0; i++) {
+        const it = next[i];
+        if (it && it.id === id && it.count < 64) {
+          const room = 64 - it.count;
+          const put = Math.min(room, remain);
+          next[i] = { id, count: it.count + put };
+          remain -= put;
+        }
+      }
+      // 2) Create new stacks in empty slots
+      for (let i = 0; i < next.length && remain > 0; i++) {
+        if (!next[i]) {
+          const put = Math.min(64, remain);
+          next[i] = { id, count: put };
+          remain -= put;
+        }
+      }
+      return next;
+    });
+  }, []);
+
 const [selected, setSelected] = useState<BlockId>(1);
 
   const { blocks, place, remove, hasBlock, updateAround, getTopY } = useInfiniteWorld({
@@ -194,6 +224,7 @@ const [selected, setSelected] = useState<BlockId>(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
+  
   // ---- Wrappers around place/remove that also broadcast ----
   const wrappedPlace = useCallback(
     (x: number, y: number, z: number, id: BlockId, emit = true) => {
@@ -205,13 +236,18 @@ const [selected, setSelected] = useState<BlockId>(1);
 
   const wrappedRemove = useCallback(
     (x: number, y: number, z: number, emit = true) => {
+      const ck = cellKey(x, y, z);
+      const b = blocks.get(ck);
       remove(x, y, z);
-      if (emit) socketRef.current?.send({ type: "remove_block", x, y, z });
+      if (emit) {
+        if (b) addItemToInventory(b.id, 1);
+        socketRef.current?.send({ type: "remove_block", x, y, z });
+      }
     },
-    [remove]
+    [remove, blocks, addItemToInventory]
   );
 
-  // RMB places on ground
+// RMB places on ground
   const handleGroundPointerDown = useCallback(
     (e: any) => {
       e.stopPropagation();

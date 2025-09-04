@@ -13,13 +13,13 @@ import Player from "./components/Player";
 
 import { useWorld } from "./hooks/useWorld";
 import { roundToGrid } from "./lib/utils";
+import { blockOverlapsPlayer } from "./lib/physics";
 import type { BlockId, WorldBlock } from "./lib/types";
 
 export default function GamePage() {
   const [selected, setSelected] = useState<BlockId>(1);
-  const { blocks, place, remove } = useWorld(10);
+  const { blocks, place, remove, hasBlock } = useWorld(10);
 
-  // Pointer lock (for mouse look). Click canvas to enter; Esc to unlock.
   const [locked, setLocked] = useState(false);
   const lockRef = useRef<{ lock: () => void; unlock: () => void } | null>(null);
 
@@ -27,15 +27,21 @@ export default function GamePage() {
   const handleBlockPointerDown = useCallback(
     (e: any, b: WorldBlock) => {
       e.stopPropagation();
+      const eye = (e?.ray?.camera?.position as THREE.Vector3) ?? new THREE.Vector3(0, 1 + 1.6, 0);
+
       if (e.button === 0) {
-        // mine
         remove(b.pos[0], b.pos[1], b.pos[2]);
       } else if (e.button === 2) {
-        // place adjacent to clicked face
         const normalMatrix = new THREE.Matrix3().getNormalMatrix(e.object.matrixWorld);
         const worldNormal = e.face?.normal.clone().applyMatrix3(normalMatrix).normalize();
         const target = new THREE.Vector3().fromArray(b.pos).add(worldNormal ?? new THREE.Vector3(0, 1, 0));
-        place(Math.round(target.x), Math.round(target.y), Math.round(target.z), selected);
+
+        const tx = Math.round(target.x);
+        const ty = Math.round(target.y);
+        const tz = Math.round(target.z);
+
+        if (blockOverlapsPlayer(eye, tx, ty, tz)) return;
+        place(tx, ty, tz, selected);
       }
     },
     [place, remove, selected]
@@ -50,6 +56,10 @@ export default function GamePage() {
         const x = roundToGrid(p.x);
         const z = roundToGrid(p.z);
         const y = 0;
+
+        const eye = (e?.ray?.camera?.position as THREE.Vector3) ?? new THREE.Vector3(0, 1 + 1.6, 0);
+        if (blockOverlapsPlayer(eye, x, y, z)) return;
+
         place(x, y, z, selected);
       }
     },
@@ -88,7 +98,7 @@ export default function GamePage() {
         <Ground onPointerDown={handleGroundPointerDown} />
 
         {/* Player & mouse-look */}
-        <Player />
+        <Player hasBlock={hasBlock} />
         <PointerLockControls
           ref={lockRef as any}
           makeDefault

@@ -99,7 +99,7 @@ function tryAutoStep(basePos: THREE.Vector3, horiz: THREE.Vector3, hasBlock: Has
     }
 
     // settle down generously
-    sweepAxis(pos, "y", -STEP_HEIGHT - 1, hasBlock);
+    sweepAxis(pos, "y", -STEP_HEIGHT - EPS, hasBlock);
     return pos;
   };
 
@@ -120,8 +120,11 @@ export function depenetrate(position: THREE.Vector3, hasBlock: HasBlockFn, maxIt
     const iy0 = Math.floor(min.y), iy1 = Math.floor(max.y);
     const iz0 = Math.floor(min.z), iz1 = Math.floor(max.z);
 
-    let bestAxis: "x" | "y" | "z" | null = null;
-    let bestDelta = 0;
+    // separate candidates into tiers: UP first, then X/Z, then DOWN
+    type Cand = { axis: "x" | "y" | "z"; delta: number; abs: number };
+    const up: Cand[] = [];
+    const horiz: Cand[] = [];
+    const down: Cand[] = [];
 
     for (let x = ix0; x <= ix1; x++) {
       for (let y = iy0; y <= iy1; y++) {
@@ -129,44 +132,48 @@ export function depenetrate(position: THREE.Vector3, hasBlock: HasBlockFn, maxIt
           if (!hasBlock(x, y, z)) continue;
           if (!aabbOverlapsBlock(min, max, x, y, z)) continue;
 
-          // penetration distances to each face of the block
           const pushPosX = (x + 1) - min.x;
           const pushNegX = max.x - x;
-          const pushPosY = (y + 1) - min.y;
-          const pushNegY = max.y - y;
+          const pushPosY = (y + 1) - min.y; // up
+          const pushNegY = max.y - y;       // down
           const pushPosZ = (z + 1) - min.z;
           const pushNegZ = max.z - z;
 
-          // choose smallest of the six displacements (axis-aligned MTV)
-          const candidates: Array<{ axis: "x" | "y" | "z"; delta: number }> = [
-            { axis: "x", delta:  pushPosX + EPS },
-            { axis: "x", delta: -pushNegX - EPS },
-            { axis: "y", delta:  pushPosY + EPS },
-            { axis: "y", delta: -pushNegY - EPS },
-            { axis: "z", delta:  pushPosZ + EPS },
-            { axis: "z", delta: -pushNegZ - EPS },
+          const raw: Array<Cand> = [
+            { axis: "x", delta:  pushPosX + EPS, abs: Math.abs(pushPosX + EPS) },
+            { axis: "x", delta: -pushNegX - EPS, abs: Math.abs(pushNegX + EPS) },
+            { axis: "y", delta:  pushPosY + EPS, abs: Math.abs(pushPosY + EPS) }, // UP
+            { axis: "y", delta: -pushNegY - EPS, abs: Math.abs(pushNegY + EPS) }, // DOWN
+            { axis: "z", delta:  pushPosZ + EPS, abs: Math.abs(pushPosZ + EPS) },
+            { axis: "z", delta: -pushNegZ - EPS, abs: Math.abs(pushNegZ + EPS) },
           ];
 
-          for (const c of candidates) {
-            const abs = Math.abs(c.delta);
-            if (bestAxis === null || abs < Math.abs(bestDelta)) {
-              bestAxis = c.axis;
-              bestDelta = c.delta;
-            }
+          for (const c of raw) {
+            if (c.axis === "y" && c.delta > 0) up.push(c);
+            else if (c.axis === "y" && c.delta < 0) down.push(c);
+            else horiz.push(c);
           }
         }
       }
     }
 
-    if (bestAxis === null) break; // no overlaps
-    (pos as any)[bestAxis] += bestDelta;
-    moved = true;
+    if (!up.length && !horiz.length && !down.length) break; // no overlaps
 
-    // continue looping in case of multiple overlapping blocks
+    // pick smallest move from preferred tier
+    const pick =
+      (up.length && up.sort((a, b) => a.abs - b.abs)[0]) ||
+      (horiz.length && horiz.sort((a, b) => a.abs - b.abs)[0]) ||
+      down.sort((a, b) => a.abs - b.abs)[0];
+
+    (pos as any)[pick.axis] += pick.delta;
+    moved = true;
+    // loop again in case multiple blocks overlap
   }
 
   return { position: pos, moved };
 }
+
+
 
 export function moveWithCollisions(
   position: THREE.Vector3,

@@ -1,18 +1,53 @@
+# config/settings.py
 from pathlib import Path
 from datetime import timedelta
 import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# --- Core ---
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-insecure")
 DEBUG = os.environ.get("DEBUG", "1") == "1"
-ALLOWED_HOSTS = ["*"]
 
+# Keep permissive by default so WS sync isn’t blocked in dev; allow override via env
+# Example to tighten later: ALLOWED_HOSTS="localhost,127.0.0.1,app.example.com"
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "*").split(",") if h.strip()]
+
+# Tell Django about the proxy chain (Cloudflare -> Caddy)
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = True
+
+# Cookie security: opt-in via env so HTTP dev isn't broken
+# set COOKIE_SECURE=1 in env when serving via HTTPS at Cloudflare
+_cookie_secure_env = os.getenv("COOKIE_SECURE", "0").lower()
+COOKIE_SECURE = _cookie_secure_env in ("1", "true", "yes")
+SESSION_COOKIE_SECURE = COOKIE_SECURE
+CSRF_COOKIE_SECURE = COOKIE_SECURE
+SESSION_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SAMESITE = "Lax"
+
+# CSRF trusted origins:
+# dev origins + optional PUBLIC_ORIGIN (e.g. https://app.example.com) + optional trycloudflare
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+PUBLIC_ORIGIN = os.getenv("PUBLIC_ORIGIN")  # e.g. "https://app.example.com"
+if PUBLIC_ORIGIN:
+    CSRF_TRUSTED_ORIGINS.append(PUBLIC_ORIGIN)
+if os.getenv("ALLOW_TRYCLOUDFLARE", "0") in ("1", "true", "yes"):
+    # Django supports wildcard subdomains here
+    CSRF_TRUSTED_ORIGINS.append("https://*.trycloudflare.com")
+
+# --- Apps ---
 INSTALLED_APPS = [
-    # --- Channels realtime apps (must come before contrib apps or after — order doesn't matter) ---
+    # Realtime
     "channels",
     "realtime",
 
-    # --- Django & third-party ---
+    # Django & third-party
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -22,7 +57,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
 
-    # --- Project apps ---
+    # Project apps
     "users",
     "projects",
     "game",
@@ -40,6 +75,7 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = "config.urls"
+
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
@@ -56,10 +92,10 @@ TEMPLATES = [
     },
 ]
 
-# WSGI is still fine to keep for any WSGI hosting; ASGI below is used for websockets:
+# WSGI is fine to keep; ASGI is used for websockets
 WSGI_APPLICATION = "config.wsgi.application"
 
-# DB: default SQLite for quick start; swap to Postgres via env vars when ready
+# --- Database ---
 if os.environ.get("DB_NAME"):
     DATABASES = {
         "default": {
@@ -72,8 +108,14 @@ if os.environ.get("DB_NAME"):
         }
     }
 else:
-    DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
+# --- Auth ---
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -85,14 +127,19 @@ LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
-STATIC_URL = "static/"
 
+# --- Static & Media ---
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"  # optional: for collectstatic in prod
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+# --- DRF / JWT ---
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
 }
-
 from rest_framework.settings import api_settings  # noqa
 
 SIMPLE_JWT = {
@@ -102,14 +149,33 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": False,
 }
 
-CORS_ALLOW_ALL_ORIGINS = True  # for dev; tighten in prod
+# --- CORS ---
+# Keep permissive in dev to match your current behavior; tighten later if you split origins
+if DEBUG or os.getenv("CORS_ALLOW_ALL", "1") in ("1", "true", "yes"):
+    CORS_ALLOW_ALL_ORIGINS = True
+else:
+    CORS_ALLOW_ALL_ORIGINS = False
+    # If needed, allow your public origin explicitly
+    if PUBLIC_ORIGIN:
+        CORS_ALLOWED_ORIGINS = [PUBLIC_ORIGIN]
 
-# ---------- Channels / ASGI ----------
+# --- Channels / ASGI ---
 ASGI_APPLICATION = "config.asgi.application"
 
-# In-memory layer is fine for local/dev. Use Redis in production (channels_redis).
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer",
+# In-memory layer is perfect for dev; auto-switch to Redis if REDIS_URL is set
+if os.getenv("REDIS_URL"):
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [os.getenv("REDIS_URL")]},
+        }
     }
-}
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        }
+    }
+
+# Django 3.2+ default primary key type
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

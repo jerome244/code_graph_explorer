@@ -90,6 +90,16 @@ export default function BlocksOptimized({
             const count = posArray.length / 3;
             if (count === 0) return null;
 
+            // ---- Guard against unknown block IDs ----
+            const key = Number(id) as BlockId;
+            const spec = (BLOCKS as Record<number, { color: any; opacity?: number; transparent?: boolean } | undefined>)[key];
+            if (!spec) {
+              if (process.env.NODE_ENV !== "production") {
+                console.warn("[BlocksOptimized] Unknown block id:", id, "— skipping these instances");
+              }
+              return null; // or use a fallback material if you prefer
+            }
+
             return (
               <instancedMesh
                 key={`${ck}-${id}`}
@@ -109,7 +119,9 @@ export default function BlocksOptimized({
 
                   // world face normal
                   const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
-                  const worldNormal = e.face?.normal.clone().applyMatrix3(normalMatrix).normalize() ?? new THREE.Vector3(0,1,0);
+                  const worldNormal =
+                    e.face?.normal.clone().applyMatrix3(normalMatrix).normalize() ??
+                    new THREE.Vector3(0, 1, 0);
 
                   if (e.button === 0) {
                     // MINE: target block is the one we clicked (the instance)
@@ -131,9 +143,9 @@ export default function BlocksOptimized({
               >
                 {/* material per block-id */}
                 <meshStandardMaterial
-                  color={BLOCKS[id].color}
-                  opacity={BLOCKS[id].opacity ?? 1}
-                  transparent={!!BLOCKS[id].transparent}
+                  color={spec.color}
+                  opacity={spec.opacity ?? 1}
+                  transparent={!!spec.transparent}
                 />
                 {/* set instance matrices */}
                 <primitive
@@ -143,7 +155,11 @@ export default function BlocksOptimized({
                     if (!obj3d) return;
                     const mesh = obj3d.parent as unknown as THREE.InstancedMesh;
                     for (let i = 0; i < count; i++) {
-                      obj3d.position.set(posArray[i * 3], posArray[i * 3 + 1], posArray[i * 3 + 2]);
+                      obj3d.position.set(
+                        posArray[i * 3],
+                        posArray[i * 3 + 1],
+                        posArray[i * 3 + 2]
+                      );
                       obj3d.updateMatrix();
                       mesh.setMatrixAt(i, obj3d.matrix);
                     }

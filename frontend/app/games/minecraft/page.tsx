@@ -1,4 +1,3 @@
-// page.tsx (only the changed bits)
 "use client";
 
 import React, { useCallback, useRef, useState } from "react";
@@ -12,13 +11,11 @@ import Ground from "./components/Ground";
 import Hotbar from "./components/Hotbar";
 import Player from "./components/Player";
 
-// ⬇️ new hook
 import { useInfiniteWorld } from "./hooks/useInfiniteWorld";
-import { roundToGrid } from "./lib/utils";
 import { blockOverlapsPlayer } from "./lib/physics";
-import type { BlockId, WorldBlock } from "./lib/types";
+import type { BlockId } from "./lib/types";
 
-// Small helper to drive streaming from inside the Canvas
+// Drive chunk streaming from inside the Canvas
 function Streamer({ updateAround }: { updateAround: (p: THREE.Vector3) => void }) {
   const { camera } = useThree();
   useFrame(() => updateAround(camera.position));
@@ -27,56 +24,51 @@ function Streamer({ updateAround }: { updateAround: (p: THREE.Vector3) => void }
 
 export default function GamePage() {
   const [selected, setSelected] = useState<BlockId>(1);
-  const { blocks, place, remove, hasBlock, updateAround } = useInfiniteWorld({
-    viewDistance: 6, // radius in chunks; try 4–8 depending on perf
+
+  const { blocks, place, remove, hasBlock, updateAround, getTopY } = useInfiniteWorld({
+    viewDistance: 3, // tune for perf; 3 is a good default
   });
 
   const [locked, setLocked] = useState(false);
   const lockRef = useRef<{ lock: () => void; unlock: () => void } | null>(null);
 
-  // LMB mines; RMB places adjacent (with player-overlap guard)
-  const handleBlockPointerDown = useCallback(
-    (e: any, b: WorldBlock) => {
-      e.stopPropagation();
-      const eye = (e?.ray?.camera?.position as THREE.Vector3) ?? new THREE.Vector3(0, 2.6, 0);
-
-      if (e.button === 0) {
-        remove(b.pos[0], b.pos[1], b.pos[2]);
-      } else if (e.button === 2) {
-        const normalMatrix = new THREE.Matrix3().getNormalMatrix(e.object.matrixWorld);
-        const worldNormal = e.face?.normal.clone().applyMatrix3(normalMatrix).normalize();
-        const target = new THREE.Vector3().fromArray(b.pos).add(worldNormal ?? new THREE.Vector3(0, 1, 0));
-        const tx = Math.round(target.x), ty = Math.round(target.y), tz = Math.round(target.z);
-        if (blockOverlapsPlayer(eye, tx, ty, tz)) return;
-        place(tx, ty, tz, selected);
-      }
-    },
-    [place, remove, selected]
-  );
-
-  // RMB places on ground (with guard)
+  // RMB places on ground (place on current column surface, not y=0)
   const handleGroundPointerDown = useCallback(
     (e: any) => {
       e.stopPropagation();
       if (e.button === 2) {
         const p = e.point as THREE.Vector3;
-        const x = roundToGrid(p.x), z = roundToGrid(p.z), y = 0;
+        const x = Math.round(p.x);
+        const z = Math.round(p.z);
+        const y = getTopY(x, z) + 1; // place on visible surface + 1
         const eye = (e?.ray?.camera?.position as THREE.Vector3) ?? new THREE.Vector3(0, 2.6, 0);
         if (blockOverlapsPlayer(eye, x, y, z)) return;
         place(x, y, z, selected);
       }
     },
-    [place, selected]
+    [getTopY, place, selected]
   );
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "70vh", borderRadius: 12, overflow: "hidden", background: "#0b1020" }}>
+    <div
+      style={{
+        position: "relative",
+        width: "100%",
+        height: "70vh",
+        borderRadius: 12,
+        overflow: "hidden",
+        background: "#0b1020",
+      }}
+    >
       <Canvas
         id="minecraft-canvas"
         shadows
         camera={{ fov: 75, near: 0.1, far: 2000, position: [0, 1.8, 6] }}
-        onPointerDown={() => { if (!locked) lockRef.current?.lock?.(); }}
+        onPointerDown={() => {
+          if (!locked) lockRef.current?.lock?.();
+        }}
         onContextMenu={(e) => e.preventDefault()}
+        gl={{ powerPreference: "high-performance" }}
       >
         {/* Lights */}
         <hemisphereLight args={[0xffffff, 0x223344, 0.6]} />
@@ -88,14 +80,10 @@ export default function GamePage() {
         {/* Stream chunks around the camera */}
         <Streamer updateAround={updateAround} />
 
-        {/* World */}
-        <BlocksOptimized
-          blocks={blocks}
-          place={place}
-          remove={remove}
-          selected={selected}
-        />
-        {/* Optional: keep a massive ground plane for clicks; terrain already provides blocks */}
+        {/* World (instanced for perf; handles its own block click events) */}
+        <BlocksOptimized blocks={blocks} place={place} remove={remove} selected={selected} />
+
+        {/* Optional: large click plane for easy placement; uses surface height */}
         <Ground onPointerDown={handleGroundPointerDown} />
 
         {/* Player & mouse-look */}

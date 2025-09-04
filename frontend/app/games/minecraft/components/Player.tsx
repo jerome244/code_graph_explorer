@@ -7,7 +7,7 @@ import { BACKWARD_KEYS, FORWARD_KEYS, LEFT_KEYS, RIGHT_KEYS } from "../lib/utils
 import { depenetrate, moveWithCollisions, PLAYER_HEIGHT } from "../lib/physics";
 import { heightAt } from "../lib/worldgen";
 
-export default function Player({ hasBlock }: { hasBlock: (x: number, y: number, z: number) => boolean }) {
+export default function Player({ hasBlock, paused = false }: { hasBlock: (x: number, y: number, z: number) => boolean; paused?: boolean }) {
   const { camera } = useThree();
 
   // state
@@ -49,6 +49,8 @@ export default function Player({ hasBlock }: { hasBlock: (x: number, y: number, 
   }, [camera]);
 
   useFrame((state, dt) => {
+    if (paused) { return; }
+
     const now = state.clock.elapsedTime * 1000;
     const frameDtMs = Math.min(50, now - (lastFrameTime.current || now));
     lastFrameTime.current = now;

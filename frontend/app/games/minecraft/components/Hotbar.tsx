@@ -4,13 +4,15 @@ import { useEffect } from "react";
 import { BLOCKS } from "../lib/constants";
 import type { BlockId } from "../lib/types";
 
-export default function Hotbar({ selected, setSelected }: { selected: BlockId; setSelected: (n: BlockId) => void }) {
+export default function Hotbar({ selected, setSelected, disabled = false }: { selected: BlockId; setSelected: (n: BlockId) => void; disabled?: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (disabled) return;
       const n = parseInt(e.key, 10);
       if (n >= 1 && n <= 7) setSelected(n as BlockId);
     };
     const onWheel = (e: WheelEvent) => {
+      if (disabled) return;
       setSelected((prev) => {
         let next = (prev + (e.deltaY > 0 ? 1 : -1)) as BlockId;
         if (next < 1) next = 7;

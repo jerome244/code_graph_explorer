@@ -12,6 +12,7 @@ import Hotbar from "./components/Hotbar";
 import Player from "./components/Player";
 import OtherPlayers from "./components/OtherPlayers";
 import ConnectionStatus from "./components/ConnectionStatus";
+import InventoryOverlay from "./components/InventoryOverlay";
 
 import { useInfiniteWorld } from "./hooks/useInfiniteWorld";
 import { blockOverlapsPlayer } from "./lib/physics";
@@ -67,7 +68,47 @@ function MovementEmitter({ sendMove }: { sendMove: (x: number, y: number, z: num
 }
 
 export default function GamePage() {
-  const [selected, setSelected] = useState<BlockId>(1);
+  
+  // --- Inventory UI state ---
+  const [inventoryOpen, setInventoryOpen] = useState(false);
+  // Track cursor for overlay
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => { (window as any).lastMouseX = e.clientX; (window as any).lastMouseY = e.clientY; };
+    window.addEventListener("mousemove", onMove);
+    return () => window.removeEventListener("mousemove", onMove);
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === "i") {
+        e.preventDefault();
+        setInventoryOpen((v) => {
+          const next = !v;
+          if (next) { // opening
+            try { lockRef.current?.unlock?.(); } catch {}
+          }
+          return next;
+        });
+      }
+      if (e.key === "Escape" && inventoryOpen) {
+        setInventoryOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [inventoryOpen]);
+  // Simple slot arrays
+  type ItemStack = { id: BlockId; count: number } | null;
+  const [inv, setInv] = useState<ItemStack[]>(() => {
+    const a = Array.from({ length: 27 }, () => null) as ItemStack[];
+    // pre-fill a few example stacks
+    a[0] = { id: 1, count: 32 }; // Grass
+    a[1] = { id: 5, count: 18 }; // Wood
+    a[2] = { id: 7, count: 12 }; // Glass
+    return a;
+  });
+  const [craft, setCraft] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
+  const [hotbarInv, setHotbarInv] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
+const [selected, setSelected] = useState<BlockId>(1);
 
   const { blocks, place, remove, hasBlock, updateAround, getTopY } = useInfiniteWorld({
     viewDistance: 3,
@@ -239,7 +280,7 @@ export default function GamePage() {
         <Ground onPointerDown={handleGroundPointerDown} />
 
         {/* Player & mouse-look */}
-        <Player hasBlock={hasBlock} />
+        <Player hasBlock={hasBlock} paused={inventoryOpen} />
         <PointerLockControls
           ref={lockRef as any}
           makeDefault
@@ -252,12 +293,24 @@ export default function GamePage() {
       </Canvas>
 
       {/* HUD */}
-      <Crosshair />
-      <Hotbar selected={selected} setSelected={setSelected} />
+      {!inventoryOpen && <Crosshair />}
+      <Hotbar selected={selected} setSelected={setSelected} disabled={inventoryOpen} />
       <ConnectionStatus
         connected={connected}
         peers={[...peersRef.current.keys()]}
       />
-    </div>
+    
+      {/* Inventory Overlay */}
+      <InventoryOverlay
+        open={inventoryOpen}
+        onClose={() => setInventoryOpen(false)}
+        inventory={inv}
+        setInventory={(u) => setInv((curr) => u(curr))}
+        craft={craft}
+        setCraft={(u) => setCraft((curr) => u(curr))}
+        hotbar={hotbarInv}
+        setHotbar={(u) => setHotbarInv((curr) => u(curr))}
+      />
+</div>
   );
 }

@@ -1,421 +1,344 @@
 "use client";
 
-import * as React from "react";
-import { Canvas, useThree } from "@react-three/fiber";
-import { Sky, Environment, PointerLockControls } from "@react-three/drei";
+import React, { useEffect, useRef, useState, useCallback } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { PointerLockControls } from "@react-three/drei";
 import * as THREE from "three";
 
-import type { BlockId, Vec3 } from "./lib/types";
-import { BLOCKS } from "./lib/blocks";
-import { WORLD_SIZE, keyOf, parseKey, seedWorld, loadWorld, saveWorld } from "./lib/world";
-import Player, { PlayerAPI } from "./components/Player";
-import Voxel from "./components/Voxel";
-import GroundPlane from "./components/GroundPlane";
-import { PLAYER_RADIUS } from "./lib/collision";
+type Vec3 = [number, number, number];
+type BlockId = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
-const Y_MIN = 0;
-const Y_MAX = 64;
-const INTERACT_DIST = 6.5;
+const BLOCKS: Record<BlockId, { name: string; color: string; opacity?: number; transparent?: boolean }> = {
+  1: { name: "Grass", color: "#3fbf3f" },
+  2: { name: "Dirt", color: "#7a5230" },
+  3: { name: "Stone", color: "#8a8f98" },
+  4: { name: "Sand", color: "#e3d7a3" },
+  5: { name: "Wood", color: "#a26a2a" },
+  6: { name: "Brick", color: "#b04949" },
+  7: { name: "Glass", color: "#7dd3fc", opacity: 0.4, transparent: true },
+};
 
-export default function Game() {
-  const [selected, setSelected] = React.useState<BlockId>("GRASS");
-  const [blocks, setBlocks] = React.useState<Record<string, BlockId>>(
-    () => (typeof window === "undefined" ? seedWorld() : loadWorld() ?? seedWorld())
-  );
+const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
 
-  // For movement collisions (state-based is fine here)
-  const solid = React.useMemo(() => {
-    const s = new Set<string>();
-    for (const [k, id] of Object.entries(blocks)) if (id !== "EMPTY" && id !== "WATER") s.add(k);
-    return s;
-  }, [blocks]);
+function roundToGrid(n: number) {
+  return Math.round(n);
+}
 
-  // Live world for instant build checks
-  const blocksRef = React.useRef(blocks);
-  React.useEffect(() => { blocksRef.current = blocks; }, [blocks]);
+const FORWARD_KEYS = new Set(["w", "z", "ArrowUp"]);
+const BACKWARD_KEYS = new Set(["s", "ArrowDown"]);
+const LEFT_KEYS = new Set(["a", "q", "ArrowLeft"]);
+const RIGHT_KEYS = new Set(["d", "ArrowRight"]);
 
-  // ---------- Fullscreen ----------
-  const containerRef = React.useRef<HTMLDivElement | null>(null);
-  const [isFs, setIsFs] = React.useState(false);
-  const [mustFs, setMustFs] = React.useState(true);
+type WorldBlock = { pos: Vec3; id: BlockId };
 
-  const requestFullscreen = React.useCallback(async () => {
-    const el = containerRef.current as any;
-    if (!el) return;
-    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen || el.mozRequestFullScreen;
-    if (req) await req.call(el);
-  }, []);
-  const exitFullscreen = React.useCallback(async () => {
-    const doc: any = document;
-    const exit = doc.exitFullscreen || doc.webkitExitFullscreen || doc.msExitFullscreen || doc.mozCancelFullScreen;
-    if (exit) await exit.call(document);
-  }, []);
-  React.useEffect(() => {
-    const onChange = () => {
-      const fsEl =
-        (document as any).fullscreenElement ||
-        (document as any).webkitFullscreenElement ||
-        (document as any).mozFullScreenElement ||
-        (document as any).msFullscreenElement;
-      setIsFs(!!fsEl);
-    };
-    document.addEventListener("fullscreenchange", onChange);
-    (document as any).addEventListener?.("webkitfullscreenchange", onChange);
-    (document as any).addEventListener?.("mozfullscreenchange", onChange);
-    (document as any).addEventListener?.("MSFullscreenChange", onChange);
-    return () => {
-      document.removeEventListener("fullscreenchange", onChange);
-      (document as any).removeEventListener?.("webkitfullscreenchange", onChange);
-      (document as any).removeEventListener?.("mozfullscreenchange", onChange);
-      (document as any).removeEventListener?.("MSFullscreenChange", onChange);
-    };
-  }, []);
-
-  // ---------- Pointer lock & menu ----------
-  const plcRef = React.useRef<any>(null);
-  const playerRef = React.useRef<PlayerAPI>(null);
-  const [locked, setLocked] = React.useState(false);
-  const [menuOpen, setMenuOpen] = React.useState(false);
-  const importInputRef = React.useRef<HTMLInputElement | null>(null);
-
-  // Track recent Space press (to tolerate frame timing when you jump & click fast)
-  const lastJumpPress = React.useRef(0);
-  const recentlyJumped = React.useCallback(() => performance.now() - lastJumpPress.current < 160, []);
-  React.useEffect(() => {
-    const onDown = (e: KeyboardEvent) => { if (e.code === "Space") lastJumpPress.current = performance.now(); };
-    window.addEventListener("keydown", onDown);
-    return () => window.removeEventListener("keydown", onDown);
-  }, []);
-
-  // Digit hotkeys + save + ESC toggle
-  React.useEffect(() => {
-    const onKey = async (e: KeyboardEvent) => {
-      if (e.code.startsWith("Digit")) {
-        const n = Number(e.code.replace("Digit", ""));
-        if (n >= 1 && n <= BLOCKS.length) { e.preventDefault(); setSelected(BLOCKS[n - 1].id); }
+function useWorld(initialRange = 12) {
+  const [blocks, setBlocks] = useState<Map<string, WorldBlock>>(() => {
+    const m = new Map<string, WorldBlock>();
+    for (let x = -initialRange; x <= initialRange; x++) {
+      for (let z = -initialRange; z <= initialRange; z++) {
+        const y = 0;
+        m.set(key(x, y, z), { pos: [x, y, z], id: 1 });
       }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-        e.preventDefault(); saveWorld(blocks); alert("World saved locally."); return;
-      }
-      if (e.key === "Escape" || e.code === "KeyP") {
-        e.preventDefault();
-        if (menuOpen) {
-          if (mustFs && !isFs) { try { await requestFullscreen(); } catch {} }
-          setMenuOpen(false); plcRef.current?.lock?.();
-        } else {
-          setMenuOpen(true); plcRef.current?.unlock?.();
-        }
-      }
-    };
-    window.addEventListener("keydown", onKey, { capture: true });
-    return () => window.removeEventListener("keydown", onKey, { capture: true } as any);
-  }, [blocks, menuOpen, isFs, mustFs, requestFullscreen]);
+    }
+    return m;
+  });
 
-  // Mouse wheel cycles selected block
-  React.useEffect(() => {
-    const onWheel = (e: WheelEvent) => {
-      if (!containerRef.current || !containerRef.current.contains(e.target as Node)) return;
-      e.preventDefault();
-      const dir = e.deltaY > 0 ? 1 : -1;
-      setSelected((cur) => {
-        const idx = BLOCKS.findIndex((b) => b.id === cur);
-        return BLOCKS[(idx + dir + BLOCKS.length) % BLOCKS.length].id;
-      });
-    };
-    window.addEventListener("wheel", onWheel, { passive: false });
-    return () => window.removeEventListener("wheel", onWheel as any);
-  }, []);
+  const hasBlock = useCallback((x: number, y: number, z: number) => blocks.has(key(x, y, z)), [blocks]);
 
-  const onUnlock = React.useCallback(() => { setLocked(false); setMenuOpen(true); }, []);
-
-  // ---------- World helpers ----------
-  const blockEntries = React.useMemo(
-    () => Object.entries(blocks).map(([k, id]) => ({ id, pos: parseKey(k) as Vec3 })),
-    [blocks]
-  );
-
-  // Sync write (state + live ref)
-  function placeAtNow(pos: Vec3, id: BlockId) {
-    const [x, y, z] = pos;
-    if (x < 0 || x >= WORLD_SIZE || z < 0 || z >= WORLD_SIZE || y < Y_MIN || y > Y_MAX) return;
-    const k = keyOf(pos);
+  const place = useCallback((x: number, y: number, z: number, id: BlockId) => {
     setBlocks((prev) => {
-      const next = { ...prev };
-      if (id === "EMPTY") delete next[k]; else next[k] = id;
+      const k = key(x, y, z);
+      if (prev.has(k)) return prev;
+      const next = new Map(prev);
+      next.set(k, { pos: [x, y, z], id });
       return next;
     });
-    if (id === "EMPTY") delete (blocksRef.current as any)[k];
-    else (blocksRef.current as any)[k] = id;
-  }
-
-  const onSave = () => { saveWorld(blocks); alert("World saved in your browser."); };
-  const onLoad = () => { const m = loadWorld(); if (!m) return alert("No saved world found."); setBlocks(m); blocksRef.current = m; };
-  const onClear = () => { if (!confirm("Clear the world? This won't remove your saved copy.")) return; setBlocks({}); blocksRef.current = {}; };
-  const onExport = () => {
-    const blob = new Blob([JSON.stringify(blocks)], { type: "application/json" });
-    const url = URL.createObjectURL(blob); const a = document.createElement("a");
-    a.href = url; a.download = "minecraft-world-3d.json"; a.click(); URL.revokeObjectURL(url);
-  };
-  const onImport = async (f: File) => {
-    try { const text = await f.text(); const parsed = JSON.parse(text);
-      if (!parsed || typeof parsed !== "object") throw new Error(); setBlocks(parsed); blocksRef.current = parsed;
-    } catch { alert("Invalid world file."); }
-  };
-
-  // Start play (first click) => fullscreen + lock
-  const startPlay = React.useCallback(async () => {
-    try { setMustFs(true); if (!isFs) await requestFullscreen(); } catch {}
-    setMenuOpen(false); plcRef.current?.lock?.();
-  }, [isFs, requestFullscreen]);
-
-  // ===== Live world queries =====
-  const isFilled = React.useCallback((x: number, y: number, z: number) => {
-    if (x < 0 || x >= WORLD_SIZE || z < 0 || z >= WORLD_SIZE || y < Y_MIN || y > Y_MAX) return true;
-    const v = (blocksRef.current as any)[`${x},${y},${z}`];
-    return !!(v && v !== "EMPTY" && v !== "WATER");
   }, []);
 
-  // Robust “airborne” test:
-  // - If there is a block below, treat you as airborne only when your feet are > top+epsilon.
-  // - If no block below, you're airborne.
-  const isAirborneNow = React.useCallback(() => {
-    const feet = playerRef.current?.getFeet();
-    if (!feet) return false;
-    const bx = Math.floor(feet.x);
-    const by = Math.floor(feet.y - 0.001);
-    const bz = Math.floor(feet.z);
-    if (isFilled(bx, by, bz)) {
-      const top = by + 1;
-      return feet.y > top + 0.02; // 2 cm clearance
+  const remove = useCallback((x: number, y: number, z: number) => {
+    setBlocks((prev) => {
+      const k = key(x, y, z);
+      if (!prev.has(k)) return prev;
+      const next = new Map(prev);
+      next.delete(k);
+      return next;
+    });
+  }, []);
+
+  return { blocks, place, remove, hasBlock };
+}
+
+function Player() {
+  const { camera } = useThree();
+  const vel = useRef(new THREE.Vector3());
+  const dir = useRef(new THREE.Vector3());
+  const onGround = useRef(true);
+  const pressed = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => pressed.current.add(e.key.toLowerCase());
+    const up = (e: KeyboardEvent) => pressed.current.delete(e.key.toLowerCase());
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
+  }, []);
+
+  useEffect(() => {
+    camera.position.set(0, 1.8, 6);
+  }, [camera]);
+
+  useFrame((_, dt) => {
+    const SPEED = 6;
+    const GRAVITY = 24;
+    const JUMP_V = 8;
+
+    const forward = Array.from(pressed.current).some((k) => FORWARD_KEYS.has(k));
+    const backward = Array.from(pressed.current).some((k) => BACKWARD_KEYS.has(k));
+    const left = Array.from(pressed.current).some((k) => LEFT_KEYS.has(k));
+    const right = Array.from(pressed.current).some((k) => RIGHT_KEYS.has(k));
+
+    // +1 forward, -1 backward; +1 right, -1 left
+    const fAxis = (forward ? 1 : 0) + (backward ? -1 : 0);
+    const rAxis = (right ? 1 : 0) + (left ? -1 : 0);
+
+    dir.current.set(rAxis, 0, fAxis);
+    if (dir.current.lengthSq() > 0) dir.current.normalize();
+
+    const forwardVec = new THREE.Vector3();
+    camera.getWorldDirection(forwardVec);
+    forwardVec.y = 0;
+    if (forwardVec.lengthSq() > 0) forwardVec.normalize();
+
+    // Right vector (forward × up gives +X when looking down -Z)
+    const rightVec = new THREE.Vector3().crossVectors(forwardVec, new THREE.Vector3(0, 1, 0)).normalize();
+
+    const move = new THREE.Vector3();
+    move.addScaledVector(forwardVec, dir.current.z);
+    move.addScaledVector(rightVec, dir.current.x);
+    if (move.lengthSq() > 0) move.normalize();
+
+    const sprint = pressed.current.has("shift") && !pressed.current.has(" ");
+    const speed = SPEED * (sprint ? 1.5 : 1);
+
+    camera.position.addScaledVector(move, speed * dt);
+
+    if (pressed.current.has(" ") && onGround.current) {
+      vel.current.y = JUMP_V;
+      onGround.current = false;
     }
-    return true;
-  }, [isFilled]);
+    vel.current.y -= GRAVITY * dt;
+    camera.position.y += vel.current.y * dt;
 
-  function voxelRaycast(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number) {
-    // DDA using live world
-    const pos = new THREE.Vector3(Math.floor(origin.x), Math.floor(origin.y), Math.floor(origin.z));
-    const stepX = dir.x > 0 ? 1 : -1, stepY = dir.y > 0 ? 1 : -1, stepZ = dir.z > 0 ? 1 : -1;
-    const invX = dir.x !== 0 ? 1 / Math.abs(dir.x) : Infinity;
-    const invY = dir.y !== 0 ? 1 / Math.abs(dir.y) : Infinity;
-    const invZ = dir.z !== 0 ? 1 / Math.abs(dir.z) : Infinity;
-    const frac = (v: number) => v - Math.floor(v);
-    let tMaxX = dir.x > 0 ? (1 - frac(origin.x)) * invX : frac(origin.x) * invX;
-    let tMaxY = dir.y > 0 ? (1 - frac(origin.y)) * invY : frac(origin.y) * invY;
-    let tMaxZ = dir.z > 0 ? (1 - frac(origin.z)) * invZ : frac(origin.z) * invZ;
-    let t = 0;
-    for (let i = 0; i < 256; i++) {
-      if (tMaxX < tMaxY && tMaxX < tMaxZ) { pos.x += stepX; t = tMaxX; tMaxX += invX;
-        if (t > maxDist) break; if (isFilled(pos.x, pos.y, pos.z)) return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [-stepX, 0, 0] as Vec3 }; }
-      else if (tMaxY < tMaxZ) { pos.y += stepY; t = tMaxY; tMaxY += invY;
-        if (t > maxDist) break; if (isFilled(pos.x, pos.y, pos.z)) return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [0, -stepY, 0] as Vec3 }; }
-      else { pos.z += stepZ; t = tMaxZ; tMaxZ += invZ;
-        if (t > maxDist) break; if (isFilled(pos.x, pos.y, pos.z)) return { hit: [pos.x, pos.y, pos.z] as Vec3, face: [0, 0, -stepZ] as Vec3 }; }
+    const groundEyeY = 1.6;
+    if (camera.position.y < groundEyeY) {
+      camera.position.y = groundEyeY;
+      vel.current.y = 0;
+      onGround.current = true;
     }
-    return { hit: null as Vec3 | null, face: null as Vec3 | null };
-  }
+  });
 
-  const camRef = React.useRef<THREE.PerspectiveCamera | null>(null);
-  const handleBuildClick = React.useCallback((button: number, shift: boolean) => {
-    if (!locked || menuOpen || !camRef.current) return;
+  return null;
+}
 
-    const cam = camRef.current!;
-    const origin = new THREE.Vector3().copy(cam.position);
-    const dir = new THREE.Vector3(); cam.getWorldDirection(dir).normalize();
+function Blocks({
+  blocks,
+  onBlockPointerDown,
+}: {
+  blocks: Map<string, WorldBlock>;
+  onBlockPointerDown: (e: any, b: WorldBlock) => void;
+}) {
+  return (
+    <group>
+      {Array.from(blocks.values()).map((b) => (
+        <mesh
+          key={key(b.pos[0], b.pos[1], b.pos[2])}
+          position={b.pos}
+          onPointerDown={(e) => onBlockPointerDown(e, b)}
+          castShadow
+          receiveShadow
+        >
+          <boxGeometry args={[1, 1, 1]} />
+          <meshStandardMaterial
+            color={BLOCKS[b.id].color}
+            opacity={BLOCKS[b.id].opacity}
+            transparent={BLOCKS[b.id].transparent}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+}
 
-    const { hit, face } = voxelRaycast(origin, dir, INTERACT_DIST);
-    if (!hit || !face) return;
+function Ground({ onPointerDown }: { onPointerDown: (e: any) => void }) {
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.5, 0]} onPointerDown={onPointerDown} receiveShadow>
+      <planeGeometry args={[500, 500]} />
+      <meshStandardMaterial color="#9ec8a0" />
+    </mesh>
+  );
+}
 
-    // Remove: right-click or Shift
-    if (button === 2 || shift) { placeAtNow(hit, "EMPTY"); return; }
-
-    // March outward along face normal until first empty cell
-    let tx = hit[0] + face[0], ty = hit[1] + face[1], tz = hit[2] + face[2];
-    for (let i = 0; i < 32 && isFilled(tx, ty, tz); i++) { tx += face[0]; ty += face[1]; tz += face[2]; }
-    const target: Vec3 = [tx, ty, tz];
-
-    // If target sits under player horizontally, require airborne OR a very recent Space tap
-    const feet = playerRef.current?.getFeet();
-    if (feet) {
-      const cx = target[0] + 0.5, cz = target[2] + 0.5;
-      const dx = Math.abs(feet.x - cx), dz = Math.abs(feet.z - cz);
-      const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
-      if (inside && !(isAirborneNow() || recentlyJumped())) {
-        return; // still on ground: don't allow placing under yourself
-      }
-    }
-
-    // Place the block
-    placeAtNow(target, selected);
-
-    // If we placed under player while airborne, nudge them up so it feels smooth
-    if (feet) {
-      const cx = target[0] + 0.5, cz = target[2] + 0.5;
-      const dx = Math.abs(feet.x - cx), dz = Math.abs(feet.z - cz);
-      const inside = dx <= 0.5 + PLAYER_RADIUS && dz <= 0.5 + PLAYER_RADIUS;
-      const topY = target[1] + 1.0;
-      if (inside && feet.y < topY + 0.001) {
-        const need = (topY + 0.02) - feet.y; // slightly larger epsilon
-        if (need > 0) playerRef.current?.nudgeUp(need, true);
-      }
-    }
-  }, [locked, menuOpen, selected, isFilled, isAirborneNow, recentlyJumped]);
-
-  function CameraGrab({ target }: { target: React.MutableRefObject<THREE.PerspectiveCamera | null> }) {
-    const { camera } = useThree();
-    React.useEffect(() => { target.current = camera as THREE.PerspectiveCamera; }, [camera]);
-    return null;
-  }
+function Hotbar({ selected, setSelected }: { selected: BlockId; setSelected: (n: BlockId) => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const n = parseInt(e.key, 10);
+      if (n >= 1 && n <= 7) setSelected(n as BlockId);
+    };
+    const onWheel = (e: WheelEvent) => {
+      setSelected((prev) => {
+        let next = prev + (e.deltaY > 0 ? 1 : -1);
+        if (next < 1) next = 7;
+        if (next > 7) next = 1;
+        return next as BlockId;
+      });
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("wheel", onWheel);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("wheel", onWheel);
+    };
+  }, [setSelected]);
 
   return (
     <div
-      ref={containerRef}
       style={{
-        position: "relative",
-        height: isFs ? "100dvh" : 600,
-        width: "100%",
-        borderRadius: isFs ? 0 : 12,
-        overflow: "hidden",
-        border: isFs ? "none" : "1px solid #e5e7eb",
-        overscrollBehavior: "contain",
+        position: "absolute",
+        bottom: 16,
+        left: "50%",
+        transform: "translateX(-50%)",
+        display: "flex",
+        gap: 8,
       }}
-      onContextMenu={(e) => e.preventDefault()}
     >
-      {/* Hotbar */}
-      <div style={hotbarWrap(menuOpen)}>
-        {BLOCKS.map((b) => (
+      {(Array.from({ length: 7 }) as unknown as BlockId[])
+        .map((_, i) => (i + 1) as BlockId)
+        .map((id) => (
           <button
-            key={b.id}
-            onClick={() => setSelected(b.id)}
-            title={`${b.label}${b.key ? ` (Key ${b.key})` : ""}`}
+            key={id}
+            onClick={() => setSelected(id)}
             style={{
-              ...hotBtn,
-              outline: selected === b.id ? "3px solid #2563eb" : "1px solid #e5e7eb",
-              background: b.color,
+              width: 44,
+              height: 44,
+              borderRadius: 8,
+              border: id === selected ? "3px solid #2563eb" : "2px solid #1f2937",
+              background: BLOCKS[id].color,
+              opacity: BLOCKS[id].transparent ? 0.7 : 1,
+              boxShadow: id === selected ? "0 0 0 4px rgba(37,99,235,.2)" : undefined,
+              cursor: "pointer",
             }}
-          >
-            {b.label}{b.key && <span style={badge}>{b.key}</span>}
-          </button>
+            title={`${id} – ${BLOCKS[id].name}`}
+          />
         ))}
-      </div>
-
-      {/* 3D */}
-      <Canvas
-        shadows
-        camera={{ position: [WORLD_SIZE * 0.8, WORLD_SIZE * 0.6, WORLD_SIZE * 0.8], fov: 50 }}
-        onPointerDownCapture={(e: any) => {
-          if (!locked && !menuOpen) { setMustFs(true); startPlay(); e.stopPropagation(); return; }
-          const btn = e.button ?? 0; const shift = !!e.shiftKey;
-          handleBuildClick(btn, shift);
-        }}
-      >
-        <Sky sunPosition={[100, 20, 100]} />
-        <ambientLight intensity={0.5} />
-        <directionalLight castShadow position={[20, 25, 10]} intensity={0.8} shadow-mapSize-width={2048} shadow-mapSize-height={2048} />
-
-        <PointerLockControls
-          ref={plcRef}
-          onLock={() => { setLocked(true); setMenuOpen(false); }}
-          onUnlock={() => { setLocked(false); setMenuOpen(true); }}
-        />
-
-        <CameraGrab target={camRef} />
-
-        {/* render world (clicks handled via crosshair) */}
-        <GroundPlane size={WORLD_SIZE} onPlace={() => {}} disabled />
-        {Object.entries(blocks).map(([k, id]) => {
-          const pos = parseKey(k) as Vec3;
-          return <Voxel key={k} id={id} pos={pos} onPlaceAdjacent={() => {}} onRemove={() => {}} disabled />;
-        })}
-
-        <Player ref={playerRef} active={locked} solid={solid} worldSize={WORLD_SIZE} />
-        <Environment preset="city" />
-      </Canvas>
-
-      {/* HUD */}
-      <div style={hudHint}>
-        <span>
-          {locked
-            ? "Wheel change block · 1–7 digits select · Left place · Right/Shift remove · ZQSD/WASD · Space jump (must jump to place under you) · ESC toggles menu"
-            : "Click to start (fullscreen + mouse-look)"}
-        </span>
-      </div>
-
-      {/* Crosshair */}
-      {locked && <div style={crosshair} />}
-
-      {/* Start overlay */}
-      {!locked && !menuOpen && (
-        <button onClick={async () => { setMustFs(true); await startPlay(); }} style={startOverlay}>
-          Click to start (fullscreen + mouse-look)
-        </button>
-      )}
-
-      {/* Pause menu (only place to exit fullscreen) */}
-      {menuOpen && (
-        <div style={menuOverlay} onMouseDown={(e) => e.stopPropagation()}>
-          <div style={menuPanel}>
-            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>Paused</div>
-            <button style={menuBtn} onClick={async () => {
-              if (mustFs && !isFs) { try { await requestFullscreen(); } catch {} }
-              setMenuOpen(false); plcRef.current?.lock?.();
-            }}>Resume (lock mouse)</button>
-            <button style={menuBtn} onClick={onSave}>Save</button>
-            <button style={menuBtn} onClick={onLoad}>Load</button>
-            <button style={menuBtn} onClick={onExport}>Export</button>
-            <button style={menuBtn} onClick={() => importInputRef.current?.click()}>Import…</button>
-            <input
-              ref={importInputRef} type="file" accept="application/json" style={{ display: "none" }}
-              onChange={(e) => { const f = e.currentTarget.files?.[0]; if (f) (async () => { await onImport(f); })(); e.currentTarget.value = ""; }}
-            />
-            <button style={{ ...menuBtn, borderColor: "#dc2626" }} onClick={onClear}>Clear world</button>
-            <button style={menuBtn} onClick={async () => { setMustFs(false); await exitFullscreen(); }}>
-              Exit Fullscreen
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-/* UI styles */
-const hotbarWrap = (menuOpen: boolean): React.CSSProperties => ({
-  position: "absolute", left: 12, top: 12, display: "flex", gap: 8, flexWrap: "wrap",
-  pointerEvents: menuOpen ? "none" : "auto", zIndex: 20,
-});
-const hotBtn: React.CSSProperties = {
-  padding: "8px 12px", borderRadius: 8, border: "1px solid #e5e7eb",
-  fontSize: 14, fontWeight: 700, cursor: "pointer", minWidth: 90, textAlign: "center" as const,
-};
-const badge: React.CSSProperties = {
-  marginLeft: 8, padding: "2px 6px", borderRadius: 999, border: "1px solid #e5e7eb", background: "#fff", fontSize: 12,
-};
-const hudHint: React.CSSProperties = {
-  position: "absolute", bottom: 10, left: 12, right: 12, display: "flex",
-  justifyContent: "space-between", fontSize: 12, color: "#111827", opacity: 0.8, pointerEvents: "none",
-};
-const crosshair: React.CSSProperties = {
-  position: "absolute", left: "50%", top: "50%", width: 12, height: 12,
-  transform: "translate(-50%, -50%)", pointerEvents: "none", opacity: 0.7,
-  background:
-    "linear-gradient(#111827,#111827) left center/2px 12px no-repeat, \
-     linear-gradient(#111827,#111827) center top/12px 2px no-repeat, \
-     linear-gradient(#111827,#111827) right center/2px 12px no-repeat, \
-     linear-gradient(#111827,#111827) center bottom/12px 2px no-repeat",
-};
-const startOverlay: React.CSSProperties = {
-  position: "absolute", inset: 0, display: "grid", placeItems: "center",
-  background: "rgba(17,24,39,0.35)", color: "#fff", fontWeight: 800, fontSize: 16,
-  border: "none", cursor: "pointer", zIndex: 10,
-};
-const menuOverlay: React.CSSProperties = {
-  position: "absolute", inset: 0, background: "rgba(17,24,39,0.6)", display: "grid", placeItems: "center", zIndex: 30,
-};
-const menuPanel: React.CSSProperties = {
-  background: "#111827", color: "#fff", padding: 16, borderRadius: 12, minWidth: 280,
-  boxShadow: "0 10px 30px rgba(0,0,0,0.4)", display: "grid", gap: 8,
-};
-const menuBtn: React.CSSProperties = {
-  padding: "10px 12px", borderRadius: 8, border: "1px solid #374151",
-  background: "#1f2937", color: "#fff", cursor: "pointer", textAlign: "left", fontSize: 14,
-};
+function Crosshair() {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: "50%",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+        pointerEvents: "none",
+      }}
+    >
+      <div style={{ width: 2, height: 16, background: "#fff", margin: "-8px auto 0" }} />
+      <div style={{ width: 16, height: 2, background: "#fff", margin: "-1px auto" }} />
+    </div>
+  );
+}
+
+export default function Game() {
+  const [selected, setSelected] = useState<BlockId>(1);
+  const { blocks, place, remove } = useWorld(10);
+
+  // Pointer lock (for mouse look). Click canvas to enter; Esc to unlock.
+  const [locked, setLocked] = useState(false);
+  const lockRef = useRef<{ lock: () => void; unlock: () => void } | null>(null);
+
+  // LMB mines; RMB places adjacent
+  const handleBlockPointerDown = useCallback(
+    (e: any, b: WorldBlock) => {
+      e.stopPropagation();
+      if (e.button === 0) {
+        // mine
+        remove(b.pos[0], b.pos[1], b.pos[2]);
+      } else if (e.button === 2) {
+        // place adjacent to clicked face
+        const normalMatrix = new THREE.Matrix3().getNormalMatrix(e.object.matrixWorld);
+        const worldNormal = e.face?.normal.clone().applyMatrix3(normalMatrix).normalize();
+        const target = new THREE.Vector3().fromArray(b.pos).add(worldNormal ?? new THREE.Vector3(0, 1, 0));
+        place(Math.round(target.x), Math.round(target.y), Math.round(target.z), selected);
+      }
+    },
+    [place, remove, selected]
+  );
+
+  // RMB places on ground
+  const handleGroundPointerDown = useCallback(
+    (e: any) => {
+      e.stopPropagation();
+      if (e.button === 2) {
+        const p = e.point as THREE.Vector3;
+        const x = roundToGrid(p.x);
+        const z = roundToGrid(p.z);
+        const y = 0;
+        place(x, y, z, selected);
+      }
+    },
+    [place, selected]
+  );
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        width: "100%",
+        height: "70vh",
+        borderRadius: 12,
+        overflow: "hidden",
+        background: "#0b1020",
+      }}
+    >
+      <Canvas
+        id="minecraft-canvas"
+        shadows
+        camera={{ fov: 75, near: 0.1, far: 1000, position: [0, 1.8, 6] }}
+        onPointerDown={() => {
+          if (!locked) lockRef.current?.lock?.();
+        }}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        {/* Lights */}
+        <hemisphereLight args={[0xffffff, 0x223344, 0.6]} />
+        <directionalLight position={[10, 20, 10]} intensity={1} castShadow />
+
+        {/* Sky */}
+        <color attach="background" args={["#87CEEB"]} />
+
+        {/* World */}
+        <Blocks blocks={blocks} onBlockPointerDown={handleBlockPointerDown} />
+        <Ground onPointerDown={handleGroundPointerDown} />
+
+        {/* Player & mouse-look */}
+        <Player />
+        <PointerLockControls
+          ref={lockRef as any}
+          makeDefault
+          onLock={() => setLocked(true)}
+          onUnlock={() => setLocked(false)}
+        />
+      </Canvas>
+
+      {/* HUD */}
+      <Crosshair />
+      <Hotbar selected={selected} setSelected={setSelected} />
+    </div>
+  );
+}

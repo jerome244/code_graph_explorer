@@ -20,6 +20,9 @@ import { blockOverlapsPlayer } from "./lib/physics";
 import type { BlockId } from "./lib/types";
 import { GameSocket } from "./lib/ws";
 
+// 👇 tool helpers
+import { isToolItemId, type ToolItemId } from "./lib/items";
+
 // Drive chunk streaming from inside the Canvas
 function Streamer({ updateAround }: { updateAround: (p: THREE.Vector3) => void }) {
   const { camera } = useThree();
@@ -111,20 +114,21 @@ export default function GamePage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [inventoryOpen]);
 
-  // Inventory slots (blocks for now)
-  type ItemStack = { id: BlockId; count: number } | null;
+  // Inventory items can be a BlockId (number) or a ToolItemId (string)
+  type ItemStack = { id: BlockId | ToolItemId; count: number } | null;
 
   const [inv, setInv] = useState<ItemStack[]>(() => {
     const a = Array.from({ length: 27 }, () => null) as ItemStack[];
     a[0] = { id: 1, count: 32 };
     a[1] = { id: 5, count: 18 };
     a[2] = { id: 7, count: 12 };
+    a[3] = { id: "wooden_axe" as ToolItemId, count: 1 }; // sample tool
     return a;
   });
 
   const [craft, setCraft] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
 
-  // 🔹 Hotbar starts empty by default
+  // 🔹 Hotbar starts empty by default (can hold blocks or tools)
   const [hotbarInv, setHotbarInv] = useState<ItemStack[]>(
     () => Array.from({ length: 9 }, () => null) as ItemStack[]
   );
@@ -132,23 +136,34 @@ export default function GamePage() {
   // 🔹 Which hotbar slot is active (0..8), controlled by Hotbar (1..9 keys & wheel)
   const [selectedSlot, setSelectedSlot] = useState(0);
   const selectedStack: ItemStack = hotbarInv[selectedSlot] ?? null;
-  const selectedBlockId: BlockId | null = selectedStack ? selectedStack.id : null;
 
-  // Add mined items into inventory
+  // What can we place?
+  const selectedBlockId: BlockId | null =
+    selectedStack && typeof selectedStack.id === "number" ? (selectedStack.id as BlockId) : null;
+
+  // What tool are we mining with?
+  const currentTool: ToolItemId | null =
+    selectedStack && typeof selectedStack.id === "string" && isToolItemId(selectedStack.id)
+      ? (selectedStack.id as ToolItemId)
+      : null;
+
+  // Add mined items into inventory (blocks only)
   const addItemToInventory = useCallback((id: BlockId, amount: number = 1) => {
     setInv((curr) => {
       let remain = amount;
       const next = curr.slice();
 
+      // stack into same-id stacks
       for (let i = 0; i < next.length && remain > 0; i++) {
         const it = next[i];
-        if (it && it.id === id && it.count < 64) {
+        if (it && typeof it.id === "number" && it.id === id && it.count < 64) {
           const room = 64 - it.count;
           const put = Math.min(room, remain);
           next[i] = { id, count: it.count + put };
           remain -= put;
         }
       }
+      // fill empty slots
       for (let i = 0; i < next.length && remain > 0; i++) {
         if (!next[i]) {
           const put = Math.min(64, remain);
@@ -293,7 +308,6 @@ export default function GamePage() {
     const tick = () => {
       if (progressFillRef.current) {
         const v = Math.max(0, Math.min(1, progressValueRef.current));
-        // GPU-friendly, no layout thrash
         progressFillRef.current.style.transform = `scaleX(${v})`;
       }
       rafRef.current = requestAnimationFrame(tick);
@@ -304,7 +318,7 @@ export default function GamePage() {
     };
   }, []);
 
-  // Called by BlocksOptimized every frame (we don't re-render on each call)
+  // Called by BlocksOptimized each frame; we don't re-render every time
   const setMiningProgress = useCallback((p: number | null) => {
     if (p == null) {
       // Linger at 100% briefly if we finished
@@ -316,7 +330,6 @@ export default function GamePage() {
       }
       return;
     }
-    // Update the ref'd value and ensure the bar is visible
     progressValueRef.current = p;
     if (!progressVisible) setProgressVisible(true);
   }, [progressVisible]);
@@ -366,10 +379,11 @@ export default function GamePage() {
           }}
           remove={(x, y, z) => wrappedRemove(x, y, z)} // legacy fallback
           removeWithDrop={(x, y, z, allowDrop) => wrappedRemove(x, y, z, true, allowDrop)}
-          // BlocksOptimized requires a BlockId; we pass a dummy when empty, but the guarded 'place' above prevents placement.
+          // 'selected' is only used for RMB placement inside BlocksOptimized; we guard above.
           selected={(selectedBlockId ?? 1) as BlockId}
-          currentTool={null}
-          miningSpeedMultiplier={0.6}     // readable speed; change to taste
+          // 👇 THIS makes tools affect mining speed
+          currentTool={currentTool}
+          miningSpeedMultiplier={0.6} // overall pacing; keep differences visible
           onMiningProgress={setMiningProgress}
         />
 

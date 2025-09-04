@@ -131,7 +131,7 @@ export default function BlocksOptimized({
               >)[Number(id)];
             if (!spec) return null;
 
-            const hardness = Math.max(0.05, spec.hardness ?? 0.25);
+            const hardness = Math.max(0.05, spec.hardness ?? 0.25); // seconds baseline
 
             return (
               <instancedMesh
@@ -166,7 +166,8 @@ export default function BlocksOptimized({
                   if (button === 0) {
                     // LMB: start timed mining with tool effects
                     const effect = getMiningEffectFor(currentTool ?? null, Number(id) as BlockId);
-                    const needed = hardness / Math.max(0.1, effect.speedMultiplier);
+                    const speed  = Math.max(0.05, effect.speedMultiplier);
+                    const needed = Math.max(0.18, hardness / speed); // never faster than ~180ms baseline
                     miningRef.current = {
                       x: bx,
                       y: by,

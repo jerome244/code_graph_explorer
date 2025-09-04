@@ -3,16 +3,16 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
+
 import { BLOCKS } from "../lib/constants";
 import type { BlockId, WorldBlock } from "../lib/types";
 import { CHUNK_SIZE, chunkKey } from "../lib/chunks";
 import { blockOverlapsPlayer } from "../lib/physics";
+import { getMiningEffectFor, type ToolItemId } from "../lib/items";
 
-type OnMiningProgress = (p: number | null) => void;
-
-// Small helper to group blocks by chunk and by block id
+// ---- Group blocks by chunk and by block id into float arrays ----
 function groupByChunkAndId(blocks: Map<string, WorldBlock>) {
-  const groups = new Map<string, Map<BlockId, Float32Array>>(); // chunkKey -> (id -> positions float32[x,y,z]*)
+  const groups = new Map<string, Map<BlockId, Float32Array>>(); // chunkKey -> (id -> positions xyz...)
   const counts = new Map<string, Map<BlockId, number>>();
 
   for (const b of blocks.values()) {
@@ -22,101 +22,98 @@ function groupByChunkAndId(blocks: Map<string, WorldBlock>) {
 
     if (!groups.has(ck)) groups.set(ck, new Map());
     if (!counts.has(ck)) counts.set(ck, new Map());
-    const cntId = counts.get(ck)!;
-
-    cntId.set(b.id, (cntId.get(b.id) ?? 0) + 1);
+    const byIdCount = counts.get(ck)!;
+    byIdCount.set(b.id, (byIdCount.get(b.id) ?? 0) + 1);
   }
 
-  // allocate typed arrays
-  for (const [ck, cntId] of counts) {
+  for (const [ck, byIdCount] of counts) {
     const byId = groups.get(ck)!;
-    for (const [id, count] of cntId) {
+    for (const [id, count] of byIdCount) {
       byId.set(id, new Float32Array(count * 3));
     }
   }
 
-  // fill arrays
-  const filled = new Map<string, Map<BlockId, number>>();
+  const cursors = new Map<string, Map<BlockId, number>>();
   for (const b of blocks.values()) {
     const cx = Math.floor(b.pos[0] / CHUNK_SIZE);
     const cz = Math.floor(b.pos[2] / CHUNK_SIZE);
     const ck = chunkKey(cx, cz);
     const byId = groups.get(ck)!;
-    if (!filled.has(ck)) filled.set(ck, new Map());
-    const cursors = filled.get(ck)!;
+    if (!cursors.has(ck)) cursors.set(ck, new Map());
+    const cur = cursors.get(ck)!;
 
     const arr = byId.get(b.id)!;
-    const i = cursors.get(b.id) ?? 0;
+    const i = cur.get(b.id) ?? 0;
     arr[i * 3 + 0] = b.pos[0];
     arr[i * 3 + 1] = b.pos[1];
     arr[i * 3 + 2] = b.pos[2];
-    cursors.set(b.id, i + 1);
+    cur.set(b.id, i + 1);
   }
 
-  return groups; // Map<chunkKey, Map<id, Float32Array positions>>
+  return groups; // Map<chunkKey, Map<BlockId, Float32Array>>
 }
 
 export default function BlocksOptimized({
   blocks,
   place,
-  remove,
+  remove, // legacy fallback
+  removeWithDrop, // preferred for controlling drops
   selected,
-  miningSpeedMultiplier = 1,       // 👈 optional: boost/slow mining, default 1x
-  onMiningProgress,                // 👈 report progress 0..1 (or null when idle)
+  currentTool = null,
+  miningSpeedMultiplier = 1,
+  onMiningProgress,
 }: {
   blocks: Map<string, WorldBlock>;
   place: (x: number, y: number, z: number, id: BlockId) => void;
   remove: (x: number, y: number, z: number) => void;
+  removeWithDrop?: (x: number, y: number, z: number, allowDrop: boolean) => void;
   selected: BlockId;
+  currentTool?: ToolItemId | null;
   miningSpeedMultiplier?: number;
-  onMiningProgress?: OnMiningProgress;
+  onMiningProgress?: (p: number | null) => void;
 }) {
   const { camera } = useThree();
 
-  // positions grouped per-chunk & block-id
   const groups = useMemo(() => groupByChunkAndId(blocks), [blocks]);
-
-  // shared geometry
   const box = useMemo(() => new THREE.BoxGeometry(1, 1, 1), []);
 
-  // --- Mining state ---
+  // --- Timed mining state ---
   const miningRef = useRef<{
-    x: number; y: number; z: number;
-    needed: number;       // seconds to finish
-    elapsed: number;      // seconds accumulated
+    x: number;
+    y: number;
+    z: number;
+    needed: number;      // seconds to finish
+    elapsed: number;     // accumulated seconds
+    allowDrop: boolean;  // drop rule captured at start
     active: boolean;
   } | null>(null);
 
-  // Drive the timed mining each frame
   useFrame((_, delta) => {
     const m = miningRef.current;
     if (!m || !m.active) return;
 
     m.elapsed += delta * Math.max(0.0001, miningSpeedMultiplier);
-
     const p = Math.min(1, m.elapsed / Math.max(0.001, m.needed));
     onMiningProgress?.(p);
 
     if (p >= 1) {
-      // done: remove block and clear state
-      remove(m.x, m.y, m.z);
+      if (removeWithDrop) removeWithDrop(m.x, m.y, m.z, m.allowDrop);
+      else remove(m.x, m.y, m.z);
       miningRef.current = null;
       onMiningProgress?.(null);
     }
   });
 
-  // Cancel mining on global mouseup (if user releases off the block)
+  // Cancel mining if mouse released anywhere
   useEffect(() => {
-    const up = () => {
+    const onUp = () => {
       if (miningRef.current) {
-        miningRef.current.active = false;
-        miningRef.current.elapsed = 0;
         miningRef.current = null;
         onMiningProgress?.(null);
       }
     };
-    window.addEventListener("mouseup", up);
-    return () => window.removeEventListener("mouseup", up);
+    window.addEventListener("mouseup", onUp);
+    return () => window.removeEventListener("mouseup", onUp);
   }, [onMiningProgress]);
 
   return (
@@ -127,21 +124,13 @@ export default function BlocksOptimized({
             const count = posArray.length / 3;
             if (count === 0) return null;
 
-            // Guard against unknown block IDs
-            const key = Number(id) as BlockId;
             const spec =
               (BLOCKS as Record<
                 number,
-                { color: THREE.ColorRepresentation; opacity?: number; transparent?: boolean; hardness?: number } | undefined
-              >)[key];
-            if (!spec) {
-              if (process.env.NODE_ENV !== "production") {
-                console.warn("[BlocksOptimized] Unknown block id:", id, "— skipping these instances");
-              }
-              return null;
-            }
+                { name: string; color: any; opacity?: number; transparent?: boolean; hardness?: number } | undefined
+              >)[Number(id)];
+            if (!spec) return null;
 
-            // Mining time (seconds) for this block type. Fallback to 0.25s.
             const hardness = Math.max(0.05, spec.hardness ?? 0.25);
 
             return (
@@ -150,37 +139,41 @@ export default function BlocksOptimized({
                 args={[box, undefined as any, count]}
                 frustumCulled={false}
                 onUpdate={(mesh) => {
-                  const obj3d = new THREE.Object3D();
+                  const obj = new THREE.Object3D();
                   for (let i = 0; i < count; i++) {
-                    obj3d.position.set(
-                      posArray[i * 3],
+                    obj.position.set(
+                      posArray[i * 3 + 0],
                       posArray[i * 3 + 1],
                       posArray[i * 3 + 2]
                     );
-                    obj3d.updateMatrix();
-                    mesh.setMatrixAt(i, obj3d.matrix);
+                    obj.updateMatrix();
+                    mesh.setMatrixAt(i, obj.matrix);
                   }
                   mesh.instanceMatrix.needsUpdate = true;
                 }}
                 onPointerDown={(e) => {
                   e.stopPropagation();
-
                   const instanceId = e.instanceId;
                   if (instanceId == null) return;
 
                   const pe = e.nativeEvent as PointerEvent;
-                  const button = pe.button;
+                  const button = pe?.button ?? (e as any)?.button;
 
                   const bx = Math.round(posArray[instanceId * 3 + 0]);
                   const by = Math.round(posArray[instanceId * 3 + 1]);
                   const bz = Math.round(posArray[instanceId * 3 + 2]);
 
                   if (button === 0) {
-                    // LEFT = start timed mining (hold)
+                    // LMB: start timed mining with tool effects
+                    const effect = getMiningEffectFor(currentTool ?? null, Number(id) as BlockId);
+                    const needed = hardness / Math.max(0.1, effect.speedMultiplier);
                     miningRef.current = {
-                      x: bx, y: by, z: bz,
-                      needed: hardness,   // seconds per block type
+                      x: bx,
+                      y: by,
+                      z: bz,
+                      needed,
                       elapsed: 0,
+                      allowDrop: effect.allowDrop,
                       active: true,
                     };
                     onMiningProgress?.(0);
@@ -188,8 +181,8 @@ export default function BlocksOptimized({
                   }
 
                   if (button === 2) {
-                    // RIGHT = place adjacent on the face we clicked
-                    pe.preventDefault?.();
+                    // RMB: place adjacent on the face we clicked
+                    pe?.preventDefault?.();
 
                     const n = (e.face?.normal ?? new THREE.Vector3(0, 1, 0)).clone();
                     const nx = Math.sign(n.x) * (Math.abs(n.x) > 0.5 ? 1 : 0);
@@ -200,7 +193,8 @@ export default function BlocksOptimized({
                     const y = by + ny;
                     const z = bz + nz;
 
-                    const eye = (camera.position as THREE.Vector3) ?? new THREE.Vector3(0, 2.6, 0);
+                    const eye =
+                      (camera.position as THREE.Vector3) ?? new THREE.Vector3(0, 2.6, 0);
                     if (blockOverlapsPlayer(eye, x, y, z)) return;
 
                     // stop any mining in progress
@@ -213,7 +207,6 @@ export default function BlocksOptimized({
                   }
                 }}
                 onPointerUp={() => {
-                  // releasing on the block cancels mining
                   if (miningRef.current) {
                     miningRef.current = null;
                     onMiningProgress?.(null);

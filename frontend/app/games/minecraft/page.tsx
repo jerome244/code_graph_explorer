@@ -236,12 +236,12 @@ export default function GamePage() {
   );
 
   const wrappedRemove = useCallback(
-    (x: number, y: number, z: number, emit = true) => {
+    (x: number, y: number, z: number, emit = true, allowDrop = true) => {
       const ck = cellKey(x, y, z);
       const b = blocks.get(ck);
       remove(x, y, z);
       if (emit) {
-        if (b) addItemToInventory(b.id, 1);
+        if (b && allowDrop) addItemToInventory(b.id, 1);
         socketRef.current?.send({ type: "remove_block", x, y, z });
       }
     },
@@ -312,10 +312,11 @@ export default function GamePage() {
         <BlocksOptimized
           blocks={blocks}
           place={(x, y, z, id) => wrappedPlace(x, y, z, id)}
-          remove={(x, y, z) => wrappedRemove(x, y, z)}
+          remove={(x, y, z) => wrappedRemove(x, y, z)} // legacy fallback
+          removeWithDrop={(x, y, z, allowDrop) => wrappedRemove(x, y, z, true, allowDrop)}
           selected={selected}
-          miningSpeedMultiplier={1}                 // tweak later for tools
-          onMiningProgress={setMiningProgress}      // show HUD bar
+          currentTool={null /* TODO: set from your hotbar selection */}
+          onMiningProgress={setMiningProgress}   // 👈 THIS was missing
         />
 
         {/* Large ground plane for easy placement when not clicking a block */}
@@ -354,6 +355,7 @@ export default function GamePage() {
             boxShadow: "0 2px 8px rgba(0,0,0,0.25) inset",
             overflow: "hidden",
             zIndex: 20,
+            pointerEvents: "none", // won't block clicks
           }}
         >
           <div

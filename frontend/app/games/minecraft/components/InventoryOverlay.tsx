@@ -3,14 +3,17 @@
 import React, { useEffect, useState } from "react";
 import { BLOCKS } from "../lib/constants";
 import type { BlockId } from "../lib/types";
-import { ITEM_SPEC, isBlockId, type ItemId } from "../lib/items";
+
+// ✅ Only import what we need; no isBlockId
+import { ITEM_SPEC, type ItemId } from "../lib/items";
 import { applyCraftOnce, evaluateCraft, type MaybeItem, type ItemStack } from "../lib/crafting";
 
-type ItemStackX = ItemStack; // alias for local clarity
+type ItemStackX = ItemStack;
 
+// Local visual resolver — uses `typeof id === "number"` to detect blocks
 function getVisualSpec(id: ItemId) {
-  if (isBlockId(id)) return BLOCKS[id];
-  return ITEM_SPEC[id];
+  if (typeof id === "number") return BLOCKS[id as BlockId];
+  return ITEM_SPEC[id]; // tools / sticks, etc.
 }
 
 function Slot({
@@ -187,7 +190,7 @@ export default function InventoryOverlay({
 
   if (!open) return null;
 
-  const craftEval = evaluateCraft(craft as MaybeItem[]); // compute current recipe
+  const craftEval = evaluateCraft(craft as MaybeItem[]);
   const craftable = !!craftEval.result;
 
   const applyCraft = () => {

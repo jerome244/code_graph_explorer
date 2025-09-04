@@ -10,12 +10,27 @@ export default function Player({ hasBlock }: { hasBlock: (x: number, y: number, 
   const { camera } = useThree();
   const vel = useRef(new THREE.Vector3());
   const dir = useRef(new THREE.Vector3());
-  const onGround = useRef(true);
+  const grounded = useRef(true);
+
+  // input & jump helpers
   const pressed = useRef<Set<string>>(new Set());
+  const lastFrameTime = useRef<number>(0);
+  const coyoteTimer = useRef<number>(0);    // ms remaining
+  const bufferTimer = useRef<number>(0);    // ms remaining
+
+  const COYOTE_MS = 100;
+  const BUFFER_MS = 100;
 
   useEffect(() => {
-    const down = (e: KeyboardEvent) => pressed.current.add(e.key.toLowerCase());
-    const up = (e: KeyboardEvent) => pressed.current.delete(e.key.toLowerCase());
+    const down = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      pressed.current.add(k);
+      if (k === " ") bufferTimer.current = BUFFER_MS; // start buffer when space is pressed
+    };
+    const up = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      pressed.current.delete(k);
+    };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     return () => {
@@ -25,22 +40,25 @@ export default function Player({ hasBlock }: { hasBlock: (x: number, y: number, 
   }, []);
 
   useEffect(() => {
-    // Spawn one block above ground, with eye height on top
     camera.position.set(0, 1 + PLAYER_HEIGHT, 6);
   }, [camera]);
 
-  useFrame((_, dt) => {
-    const SPEED = 6;
-    const GRAVITY = 24;
-    const JUMP_V = 8;
+  useFrame((state, dt) => {
+    const now = state.clock.elapsedTime * 1000; // ms
+    const frameDtMs = Math.min(50, now - (lastFrameTime.current || now)); // clamp huge spikes
+    lastFrameTime.current = now;
 
-    // --- NEW: if something spawned on us, push out before doing anything ---
+    // --- Phase 0: depenetrate if something spawned on us ---
     {
       const { position: fixed, moved } = depenetrate(camera.position, hasBlock);
       if (moved) camera.position.copy(fixed);
     }
 
-    // movement intent
+    const SPEED = 6;
+    const GRAVITY = 24;
+    const JUMP_V = 8;
+
+    // --- Phase 1: read movement intent ---
     const forward = Array.from(pressed.current).some((k) => FORWARD_KEYS.has(k));
     const backward = Array.from(pressed.current).some((k) => BACKWARD_KEYS.has(k));
     const left = Array.from(pressed.current).some((k) => LEFT_KEYS.has(k));
@@ -52,40 +70,48 @@ export default function Player({ hasBlock }: { hasBlock: (x: number, y: number, 
     dir.current.set(rAxis, 0, fAxis);
     if (dir.current.lengthSq() > 0) dir.current.normalize();
 
-    // basis vectors
-    const forwardVec = new THREE.Vector3();
-    camera.getWorldDirection(forwardVec);
-    forwardVec.y = 0;
-    if (forwardVec.lengthSq() > 0) forwardVec.normalize();
+    const fwd = new THREE.Vector3();
+    camera.getWorldDirection(fwd);
+    fwd.y = 0;
+    if (fwd.lengthSq() > 0) fwd.normalize();
+    const rightVec = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
 
-    const rightVec = new THREE.Vector3().crossVectors(forwardVec, new THREE.Vector3(0, 1, 0)).normalize();
-
-    // desired horizontal direction
-    const move = new THREE.Vector3();
-    move.addScaledVector(forwardVec, dir.current.z);
-    move.addScaledVector(rightVec, dir.current.x);
+    const move = new THREE.Vector3()
+      .addScaledVector(fwd, dir.current.z)
+      .addScaledVector(rightVec, dir.current.x);
     if (move.lengthSq() > 0) move.normalize();
 
     const sprint = pressed.current.has("shift") && !pressed.current.has(" ");
     const speed = SPEED * (sprint ? 1.5 : 1);
 
-    // vertical velocity (jump / gravity)
-    if (pressed.current.has(" ") && onGround.current) {
-      vel.current.y = JUMP_V;
-      onGround.current = false;
-    } else {
-      vel.current.y -= GRAVITY * dt;
+    // --- Phase 2: timers (coyote & buffer) ---
+    // decrement timers each frame
+    coyoteTimer.current = Math.max(0, coyoteTimer.current - frameDtMs);
+    bufferTimer.current = Math.max(0, bufferTimer.current - frameDtMs);
+
+    // if we are grounded *this frame*, refresh coyote time
+    if (grounded.current) coyoteTimer.current = COYOTE_MS;
+
+    // consume buffered jump if available & allowed
+    let doJump = false;
+    if (bufferTimer.current > 0 && coyoteTimer.current > 0) {
+      doJump = true;
+      bufferTimer.current = 0; // consume
+      coyoteTimer.current = 0; // consume
     }
 
-    // full velocity vector
-    const desiredVel = new THREE.Vector3(
-      move.x * speed,
-      vel.current.y,
-      move.z * speed
-    );
+    // --- Phase 3: vertical velocity (gravity / jump) ---
+    if (doJump) {
+      vel.current.y = JUMP_V;            // start jump
+      grounded.current = false;          // leave ground immediately
+    } else {
+      vel.current.y -= GRAVITY * dt;     // gravity otherwise
+    }
 
-    // collide & slide
-    const { position, velocity, onGround: grounded } = moveWithCollisions(
+    // --- Phase 4: integrate with collisions ---
+    const desiredVel = new THREE.Vector3(move.x * speed, vel.current.y, move.z * speed);
+
+    const { position, velocity, onGround } = moveWithCollisions(
       camera.position,
       desiredVel,
       dt,
@@ -94,14 +120,14 @@ export default function Player({ hasBlock }: { hasBlock: (x: number, y: number, 
 
     camera.position.copy(position);
     vel.current.copy(velocity);
-    onGround.current = grounded;
+    grounded.current = onGround;
 
-    // Safety clamp: never let eye sink below ground top + player height
+    // --- Phase 5: safety clamp (in case empty world below) ---
     const groundEyeY = 1 + PLAYER_HEIGHT;
     if (camera.position.y < groundEyeY) {
       camera.position.y = groundEyeY;
       vel.current.y = 0;
-      onGround.current = true;
+      grounded.current = true;
     }
   });
 

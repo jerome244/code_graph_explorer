@@ -1,13 +1,13 @@
 // lib/physics.ts
 import * as THREE from "three";
 
-export const PLAYER_HEIGHT = 1.6;   // eye is the top of the player
-export const PLAYER_RADIUS = 0.3;   // ~0.6m wide
+export const PLAYER_HEIGHT = 1.6;   // eye is at the top of the player
+export const PLAYER_RADIUS = 0.35;  // widened a bit so corners are more forgiving
 
-// Tunables
 const STEP_HEIGHT = 0.7;
 const EPS = 1e-4;
 const SUBSTEP = 0.03;
+const GROUND_SNAP = 0.2;            // how far to "look down" for ground after moving horizontally
 
 export type HasBlockFn = (x: number, y: number, z: number) => boolean;
 
@@ -83,11 +83,9 @@ function tryAutoStep(basePos: THREE.Vector3, horiz: THREE.Vector3, hasBlock: Has
   const attempt = (order: "xz" | "zx") => {
     const pos = basePos.clone();
 
-    // raise by STEP_HEIGHT (swept)
     const up = sweepAxis(pos, "y", STEP_HEIGHT, hasBlock);
     if (up.hit) return null;
 
-    // horizontal at raised height; try both orders
     if (order === "xz") {
       const mx = sweepAxis(pos, "x", horiz.x, hasBlock);
       const mz = sweepAxis(pos, "z", horiz.z, hasBlock);
@@ -98,7 +96,7 @@ function tryAutoStep(basePos: THREE.Vector3, horiz: THREE.Vector3, hasBlock: Has
       if (mx.hit || mz.hit) return null;
     }
 
-    // settle down generously
+    // settle gently
     sweepAxis(pos, "y", -STEP_HEIGHT - EPS, hasBlock);
     return pos;
   };
@@ -108,7 +106,6 @@ function tryAutoStep(basePos: THREE.Vector3, horiz: THREE.Vector3, hasBlock: Has
 
 /**
  * Push the player out of any overlapping blocks (if something spawned on them).
- * Returns a possibly adjusted position and whether we moved.
  */
 export function depenetrate(position: THREE.Vector3, hasBlock: HasBlockFn, maxIters = 8) {
   const pos = position.clone();
@@ -120,7 +117,6 @@ export function depenetrate(position: THREE.Vector3, hasBlock: HasBlockFn, maxIt
     const iy0 = Math.floor(min.y), iy1 = Math.floor(max.y);
     const iz0 = Math.floor(min.z), iz1 = Math.floor(max.z);
 
-    // separate candidates into tiers: UP first, then X/Z, then DOWN
     type Cand = { axis: "x" | "y" | "z"; delta: number; abs: number };
     const up: Cand[] = [];
     const horiz: Cand[] = [];
@@ -134,8 +130,8 @@ export function depenetrate(position: THREE.Vector3, hasBlock: HasBlockFn, maxIt
 
           const pushPosX = (x + 1) - min.x;
           const pushNegX = max.x - x;
-          const pushPosY = (y + 1) - min.y; // up
-          const pushNegY = max.y - y;       // down
+          const pushPosY = (y + 1) - min.y;
+          const pushNegY = max.y - y;
           const pushPosZ = (z + 1) - min.z;
           const pushNegZ = max.z - z;
 
@@ -157,9 +153,8 @@ export function depenetrate(position: THREE.Vector3, hasBlock: HasBlockFn, maxIt
       }
     }
 
-    if (!up.length && !horiz.length && !down.length) break; // no overlaps
+    if (!up.length && !horiz.length && !down.length) break;
 
-    // pick smallest move from preferred tier
     const pick =
       (up.length && up.sort((a, b) => a.abs - b.abs)[0]) ||
       (horiz.length && horiz.sort((a, b) => a.abs - b.abs)[0]) ||
@@ -167,13 +162,10 @@ export function depenetrate(position: THREE.Vector3, hasBlock: HasBlockFn, maxIt
 
     (pos as any)[pick.axis] += pick.delta;
     moved = true;
-    // loop again in case multiple blocks overlap
   }
 
   return { position: pos, moved };
 }
-
-
 
 export function moveWithCollisions(
   position: THREE.Vector3,
@@ -184,7 +176,7 @@ export function moveWithCollisions(
   const desired = velocity.clone().multiplyScalar(dt);
   const pos = position.clone();
 
-  // Horizontal first (with step-up fallback)
+  // --- Horizontal first (with step-up fallback) ---
   const horiz = new THREE.Vector3(desired.x, 0, desired.z);
   const xHit = sweepAxis(pos, "x", horiz.x, hasBlock).hit;
   const zHit = sweepAxis(pos, "z", horiz.z, hasBlock).hit;
@@ -194,8 +186,20 @@ export function moveWithCollisions(
     if (stepped) pos.copy(stepped);
   }
 
-  // Then vertical (gravity/jump)
+  // --- Ground snap (corner forgiveness) ---
+  // IMPORTANT: only when we are not moving upward this frame.
   let onGround = false;
+  if (desired.y <= 0) {
+    const beforeY = pos.y;
+    const snap = sweepAxis(pos, "y", -GROUND_SNAP, hasBlock);
+    if (snap.hit) {
+      onGround = true;
+    } else {
+      pos.y = beforeY;
+    }
+  }
+
+  // --- Vertical (gravity/jump) ---
   const ySweep = sweepAxis(pos, "y", desired.y, hasBlock);
   if (ySweep.hit && desired.y < 0) onGround = true;
 
@@ -204,3 +208,4 @@ export function moveWithCollisions(
 
   return { position: pos, velocity: newVelocity, onGround };
 }
+

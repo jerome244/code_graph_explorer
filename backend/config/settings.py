@@ -25,6 +25,7 @@ INSTALLED_APPS = [
     # --- Project apps ---
     "users",
     "projects",
+    "game",
 ]
 
 MIDDLEWARE = [

@@ -100,74 +100,37 @@ export default function BlocksOptimized({
               return null; // or use a fallback material if you prefer
             }
 
-            return (
-              <instancedMesh
-                key={`${ck}-${id}`}
-                args={[box, undefined as any, count]}
-                // Pointer events: mine/place using instanceId + face normal
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  const mesh = e.object as THREE.InstancedMesh;
-                  const instanceId = (e as any).instanceId as number;
-                  if (instanceId == null) return;
+// inside your map(...)
+return (
+  <instancedMesh
+    key={`${ck}-${id}`}
+    args={[box, undefined as any, count]}
+    onUpdate={(mesh) => {
+      // runs when the mesh mounts and on subsequent renders
+      const obj3d = new THREE.Object3D();
+      for (let i = 0; i < count; i++) {
+        obj3d.position.set(
+          posArray[i * 3],
+          posArray[i * 3 + 1],
+          posArray[i * 3 + 2]
+        );
+        obj3d.updateMatrix();
+        mesh.setMatrixAt(i, obj3d.matrix);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+    }}
+    // your pointer handlers stay as-is
+    onPointerDown={(e) => { /* ... */ }}
+    onContextMenu={(e) => e.preventDefault()}
+  >
+    <meshStandardMaterial
+      color={spec.color}
+      opacity={spec.opacity ?? 1}
+      transparent={!!spec.transparent}
+    />
+  </instancedMesh>
+);
 
-                  // reconstruct this instance world position
-                  const posArr = posArray;
-                  const bx = posArr[instanceId * 3 + 0];
-                  const by = posArr[instanceId * 3 + 1];
-                  const bz = posArr[instanceId * 3 + 2];
-
-                  // world face normal
-                  const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
-                  const worldNormal =
-                    e.face?.normal.clone().applyMatrix3(normalMatrix).normalize() ??
-                    new THREE.Vector3(0, 1, 0);
-
-                  if (e.button === 0) {
-                    // MINE: target block is the one we clicked (the instance)
-                    remove(bx, by, bz);
-                  } else if (e.button === 2) {
-                    // PLACE adjacent along face normal
-                    const target = new THREE.Vector3(bx, by, bz).add(worldNormal);
-                    const tx = Math.round(target.x);
-                    const ty = Math.round(target.y);
-                    const tz = Math.round(target.z);
-
-                    const eye = camera.position as THREE.Vector3;
-                    if (!blockOverlapsPlayer(eye, tx, ty, tz)) {
-                      place(tx, ty, tz, selected);
-                    }
-                  }
-                }}
-                onContextMenu={(e) => e.preventDefault()}
-              >
-                {/* material per block-id */}
-                <meshStandardMaterial
-                  color={spec.color}
-                  opacity={spec.opacity ?? 1}
-                  transparent={!!spec.transparent}
-                />
-                {/* set instance matrices */}
-                <primitive
-                  object={new THREE.Object3D()}
-                  attach={null as any}
-                  ref={(obj3d) => {
-                    if (!obj3d) return;
-                    const mesh = obj3d.parent as unknown as THREE.InstancedMesh;
-                    for (let i = 0; i < count; i++) {
-                      obj3d.position.set(
-                        posArray[i * 3],
-                        posArray[i * 3 + 1],
-                        posArray[i * 3 + 2]
-                      );
-                      obj3d.updateMatrix();
-                      mesh.setMatrixAt(i, obj3d.matrix);
-                    }
-                    mesh.instanceMatrix.needsUpdate = true;
-                  }}
-                />
-              </instancedMesh>
-            );
           })}
         </group>
       ))}

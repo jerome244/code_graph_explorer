@@ -96,7 +96,9 @@ export default function GamePage() {
         setInventoryOpen((open) => {
           const next = !open;
           if (next) {
-            try { lockRef.current?.unlock?.(); } catch {}
+            try {
+              lockRef.current?.unlock?.();
+            } catch {}
           }
           return next;
         });
@@ -109,8 +111,9 @@ export default function GamePage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [inventoryOpen]);
 
-  // Inventory slots (blocks for now; fine to extend later)
+  // Inventory slots (blocks for now)
   type ItemStack = { id: BlockId; count: number } | null;
+
   const [inv, setInv] = useState<ItemStack[]>(() => {
     const a = Array.from({ length: 27 }, () => null) as ItemStack[];
     a[0] = { id: 1, count: 32 };
@@ -118,8 +121,18 @@ export default function GamePage() {
     a[2] = { id: 7, count: 12 };
     return a;
   });
+
   const [craft, setCraft] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
-  const [hotbarInv, setHotbarInv] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
+
+  // 🔹 Hotbar starts empty by default
+  const [hotbarInv, setHotbarInv] = useState<ItemStack[]>(
+    () => Array.from({ length: 9 }, () => null) as ItemStack[]
+  );
+
+  // 🔹 Which hotbar slot is active (0..8), controlled by Hotbar (1..9 keys & wheel)
+  const [selectedSlot, setSelectedSlot] = useState(0);
+  const selectedStack: ItemStack = hotbarInv[selectedSlot] ?? null;
+  const selectedBlockId: BlockId | null = selectedStack ? selectedStack.id : null;
 
   // Add mined items into inventory
   const addItemToInventory = useCallback((id: BlockId, amount: number = 1) => {
@@ -146,8 +159,6 @@ export default function GamePage() {
       return next;
     });
   }, []);
-
-  const [selected, setSelected] = useState<BlockId>(1);
 
   const { blocks, place, remove, hasBlock, updateAround, getTopY } = useInfiniteWorld({
     viewDistance: 3,
@@ -248,30 +259,67 @@ export default function GamePage() {
     [remove, blocks, addItemToInventory]
   );
 
-  // RMB places on ground (when not clicking a block)
+  // RMB places on ground (when not clicking a block) — only if hotbar slot has a block
   const handleGroundPointerDown = useCallback(
     (e: any) => {
       e.stopPropagation();
       const button = (e.nativeEvent as PointerEvent)?.button ?? e.button;
       if (button === 2) {
+        if (selectedBlockId == null) return; // nothing selected in hotbar
         const p = e.point as THREE.Vector3;
         const x = Math.round(p.x);
         const z = Math.round(p.z);
         const y = getTopY(x, z) + 1;
         const eye = (e?.ray?.camera?.position as THREE.Vector3) ?? new THREE.Vector3(0, 2.6, 0);
         if (blockOverlapsPlayer(eye, x, y, z)) return;
-        wrappedPlace(x, y, z, selected);
+        wrappedPlace(x, y, z, selectedBlockId);
       }
     },
-    [getTopY, selected, wrappedPlace]
+    [getTopY, selectedBlockId, wrappedPlace]
   );
 
   const sendMove = useCallback((x: number, y: number, z: number) => {
     socketRef.current?.send({ type: "move", x, y, z });
   }, []);
 
-  // --- Mining progress UI (simple center bar) ---
-  const [miningProgress, setMiningProgress] = useState<number | null>(null);
+  // --- Mining progress (RAF-driven, super smooth) ---
+  const progressFillRef = useRef<HTMLDivElement | null>(null);
+  const progressValueRef = useRef(0);
+  const [progressVisible, setProgressVisible] = useState(false);
+  const rafRef = useRef<number | null>(null);
+
+  // RAF loop to apply transform without causing React re-renders
+  useEffect(() => {
+    const tick = () => {
+      if (progressFillRef.current) {
+        const v = Math.max(0, Math.min(1, progressValueRef.current));
+        // GPU-friendly, no layout thrash
+        progressFillRef.current.style.transform = `scaleX(${v})`;
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
+  // Called by BlocksOptimized every frame (we don't re-render on each call)
+  const setMiningProgress = useCallback((p: number | null) => {
+    if (p == null) {
+      // Linger at 100% briefly if we finished
+      if (progressValueRef.current >= 0.999) {
+        setProgressVisible(true);
+        window.setTimeout(() => setProgressVisible(false), 150);
+      } else {
+        setProgressVisible(false);
+      }
+      return;
+    }
+    // Update the ref'd value and ensure the bar is visible
+    progressValueRef.current = p;
+    if (!progressVisible) setProgressVisible(true);
+  }, [progressVisible]);
 
   return (
     <div
@@ -308,15 +356,21 @@ export default function GamePage() {
         <SendInitialMove sendMove={sendMove} />
         <MovementEmitter sendMove={sendMove} />
 
-        {/* World (instanced for perf; now with timed mining) */}
+        {/* World (instanced for perf; timed mining) */}
         <BlocksOptimized
           blocks={blocks}
-          place={(x, y, z, id) => wrappedPlace(x, y, z, id)}
+          // Guard placement if hotbar slot empty; always use the current hotbar selection
+          place={(x, y, z) => {
+            if (selectedBlockId == null) return;
+            wrappedPlace(x, y, z, selectedBlockId);
+          }}
           remove={(x, y, z) => wrappedRemove(x, y, z)} // legacy fallback
           removeWithDrop={(x, y, z, allowDrop) => wrappedRemove(x, y, z, true, allowDrop)}
-          selected={selected}
-          currentTool={null /* TODO: set from your hotbar selection */}
-          onMiningProgress={setMiningProgress}   // 👈 THIS was missing
+          // BlocksOptimized requires a BlockId; we pass a dummy when empty, but the guarded 'place' above prevents placement.
+          selected={(selectedBlockId ?? 1) as BlockId}
+          currentTool={null}
+          miningSpeedMultiplier={0.6}     // readable speed; change to taste
+          onMiningProgress={setMiningProgress}
         />
 
         {/* Large ground plane for easy placement when not clicking a block */}
@@ -341,7 +395,7 @@ export default function GamePage() {
       {!inventoryOpen && <Crosshair />}
 
       {/* Mining progress bar (center, below crosshair) */}
-      {!inventoryOpen && miningProgress != null && (
+      {!inventoryOpen && progressVisible && (
         <div
           style={{
             position: "absolute",
@@ -355,22 +409,32 @@ export default function GamePage() {
             boxShadow: "0 2px 8px rgba(0,0,0,0.25) inset",
             overflow: "hidden",
             zIndex: 20,
-            pointerEvents: "none", // won't block clicks
+            pointerEvents: "none",
           }}
         >
           <div
+            ref={progressFillRef}
             style={{
-              width: `${Math.round(miningProgress * 100)}%`,
+              width: "100%",
               height: "100%",
               background: "rgba(255,255,255,0.95)",
               borderRadius: 6,
-              transition: "width 60ms linear",
+              transformOrigin: "left center",
+              transform: "scaleX(0)",
+              willChange: "transform",
             }}
           />
         </div>
       )}
 
-      <Hotbar selected={selected} setSelected={setSelected} disabled={inventoryOpen} />
+      {/* New hotbar: driven by inventory 'hotbarInv' and keyboard/wheel selection */}
+      <Hotbar
+        hotbar={hotbarInv}
+        selectedSlot={selectedSlot}
+        setSelectedSlot={setSelectedSlot}
+        disabled={!locked || inventoryOpen}
+      />
+
       <ConnectionStatus connected={connected} peers={[...peersRef.current.keys()]} />
 
       {/* Inventory Overlay */}

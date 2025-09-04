@@ -1,25 +1,51 @@
-# /home/user/holberton/code_graph_explorer/backend/config/asgi.py
 import os
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
-# IMPORTANT: initialize Django BEFORE importing anything that touches models/apps
+# 1) Bootstrap Django *before* importing anything that touches apps/models
 from django.core.asgi import get_asgi_application
-django_asgi = get_asgi_application()  # this calls django.setup()
+django_asgi = get_asgi_application()  # runs django.setup()
 
+# 2) Channels routing
 from channels.routing import ProtocolTypeRouter, URLRouter
+from django.urls import re_path
+from channels.security.websocket import AllowedHostsOriginValidator
 
-# If you have a JWT middleware and it's strict, comment it out until sockets connect
-# from realtime.auth import JWTAuthMiddleware
+# 3) Your apps' URL patterns
+from realtime.routing import websocket_urlpatterns as realtime_ws  # graph page
+from game.routing import websocket_urlpatterns as game_ws          # minecraft page
 
-# Import websocket routes only AFTER get_asgi_application()
-from realtime.routing import websocket_urlpatterns as realtime_ws
-from game.routing import websocket_urlpatterns as game_ws
+# 4) JWT middleware used by the graph websocket
+from realtime.auth import JWTAuthMiddleware
 
-# For first tests, allow anonymous WS for the game route. You can re-add auth later.
+
+class PathScopedJWT:
+    """
+    Wrap the combined WebSocket router, but only enforce JWT on selected path prefixes.
+    Everything else (e.g., /ws/game/...) remains open to guests.
+    """
+    def __init__(self, app, protect_prefixes=("/ws/projects/",)):
+        self.app = app
+        self.protect_prefixes = tuple(protect_prefixes)
+        # Create one protected app instance so we don't reconstruct per-connection
+        self._protected_app = JWTAuthMiddleware(app)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket":
+            path = scope.get("path", "")
+            if any(path.startswith(prefix) for prefix in self.protect_prefixes):
+                # Enforce JWT for these paths (graph)
+                return await self._protected_app(scope, receive, send)
+        # Open/guest for all other WS paths (minecraft)
+        return await self.app(scope, receive, send)
+
+
+# 5) Combine both apps' URL patterns (unchanged paths inside each app)
+combined_ws = URLRouter(realtime_ws + game_ws)
+
 application = ProtocolTypeRouter({
     "http": django_asgi,
-    # If you want realtime to stay under JWT but game to be open:
-    # "websocket": JWTAuthMiddleware(URLRouter(realtime_ws))  # strict
-    #                + URLRouter(game_ws),                    # open
-    "websocket": URLRouter(realtime_ws + game_ws),
+    # Optional but good: restrict WS origins to ALLOWED_HOSTS
+    "websocket": AllowedHostsOriginValidator(
+        PathScopedJWT(combined_ws, protect_prefixes=("/ws/projects/",))  # adjust prefix if needed
+    ),
 })

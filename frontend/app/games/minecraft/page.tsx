@@ -18,7 +18,7 @@ import InventoryOverlay from "./components/InventoryOverlay";
 import { useInfiniteWorld } from "./hooks/useInfiniteWorld";
 import { blockOverlapsPlayer } from "./lib/physics";
 import type { BlockId } from "./lib/types";
-import { GameSocket, type GameInbound } from "./lib/ws";
+import { GameSocket } from "./lib/ws";
 
 // Drive chunk streaming from inside the Canvas
 function Streamer({ updateAround }: { updateAround: (p: THREE.Vector3) => void }) {
@@ -69,46 +69,66 @@ function MovementEmitter({ sendMove }: { sendMove: (x: number, y: number, z: num
 }
 
 export default function GamePage() {
-  
   // --- Inventory UI state ---
   const [inventoryOpen, setInventoryOpen] = useState(false);
-  // Track cursor for overlay
+
+  // Track cursor for overlay (used by InventoryOverlay for the ghost item)
   useEffect(() => {
-    const onMove = (e: MouseEvent) => { (window as any).lastMouseX = e.clientX; (window as any).lastMouseY = e.clientY; };
+    const onMove = (e: MouseEvent) => {
+      (window as any).lastMouseX = e.clientX;
+      (window as any).lastMouseY = e.clientY;
+    };
     window.addEventListener("mousemove", onMove);
     return () => window.removeEventListener("mousemove", onMove);
   }, []);
+
+  // Toggle inventory with I/E; close with Esc
+  const lockRef = useRef<{ lock: () => void; unlock: () => void } | null>(null);
+  const [locked, setLocked] = useState(false);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === "i") {
+      if (e.repeat) return;
+      const isTyping =
+        (e.target as HTMLElement | null)?.matches?.("input, textarea, [contenteditable]") ?? false;
+      if (isTyping) return;
+
+      if (e.key.toLowerCase() === "i" || e.key.toLowerCase() === "e") {
         e.preventDefault();
-        setInventoryOpen((v) => {
-          const next = !v;
-          if (next) { // opening
-            try { lockRef.current?.unlock?.(); } catch {}
+        setInventoryOpen((open) => {
+          const next = !open;
+          if (next) {
+            // Opening inventory → unlock pointer if locked
+            try {
+              lockRef.current?.unlock?.();
+            } catch {}
           }
           return next;
         });
-      }
-      if (e.key === "Escape" && inventoryOpen) {
+      } else if (e.key === "Escape" && inventoryOpen) {
+        e.preventDefault();
         setInventoryOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [inventoryOpen]);
+
   // Simple slot arrays
   type ItemStack = { id: BlockId; count: number } | null;
   const [inv, setInv] = useState<ItemStack[]>(() => {
     const a = Array.from({ length: 27 }, () => null) as ItemStack[];
-    // pre-fill a few example stacks
-    a[0] = { id: 1, count: 32 }; // Grass
-    a[1] = { id: 5, count: 18 }; // Wood
-    a[2] = { id: 7, count: 12 }; // Glass
+    a[0] = { id: 1, count: 32 }; // sample items
+    a[1] = { id: 5, count: 18 };
+    a[2] = { id: 7, count: 12 };
     return a;
   });
-  const [craft, setCraft] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
-  const [hotbarInv, setHotbarInv] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
+  const [craft, setCraft] = useState<ItemStack[]>(
+    () => Array.from({ length: 9 }, () => null) as ItemStack[]
+  );
+  const [hotbarInv, setHotbarInv] = useState<ItemStack[]>(
+    () => Array.from({ length: 9 }, () => null) as ItemStack[]
+  );
 
   // Add mined items into inventory (27-slot) with stack size 64
   const addItemToInventory = useCallback((id: BlockId, amount: number = 1) => {
@@ -138,14 +158,11 @@ export default function GamePage() {
     });
   }, []);
 
-const [selected, setSelected] = useState<BlockId>(1);
+  const [selected, setSelected] = useState<BlockId>(1);
 
   const { blocks, place, remove, hasBlock, updateAround, getTopY } = useInfiniteWorld({
     viewDistance: 3,
   });
-
-  const [locked, setLocked] = useState(false);
-  const lockRef = useRef<{ lock: () => void; unlock: () => void } | null>(null);
 
   // ---- Multiplayer state ----
   const [sessionId] = useState<string>(() => {
@@ -166,55 +183,62 @@ const [selected, setSelected] = useState<BlockId>(1);
     const wsBase = "ws://localhost:8000"; // dev backend
     const url = `${wsBase}/ws/game/${encodeURIComponent(sessionId)}/`;
 
-  const onMsg = (raw: any) => {
-    // Normalize dot-notation → underscore so it matches our switch
-    const msg = { ...raw, type: typeof raw?.type === "string" ? raw.type.replaceAll(".", "_") : raw?.type };
-    console.log("[WS] msg", msg);
+    const onMsg = (raw: any) => {
+      const msg = {
+        ...raw,
+        type: typeof raw?.type === "string" ? raw.type.replaceAll(".", "_") : raw?.type,
+      };
+      console.log("[WS] msg", msg);
 
-    switch (msg.type) {
-      case "welcome": {
-        youRef.current = { id: msg.you.id };
-        othersRef.current.clear();
-        peersRef.current.clear();
-        for (const pid of Object.keys(msg.players || {})) {
-          if (pid !== msg.you.id) peersRef.current.add(pid);
-        }
-        bump();
-        break;
-      }
-      case "player_join": {
-        if (msg.player.id !== youRef.current?.id) {
-          peersRef.current.add(msg.player.id);
+      switch (msg.type) {
+        case "welcome": {
+          youRef.current = { id: msg.you.id };
+          othersRef.current.clear();
+          peersRef.current.clear();
+          for (const pid of Object.keys(msg.players || {})) {
+            if (pid !== msg.you.id) peersRef.current.add(pid);
+          }
           bump();
+          break;
         }
-        break;
-      }
-      case "player_leave": {
-        peersRef.current.delete(msg.player.id);
-        othersRef.current.delete(msg.player.id);
-        bump();
-        break;
-      }
-      case "player_move": {
-        const isMine = youRef.current?.id === msg.player.id;
-        if (!isMine) {
-          peersRef.current.add(msg.player.id);
-          othersRef.current.set(msg.player.id, msg.pos);
+        case "player_join": {
+          if (msg.player.id !== youRef.current?.id) {
+            peersRef.current.add(msg.player.id);
+            bump();
+          }
+          break;
+        }
+        case "player_leave": {
+          peersRef.current.delete(msg.player.id);
+          othersRef.current.delete(msg.player.id);
           bump();
+          break;
         }
-        break;
+        case "player_move": {
+          const isMine = youRef.current?.id === msg.player.id;
+          if (!isMine) {
+            peersRef.current.add(msg.player.id);
+            othersRef.current.set(msg.player.id, msg.pos);
+            bump();
+          }
+          break;
+        }
+        case "block_place": {
+          wrappedPlace(
+            msg.block.x,
+            msg.block.y,
+            msg.block.z,
+            msg.block.kind as BlockId,
+            false
+          );
+          break;
+        }
+        case "block_remove": {
+          wrappedRemove(msg.x, msg.y, msg.z, false);
+          break;
+        }
       }
-      case "block_place": {
-        wrappedPlace(msg.block.x, msg.block.y, msg.block.z, msg.block.kind as BlockId, false);
-        break;
-      }
-      case "block_remove": {
-        wrappedRemove(msg.x, msg.y, msg.z, false);
-        break;
-      }
-    }
-  };
-
+    };
 
     const gs = new GameSocket(url, onMsg, () => setConnected(true), () => setConnected(false));
     (gs as any)._debug = true;
@@ -224,7 +248,6 @@ const [selected, setSelected] = useState<BlockId>(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  
   // ---- Wrappers around place/remove that also broadcast ----
   const wrappedPlace = useCallback(
     (x: number, y: number, z: number, id: BlockId, emit = true) => {
@@ -247,7 +270,7 @@ const [selected, setSelected] = useState<BlockId>(1);
     [remove, blocks, addItemToInventory]
   );
 
-// RMB places on ground
+  // RMB places on ground
   const handleGroundPointerDown = useCallback(
     (e: any) => {
       e.stopPropagation();
@@ -279,15 +302,16 @@ const [selected, setSelected] = useState<BlockId>(1);
         overflow: "hidden",
         background: "#0b1020",
       }}
+      onContextMenu={(e) => e.preventDefault()}
     >
       <Canvas
         id="minecraft-canvas"
         shadows
         camera={{ fov: 75, near: 0.1, far: 2000, position: [0, 1.8, 6] }}
         onPointerDown={() => {
-          if (!locked) lockRef.current?.lock?.();
+          // Click to lock when inventory closed
+          if (!inventoryOpen && !locked) lockRef.current?.lock?.();
         }}
-        onContextMenu={(e) => e.preventDefault()}
         gl={{ powerPreference: "high-performance" }}
       >
         {/* Lights */}
@@ -312,19 +336,19 @@ const [selected, setSelected] = useState<BlockId>(1);
           selected={selected}
         />
 
-        {/* Optional: large click plane for easy placement */}
+        {/* Large ground plane for easy placement when not clicking a block */}
         <Ground onPointerDown={handleGroundPointerDown} />
 
         {/* Player & mouse-look */}
         <Player hasBlock={hasBlock} paused={inventoryOpen} />
         {!inventoryOpen && (
-        <PointerLockControls
-          ref={lockRef as any}
-          makeDefault
-          onLock={() => setLocked(true)}
-          onUnlock={() => setLocked(false)}
-        />
-      )}
+          <PointerLockControls
+            ref={lockRef as any}
+            makeDefault
+            onLock={() => setLocked(true)}
+            onUnlock={() => setLocked(false)}
+          />
+        )}
 
         {/* Remote players */}
         <OtherPlayers entries={[...othersRef.current.entries()]} />
@@ -333,11 +357,8 @@ const [selected, setSelected] = useState<BlockId>(1);
       {/* HUD */}
       {!inventoryOpen && <Crosshair />}
       <Hotbar selected={selected} setSelected={setSelected} disabled={inventoryOpen} />
-      <ConnectionStatus
-        connected={connected}
-        peers={[...peersRef.current.keys()]}
-      />
-    
+      <ConnectionStatus connected={connected} peers={[...peersRef.current.keys()]} />
+
       {/* Inventory Overlay */}
       <InventoryOverlay
         open={inventoryOpen}
@@ -350,6 +371,6 @@ const [selected, setSelected] = useState<BlockId>(1);
         setHotbar={(u) => setHotbarInv((curr) => u(curr))}
         addToInventory={addItemToInventory}
       />
-</div>
+    </div>
   );
 }

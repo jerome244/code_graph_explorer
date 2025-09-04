@@ -3,9 +3,15 @@
 import React, { useEffect, useState } from "react";
 import { BLOCKS } from "../lib/constants";
 import type { BlockId } from "../lib/types";
+import { ITEM_SPEC, isBlockId, type ItemId } from "../lib/items";
+import { applyCraftOnce, evaluateCraft, type MaybeItem, type ItemStack } from "../lib/crafting";
 
-type ItemStack = { id: BlockId; count: number };
-type MaybeItem = ItemStack | null;
+type ItemStackX = ItemStack; // alias for local clarity
+
+function getVisualSpec(id: ItemId) {
+  if (isBlockId(id)) return BLOCKS[id];
+  return ITEM_SPEC[id];
+}
 
 function Slot({
   item,
@@ -18,11 +24,10 @@ function Slot({
   onChange: (next: MaybeItem) => void;
   size?: number;
   context?: "inventory" | "craft" | "hotbar";
-  addToInventory?: (id: BlockId, count: number) => void;
+  addToInventory?: (id: ItemId, count: number) => void;
 }) {
   return (
     <div
-      // One onMouseDown only; stop propagation at the top
       onMouseDown={(e) => {
         e.stopPropagation();
 
@@ -31,7 +36,7 @@ function Slot({
           const cursorJson0 = sessionStorage.getItem("__cursor_item__");
           const cursor0: MaybeItem = cursorJson0 ? JSON.parse(cursorJson0) : null;
           if (!cursor0 && addToInventory) {
-            addToInventory(item.id as BlockId, item.count);
+            addToInventory(item.id as ItemId, item.count);
             onChange(null);
             sessionStorage.setItem("__cursor_item__", JSON.stringify(null));
             e.preventDefault();
@@ -46,7 +51,7 @@ function Slot({
         let nextCursor: MaybeItem = cursor;
         let nextSlot: MaybeItem = item;
 
-        // Left click: pick up whole stack OR place/swap/merge
+        // Left click: pick up / place / swap / merge (cap 64)
         if (e.button === 0) {
           if (!cursor && item) {
             nextCursor = item;
@@ -56,12 +61,11 @@ function Slot({
             nextCursor = null;
           } else if (cursor && item) {
             if (cursor.id === item.id) {
-              // merge up to 64
               const total = cursor.count + item.count;
               const place = Math.min(total, 64);
               const remain = total - place;
-              nextSlot = { id: item.id, count: place as number };
-              nextCursor = remain > 0 ? { id: item.id, count: remain as number } : null;
+              nextSlot = { id: item.id, count: place };
+              nextCursor = remain > 0 ? { id: item.id, count: remain } : null;
             } else {
               // swap
               nextSlot = cursor;
@@ -83,12 +87,11 @@ function Slot({
           }
         }
 
-        // Persist and paint
         sessionStorage.setItem("__cursor_item__", JSON.stringify(nextCursor));
         onChange(nextSlot);
       }}
-      onClick={(e) => { e.stopPropagation(); }}
-      onWheel={(e) => { e.stopPropagation(); }}
+      onClick={(e) => e.stopPropagation()}
+      onWheel={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
       style={{
         width: size,
@@ -103,35 +106,41 @@ function Slot({
         boxShadow: "inset 0 2px 10px rgba(0,0,0,.35)",
       }}
     >
-      {item && (
-        <div
-          title={BLOCKS[item.id].name}
-          style={{
-            width: size - 14,
-            height: size - 14,
-            borderRadius: 6,
-            background: BLOCKS[item.id].color,
-            opacity: BLOCKS[item.id].transparent ? 0.7 : 1,
-            outline: "2px solid rgba(255,255,255,.1)",
-            boxShadow: "0 2px 8px rgba(0,0,0,.3)",
-            position: "relative",
-          }}
-        >
+      {item && (() => {
+        const spec = getVisualSpec(item.id);
+        const name = (spec?.name as string) ?? String(item.id);
+        const color = (spec as any)?.color ?? "#666";
+        const transparent = (spec as any)?.transparent ?? false;
+        return (
           <div
+            title={name}
             style={{
-              position: "absolute",
-              right: 6,
-              bottom: 4,
-              fontSize: 12,
-              color: "white",
-              textShadow: "0 1px 1px rgba(0,0,0,.8)",
-              fontWeight: 700,
+              width: size - 14,
+              height: size - 14,
+              borderRadius: 6,
+              background: color,
+              opacity: transparent ? 0.7 : 1,
+              outline: "2px solid rgba(255,255,255,.1)",
+              boxShadow: "0 2px 8px rgba(0,0,0,.3)",
+              position: "relative",
             }}
           >
-            {item.count}
+            <div
+              style={{
+                position: "absolute",
+                right: 6,
+                bottom: 4,
+                fontSize: 12,
+                color: "white",
+                textShadow: "0 1px 1px rgba(0,0,0,.8)",
+                fontWeight: 700,
+              }}
+            >
+              {item.count}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -149,15 +158,14 @@ export default function InventoryOverlay({
 }: {
   open: boolean;
   onClose: () => void;
-  inventory: MaybeItem[];
-  setInventory: (updater: (curr: MaybeItem[]) => MaybeItem[]) => void;
-  craft: MaybeItem[]; // 3x3 == 9
-  setCraft: (updater: (curr: MaybeItem[]) => MaybeItem[]) => void;
-  hotbar: MaybeItem[]; // 9
-  setHotbar: (updater: (curr: MaybeItem[]) => MaybeItem[]) => void;
-  addToInventory: (id: BlockId, amount: number) => void;
+  inventory: ItemStackX[];
+  setInventory: (updater: (curr: ItemStackX[]) => ItemStackX[]) => void;
+  craft: ItemStackX[]; // 3x3 == 9
+  setCraft: (updater: (curr: ItemStackX[]) => ItemStackX[]) => void;
+  hotbar: ItemStackX[]; // 9
+  setHotbar: (updater: (curr: ItemStackX[]) => ItemStackX[]) => void;
+  addToInventory: (id: ItemId, amount: number) => void;
 }) {
-  // Render the cursor item following the mouse when open
   const [cursor, setCursor] = useState<MaybeItem>(null);
 
   useEffect(() => {
@@ -168,7 +176,6 @@ export default function InventoryOverlay({
     return () => clearInterval(id);
   }, []);
 
-  // If you rely on window.lastMouseX/Y, keep them updated here
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       (window as any).lastMouseX = e.clientX;
@@ -180,27 +187,32 @@ export default function InventoryOverlay({
 
   if (!open) return null;
 
+  const craftEval = evaluateCraft(craft as MaybeItem[]); // compute current recipe
+  const craftable = !!craftEval.result;
+
+  const applyCraft = () => {
+    const { grid, result } = applyCraftOnce(craft as MaybeItem[]);
+    setCraft(() => grid as ItemStackX[]);
+    if (result) addToInventory(result.id, result.count);
+  };
+
   return (
     <div
       style={{
         position: "fixed",
         inset: 0,
-        zIndex: 1000, // ensure above canvas
+        zIndex: 1000,
         display: "grid",
         placeItems: "center",
         background: "rgba(0,0,0,.45)",
       }}
-      // No context/item here — this is the root overlay
       onContextMenu={(e) => e.preventDefault()}
-      // optional: don't close by clicking the dim; keep inventory stable
-      // onMouseDown={(e) => e.preventDefault()}
     >
       <div
         style={{
-          width: 900,
+          width: 940,
           maxWidth: "95vw",
-          background:
-            "linear-gradient(180deg, rgba(31,41,55,.92), rgba(17,24,39,.92))",
+          background: "linear-gradient(180deg, rgba(31,41,55,.92), rgba(17,24,39,.92))",
           border: "1px solid rgba(255,255,255,.08)",
           borderRadius: 16,
           padding: 16,
@@ -208,12 +220,10 @@ export default function InventoryOverlay({
           boxShadow: "0 20px 60px rgba(0,0,0,.4)",
         }}
       >
-        <div style={{ display: "flex", gap: 16 }}>
-          {/* Crafting (3x3) on the left */}
+        <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
+          {/* Crafting (3x3) */}
           <div style={{ flex: "0 0 auto" }}>
-            <div style={{ fontWeight: 700, marginBottom: 8, opacity: 0.9 }}>
-              Crafting
-            </div>
+            <div style={{ fontWeight: 700, marginBottom: 8, opacity: 0.9 }}>Crafting</div>
             <div
               style={{
                 display: "grid",
@@ -230,7 +240,7 @@ export default function InventoryOverlay({
                   onChange={(next) =>
                     setCraft((curr) => {
                       const copy = curr.slice();
-                      copy[idx] = next;
+                      copy[idx] = next as ItemStackX;
                       return copy;
                     })
                   }
@@ -239,11 +249,35 @@ export default function InventoryOverlay({
             </div>
           </div>
 
-          {/* Inventory on the right */}
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 700, marginBottom: 8, opacity: 0.9 }}>
-              Inventory
+          {/* Result & Craft button */}
+          <div style={{ flex: "0 0 auto", display: "grid", gap: 8, alignItems: "center" }}>
+            <div style={{ fontWeight: 700, opacity: 0.9 }}>Result</div>
+            <div style={{ display: "grid", gridTemplateColumns: "56px", gap: 8 }}>
+              <Slot
+                item={craftEval.result ? ({ id: craftEval.result.id, count: craftEval.result.count } as ItemStackX) : null}
+                onChange={() => {}}
+              />
             </div>
+            <button
+              disabled={!craftable}
+              onClick={applyCraft}
+              style={{
+                opacity: craftable ? 1 : 0.5,
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid rgba(255,255,255,.1)",
+                background: craftable ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.06)",
+                color: "white",
+                cursor: craftable ? "pointer" : "default",
+              }}
+            >
+              Craft
+            </button>
+          </div>
+
+          {/* Inventory */}
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, marginBottom: 8, opacity: 0.9 }}>Inventory</div>
             <div
               style={{
                 display: "grid",
@@ -261,7 +295,7 @@ export default function InventoryOverlay({
                   onChange={(next) =>
                     setInventory((curr) => {
                       const copy = curr.slice();
-                      copy[idx] = next;
+                      copy[idx] = next as ItemStackX;
                       return copy;
                     })
                   }
@@ -271,9 +305,7 @@ export default function InventoryOverlay({
 
             <div style={{ height: 20 }} />
 
-            <div style={{ fontWeight: 700, marginBottom: 8, opacity: 0.9 }}>
-              Hotbar
-            </div>
+            <div style={{ fontWeight: 700, marginBottom: 8, opacity: 0.9 }}>Hotbar</div>
             <div
               style={{
                 display: "grid",
@@ -291,7 +323,7 @@ export default function InventoryOverlay({
                   onChange={(next) =>
                     setHotbar((curr) => {
                       const copy = curr.slice();
-                      copy[idx] = next;
+                      copy[idx] = next as ItemStackX;
                       return copy;
                     })
                   }
@@ -337,8 +369,8 @@ export default function InventoryOverlay({
               width: 42,
               height: 42,
               borderRadius: 8,
-              background: BLOCKS[cursor.id].color,
-              opacity: BLOCKS[cursor.id].transparent ? 0.7 : 1,
+              background: getVisualSpec(cursor.id)?.color ?? "#666",
+              opacity: (getVisualSpec(cursor.id) as any)?.transparent ? 0.7 : 1,
               outline: "2px solid rgba(255,255,255,.15)",
               boxShadow: "0 2px 8px rgba(0,0,0,.3)",
               position: "relative",

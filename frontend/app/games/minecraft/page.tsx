@@ -20,6 +20,9 @@ import { blockOverlapsPlayer } from "./lib/physics";
 import type { BlockId } from "./lib/types";
 import { GameSocket } from "./lib/ws";
 
+// NEW: accept tools & sticks in inventory
+import type { ItemId } from "./lib/items";
+
 // Drive chunk streaming from inside the Canvas
 function Streamer({ updateAround }: { updateAround: (p: THREE.Vector3) => void }) {
   const { camera } = useThree();
@@ -114,24 +117,27 @@ export default function GamePage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [inventoryOpen]);
 
-  // Simple slot arrays
-  type ItemStack = { id: BlockId; count: number } | null;
+  // Simple slot arrays (NOW: items OR blocks)
+  type ItemStack = { id: ItemId; count: number } | null;
+
   const [inv, setInv] = useState<ItemStack[]>(() => {
     const a = Array.from({ length: 27 }, () => null) as ItemStack[];
-    a[0] = { id: 1, count: 32 }; // sample items
-    a[1] = { id: 5, count: 18 };
-    a[2] = { id: 7, count: 12 };
+    a[0] = { id: 1 as unknown as ItemId, count: 32 }; // sample blocks
+    a[1] = { id: 5 as unknown as ItemId, count: 18 };
+    a[2] = { id: 7 as unknown as ItemId, count: 12 };
     return a;
   });
+
   const [craft, setCraft] = useState<ItemStack[]>(
     () => Array.from({ length: 9 }, () => null) as ItemStack[]
   );
+
   const [hotbarInv, setHotbarInv] = useState<ItemStack[]>(
     () => Array.from({ length: 9 }, () => null) as ItemStack[]
   );
 
-  // Add mined items into inventory (27-slot) with stack size 64
-  const addItemToInventory = useCallback((id: BlockId, amount: number = 1) => {
+  // Add mined/crafted items into inventory (27-slot) with stack size 64
+  const addItemToInventory = useCallback((id: ItemId, amount: number = 1) => {
     setInv((curr) => {
       let remain = amount;
       const next = curr.slice();
@@ -158,6 +164,7 @@ export default function GamePage() {
     });
   }, []);
 
+  // Still keep selected as a BlockId for world placement
   const [selected, setSelected] = useState<BlockId>(1);
 
   const { blocks, place, remove, hasBlock, updateAround, getTopY } = useInfiniteWorld({
@@ -263,18 +270,19 @@ export default function GamePage() {
       const b = blocks.get(ck);
       remove(x, y, z);
       if (emit) {
-        if (b) addItemToInventory(b.id, 1);
+        if (b) addItemToInventory(b.id as unknown as ItemId, 1);
         socketRef.current?.send({ type: "remove_block", x, y, z });
       }
     },
     [remove, blocks, addItemToInventory]
   );
 
-  // RMB places on ground
+  // RMB places on ground (when not clicking a block)
   const handleGroundPointerDown = useCallback(
     (e: any) => {
       e.stopPropagation();
-      if (e.button === 2) {
+      const button = (e.nativeEvent as PointerEvent)?.button ?? e.button;
+      if (button === 2) {
         const p = e.point as THREE.Vector3;
         const x = Math.round(p.x);
         const z = Math.round(p.z);

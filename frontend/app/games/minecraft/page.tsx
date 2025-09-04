@@ -20,9 +20,6 @@ import { blockOverlapsPlayer } from "./lib/physics";
 import type { BlockId } from "./lib/types";
 import { GameSocket } from "./lib/ws";
 
-// NEW: accept tools & sticks in inventory
-import type { ItemId } from "./lib/items";
-
 // Drive chunk streaming from inside the Canvas
 function Streamer({ updateAround }: { updateAround: (p: THREE.Vector3) => void }) {
   const { camera } = useThree();
@@ -30,7 +27,6 @@ function Streamer({ updateAround }: { updateAround: (p: THREE.Vector3) => void }
   return null;
 }
 
-// Send one "move" immediately so peers can render us even if we don't move yet.
 function SendInitialMove({ sendMove }: { sendMove: (x: number, y: number, z: number) => void }) {
   const { camera } = useThree();
   useEffect(() => {
@@ -43,7 +39,6 @@ function SendInitialMove({ sendMove }: { sendMove: (x: number, y: number, z: num
   return null;
 }
 
-// Emit local movement to server ~10 Hz and guarantee a first send on first frame.
 function MovementEmitter({ sendMove }: { sendMove: (x: number, y: number, z: number) => void }) {
   const { camera } = useThree();
   const sentFirst = useRef(false);
@@ -75,7 +70,7 @@ export default function GamePage() {
   // --- Inventory UI state ---
   const [inventoryOpen, setInventoryOpen] = useState(false);
 
-  // Track cursor for overlay (used by InventoryOverlay for the ghost item)
+  // Track cursor for overlay
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       (window as any).lastMouseX = e.clientX;
@@ -101,10 +96,7 @@ export default function GamePage() {
         setInventoryOpen((open) => {
           const next = !open;
           if (next) {
-            // Opening inventory → unlock pointer if locked
-            try {
-              lockRef.current?.unlock?.();
-            } catch {}
+            try { lockRef.current?.unlock?.(); } catch {}
           }
           return next;
         });
@@ -117,32 +109,24 @@ export default function GamePage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [inventoryOpen]);
 
-  // Simple slot arrays (NOW: items OR blocks)
-  type ItemStack = { id: ItemId; count: number } | null;
-
+  // Inventory slots (blocks for now; fine to extend later)
+  type ItemStack = { id: BlockId; count: number } | null;
   const [inv, setInv] = useState<ItemStack[]>(() => {
     const a = Array.from({ length: 27 }, () => null) as ItemStack[];
-    a[0] = { id: 1 as unknown as ItemId, count: 32 }; // sample blocks
-    a[1] = { id: 5 as unknown as ItemId, count: 18 };
-    a[2] = { id: 7 as unknown as ItemId, count: 12 };
+    a[0] = { id: 1, count: 32 };
+    a[1] = { id: 5, count: 18 };
+    a[2] = { id: 7, count: 12 };
     return a;
   });
+  const [craft, setCraft] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
+  const [hotbarInv, setHotbarInv] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
 
-  const [craft, setCraft] = useState<ItemStack[]>(
-    () => Array.from({ length: 9 }, () => null) as ItemStack[]
-  );
-
-  const [hotbarInv, setHotbarInv] = useState<ItemStack[]>(
-    () => Array.from({ length: 9 }, () => null) as ItemStack[]
-  );
-
-  // Add mined/crafted items into inventory (27-slot) with stack size 64
-  const addItemToInventory = useCallback((id: ItemId, amount: number = 1) => {
+  // Add mined items into inventory
+  const addItemToInventory = useCallback((id: BlockId, amount: number = 1) => {
     setInv((curr) => {
       let remain = amount;
       const next = curr.slice();
 
-      // 1) Fill existing stacks of same id up to 64
       for (let i = 0; i < next.length && remain > 0; i++) {
         const it = next[i];
         if (it && it.id === id && it.count < 64) {
@@ -152,7 +136,6 @@ export default function GamePage() {
           remain -= put;
         }
       }
-      // 2) Create new stacks in empty slots
       for (let i = 0; i < next.length && remain > 0; i++) {
         if (!next[i]) {
           const put = Math.min(64, remain);
@@ -164,14 +147,13 @@ export default function GamePage() {
     });
   }, []);
 
-  // Still keep selected as a BlockId for world placement
   const [selected, setSelected] = useState<BlockId>(1);
 
   const { blocks, place, remove, hasBlock, updateAround, getTopY } = useInfiniteWorld({
     viewDistance: 3,
   });
 
-  // ---- Multiplayer state ----
+  // Multiplayer
   const [sessionId] = useState<string>(() => {
     if (typeof window === "undefined") return "alpha-world";
     const u = new URL(window.location.href);
@@ -185,16 +167,12 @@ export default function GamePage() {
   const [, forceTick] = useState(0);
   const bump = () => forceTick((n) => (n + 1) % 1_000_000);
 
-  // ---- Connect WS ----
   useEffect(() => {
-    const wsBase = "ws://localhost:8000"; // dev backend
+    const wsBase = "ws://localhost:8000";
     const url = `${wsBase}/ws/game/${encodeURIComponent(sessionId)}/`;
 
     const onMsg = (raw: any) => {
-      const msg = {
-        ...raw,
-        type: typeof raw?.type === "string" ? raw.type.replaceAll(".", "_") : raw?.type,
-      };
+      const msg = { ...raw, type: typeof raw?.type === "string" ? raw.type.replaceAll(".", "_") : raw?.type };
       console.log("[WS] msg", msg);
 
       switch (msg.type) {
@@ -231,13 +209,7 @@ export default function GamePage() {
           break;
         }
         case "block_place": {
-          wrappedPlace(
-            msg.block.x,
-            msg.block.y,
-            msg.block.z,
-            msg.block.kind as BlockId,
-            false
-          );
+          wrappedPlace(msg.block.x, msg.block.y, msg.block.z, msg.block.kind as BlockId, false);
           break;
         }
         case "block_remove": {
@@ -255,7 +227,6 @@ export default function GamePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  // ---- Wrappers around place/remove that also broadcast ----
   const wrappedPlace = useCallback(
     (x: number, y: number, z: number, id: BlockId, emit = true) => {
       place(x, y, z, id);
@@ -270,7 +241,7 @@ export default function GamePage() {
       const b = blocks.get(ck);
       remove(x, y, z);
       if (emit) {
-        if (b) addItemToInventory(b.id as unknown as ItemId, 1);
+        if (b) addItemToInventory(b.id, 1);
         socketRef.current?.send({ type: "remove_block", x, y, z });
       }
     },
@@ -287,8 +258,7 @@ export default function GamePage() {
         const x = Math.round(p.x);
         const z = Math.round(p.z);
         const y = getTopY(x, z) + 1;
-        const eye =
-          (e?.ray?.camera?.position as THREE.Vector3) ?? new THREE.Vector3(0, 2.6, 0);
+        const eye = (e?.ray?.camera?.position as THREE.Vector3) ?? new THREE.Vector3(0, 2.6, 0);
         if (blockOverlapsPlayer(eye, x, y, z)) return;
         wrappedPlace(x, y, z, selected);
       }
@@ -299,6 +269,9 @@ export default function GamePage() {
   const sendMove = useCallback((x: number, y: number, z: number) => {
     socketRef.current?.send({ type: "move", x, y, z });
   }, []);
+
+  // --- Mining progress UI (simple center bar) ---
+  const [miningProgress, setMiningProgress] = useState<number | null>(null);
 
   return (
     <div
@@ -317,7 +290,6 @@ export default function GamePage() {
         shadows
         camera={{ fov: 75, near: 0.1, far: 2000, position: [0, 1.8, 6] }}
         onPointerDown={() => {
-          // Click to lock when inventory closed
           if (!inventoryOpen && !locked) lockRef.current?.lock?.();
         }}
         gl={{ powerPreference: "high-performance" }}
@@ -336,12 +308,14 @@ export default function GamePage() {
         <SendInitialMove sendMove={sendMove} />
         <MovementEmitter sendMove={sendMove} />
 
-        {/* World (instanced for perf; use wrappers to broadcast) */}
+        {/* World (instanced for perf; now with timed mining) */}
         <BlocksOptimized
           blocks={blocks}
           place={(x, y, z, id) => wrappedPlace(x, y, z, id)}
           remove={(x, y, z) => wrappedRemove(x, y, z)}
           selected={selected}
+          miningSpeedMultiplier={1}                 // tweak later for tools
+          onMiningProgress={setMiningProgress}      // show HUD bar
         />
 
         {/* Large ground plane for easy placement when not clicking a block */}
@@ -364,6 +338,36 @@ export default function GamePage() {
 
       {/* HUD */}
       {!inventoryOpen && <Crosshair />}
+
+      {/* Mining progress bar (center, below crosshair) */}
+      {!inventoryOpen && miningProgress != null && (
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            transform: "translate(-50%, calc(-50% + 28px))",
+            width: 140,
+            height: 8,
+            borderRadius: 6,
+            background: "rgba(255,255,255,0.2)",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.25) inset",
+            overflow: "hidden",
+            zIndex: 20,
+          }}
+        >
+          <div
+            style={{
+              width: `${Math.round(miningProgress * 100)}%`,
+              height: "100%",
+              background: "rgba(255,255,255,0.95)",
+              borderRadius: 6,
+              transition: "width 60ms linear",
+            }}
+          />
+        </div>
+      )}
+
       <Hotbar selected={selected} setSelected={setSelected} disabled={inventoryOpen} />
       <ConnectionStatus connected={connected} peers={[...peersRef.current.keys()]} />
 

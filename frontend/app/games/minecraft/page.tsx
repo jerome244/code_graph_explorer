@@ -281,12 +281,14 @@ const [selected, setSelected] = useState<BlockId>(1);
 
         {/* Player & mouse-look */}
         <Player hasBlock={hasBlock} paused={inventoryOpen} />
+        {!inventoryOpen && (
         <PointerLockControls
           ref={lockRef as any}
           makeDefault
           onLock={() => setLocked(true)}
           onUnlock={() => setLocked(false)}
         />
+      )}
 
         {/* Remote players */}
         <OtherPlayers entries={[...othersRef.current.entries()]} />

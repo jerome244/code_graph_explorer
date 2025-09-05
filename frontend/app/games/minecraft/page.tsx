@@ -20,6 +20,12 @@ import { blockOverlapsPlayer } from "./lib/physics";
 import type { BlockId } from "./lib/types";
 import { GameSocket } from "./lib/ws";
 
+<<<<<<< HEAD
+=======
+// 👇 tool helpers
+import { isToolItemId, type ToolItemId } from "./lib/items";
+
+>>>>>>> origin/try_implement_recipes
 // Drive chunk streaming from inside the Canvas
 function Streamer({ updateAround }: { updateAround: (p: THREE.Vector3) => void }) {
   const { camera } = useThree();
@@ -96,7 +102,13 @@ export default function GamePage() {
         setInventoryOpen((open) => {
           const next = !open;
           if (next) {
+<<<<<<< HEAD
             try { lockRef.current?.unlock?.(); } catch {}
+=======
+            try {
+              lockRef.current?.unlock?.();
+            } catch {}
+>>>>>>> origin/try_implement_recipes
           }
           return next;
         });
@@ -109,33 +121,79 @@ export default function GamePage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [inventoryOpen]);
 
+<<<<<<< HEAD
   // Inventory slots (blocks for now; fine to extend later)
   type ItemStack = { id: BlockId; count: number } | null;
+=======
+  // Inventory items can be a BlockId (number) or a ToolItemId (string)
+  type ItemStack = { id: BlockId | ToolItemId; count: number } | null;
+
+>>>>>>> origin/try_implement_recipes
   const [inv, setInv] = useState<ItemStack[]>(() => {
     const a = Array.from({ length: 27 }, () => null) as ItemStack[];
     a[0] = { id: 1, count: 32 };
     a[1] = { id: 5, count: 18 };
     a[2] = { id: 7, count: 12 };
+<<<<<<< HEAD
     return a;
   });
   const [craft, setCraft] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
   const [hotbarInv, setHotbarInv] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
 
   // Add mined items into inventory
+=======
+    a[3] = { id: "wooden_axe" as ToolItemId, count: 1 }; // sample tool
+    return a;
+  });
+
+  const [craft, setCraft] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
+
+  // 🔹 Hotbar starts empty by default (can hold blocks or tools)
+  const [hotbarInv, setHotbarInv] = useState<ItemStack[]>(
+    () => Array.from({ length: 9 }, () => null) as ItemStack[]
+  );
+
+  // 🔹 Which hotbar slot is active (0..8), controlled by Hotbar (1..9 keys & wheel)
+  const [selectedSlot, setSelectedSlot] = useState(0);
+  const selectedStack: ItemStack = hotbarInv[selectedSlot] ?? null;
+
+  // What can we place?
+  const selectedBlockId: BlockId | null =
+    selectedStack && typeof selectedStack.id === "number" ? (selectedStack.id as BlockId) : null;
+
+  // What tool are we mining with?
+  const currentTool: ToolItemId | null =
+    selectedStack && typeof selectedStack.id === "string" && isToolItemId(selectedStack.id)
+      ? (selectedStack.id as ToolItemId)
+      : null;
+
+  // Add mined items into inventory (blocks only)
+>>>>>>> origin/try_implement_recipes
   const addItemToInventory = useCallback((id: BlockId, amount: number = 1) => {
     setInv((curr) => {
       let remain = amount;
       const next = curr.slice();
 
+<<<<<<< HEAD
       for (let i = 0; i < next.length && remain > 0; i++) {
         const it = next[i];
         if (it && it.id === id && it.count < 64) {
+=======
+      // stack into same-id stacks
+      for (let i = 0; i < next.length && remain > 0; i++) {
+        const it = next[i];
+        if (it && typeof it.id === "number" && it.id === id && it.count < 64) {
+>>>>>>> origin/try_implement_recipes
           const room = 64 - it.count;
           const put = Math.min(room, remain);
           next[i] = { id, count: it.count + put };
           remain -= put;
         }
       }
+<<<<<<< HEAD
+=======
+      // fill empty slots
+>>>>>>> origin/try_implement_recipes
       for (let i = 0; i < next.length && remain > 0; i++) {
         if (!next[i]) {
           const put = Math.min(64, remain);
@@ -147,8 +205,11 @@ export default function GamePage() {
     });
   }, []);
 
+<<<<<<< HEAD
   const [selected, setSelected] = useState<BlockId>(1);
 
+=======
+>>>>>>> origin/try_implement_recipes
   const { blocks, place, remove, hasBlock, updateAround, getTopY } = useInfiniteWorld({
     viewDistance: 3,
   });
@@ -248,30 +309,84 @@ export default function GamePage() {
     [remove, blocks, addItemToInventory]
   );
 
+<<<<<<< HEAD
   // RMB places on ground (when not clicking a block)
+=======
+  // RMB places on ground (when not clicking a block) — only if hotbar slot has a block
+>>>>>>> origin/try_implement_recipes
   const handleGroundPointerDown = useCallback(
     (e: any) => {
       e.stopPropagation();
       const button = (e.nativeEvent as PointerEvent)?.button ?? e.button;
       if (button === 2) {
+<<<<<<< HEAD
+=======
+        if (selectedBlockId == null) return; // nothing selected in hotbar
+>>>>>>> origin/try_implement_recipes
         const p = e.point as THREE.Vector3;
         const x = Math.round(p.x);
         const z = Math.round(p.z);
         const y = getTopY(x, z) + 1;
         const eye = (e?.ray?.camera?.position as THREE.Vector3) ?? new THREE.Vector3(0, 2.6, 0);
         if (blockOverlapsPlayer(eye, x, y, z)) return;
+<<<<<<< HEAD
         wrappedPlace(x, y, z, selected);
       }
     },
     [getTopY, selected, wrappedPlace]
+=======
+        wrappedPlace(x, y, z, selectedBlockId);
+      }
+    },
+    [getTopY, selectedBlockId, wrappedPlace]
+>>>>>>> origin/try_implement_recipes
   );
 
   const sendMove = useCallback((x: number, y: number, z: number) => {
     socketRef.current?.send({ type: "move", x, y, z });
   }, []);
 
+<<<<<<< HEAD
   // --- Mining progress UI (simple center bar) ---
   const [miningProgress, setMiningProgress] = useState<number | null>(null);
+=======
+  // --- Mining progress (RAF-driven, super smooth) ---
+  const progressFillRef = useRef<HTMLDivElement | null>(null);
+  const progressValueRef = useRef(0);
+  const [progressVisible, setProgressVisible] = useState(false);
+  const rafRef = useRef<number | null>(null);
+
+  // RAF loop to apply transform without causing React re-renders
+  useEffect(() => {
+    const tick = () => {
+      if (progressFillRef.current) {
+        const v = Math.max(0, Math.min(1, progressValueRef.current));
+        progressFillRef.current.style.transform = `scaleX(${v})`;
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
+  // Called by BlocksOptimized each frame; we don't re-render every time
+  const setMiningProgress = useCallback((p: number | null) => {
+    if (p == null) {
+      // Linger at 100% briefly if we finished
+      if (progressValueRef.current >= 0.999) {
+        setProgressVisible(true);
+        window.setTimeout(() => setProgressVisible(false), 150);
+      } else {
+        setProgressVisible(false);
+      }
+      return;
+    }
+    progressValueRef.current = p;
+    if (!progressVisible) setProgressVisible(true);
+  }, [progressVisible]);
+>>>>>>> origin/try_implement_recipes
 
   return (
     <div
@@ -308,6 +423,7 @@ export default function GamePage() {
         <SendInitialMove sendMove={sendMove} />
         <MovementEmitter sendMove={sendMove} />
 
+<<<<<<< HEAD
         {/* World (instanced for perf; now with timed mining) */}
         <BlocksOptimized
           blocks={blocks}
@@ -317,6 +433,24 @@ export default function GamePage() {
           selected={selected}
           currentTool={null /* TODO: set from your hotbar selection */}
           onMiningProgress={setMiningProgress}   // 👈 THIS was missing
+=======
+        {/* World (instanced for perf; timed mining) */}
+        <BlocksOptimized
+          blocks={blocks}
+          // Guard placement if hotbar slot empty; always use the current hotbar selection
+          place={(x, y, z) => {
+            if (selectedBlockId == null) return;
+            wrappedPlace(x, y, z, selectedBlockId);
+          }}
+          remove={(x, y, z) => wrappedRemove(x, y, z)} // legacy fallback
+          removeWithDrop={(x, y, z, allowDrop) => wrappedRemove(x, y, z, true, allowDrop)}
+          // 'selected' is only used for RMB placement inside BlocksOptimized; we guard above.
+          selected={(selectedBlockId ?? 1) as BlockId}
+          // 👇 THIS makes tools affect mining speed
+          currentTool={currentTool}
+          miningSpeedMultiplier={0.6} // overall pacing; keep differences visible
+          onMiningProgress={setMiningProgress}
+>>>>>>> origin/try_implement_recipes
         />
 
         {/* Large ground plane for easy placement when not clicking a block */}
@@ -341,7 +475,11 @@ export default function GamePage() {
       {!inventoryOpen && <Crosshair />}
 
       {/* Mining progress bar (center, below crosshair) */}
+<<<<<<< HEAD
       {!inventoryOpen && miningProgress != null && (
+=======
+      {!inventoryOpen && progressVisible && (
+>>>>>>> origin/try_implement_recipes
         <div
           style={{
             position: "absolute",
@@ -355,6 +493,7 @@ export default function GamePage() {
             boxShadow: "0 2px 8px rgba(0,0,0,0.25) inset",
             overflow: "hidden",
             zIndex: 20,
+<<<<<<< HEAD
             pointerEvents: "none", // won't block clicks
           }}
         >
@@ -365,12 +504,38 @@ export default function GamePage() {
               background: "rgba(255,255,255,0.95)",
               borderRadius: 6,
               transition: "width 60ms linear",
+=======
+            pointerEvents: "none",
+          }}
+        >
+          <div
+            ref={progressFillRef}
+            style={{
+              width: "100%",
+              height: "100%",
+              background: "rgba(255,255,255,0.95)",
+              borderRadius: 6,
+              transformOrigin: "left center",
+              transform: "scaleX(0)",
+              willChange: "transform",
+>>>>>>> origin/try_implement_recipes
             }}
           />
         </div>
       )}
 
+<<<<<<< HEAD
       <Hotbar selected={selected} setSelected={setSelected} disabled={inventoryOpen} />
+=======
+      {/* New hotbar: driven by inventory 'hotbarInv' and keyboard/wheel selection */}
+      <Hotbar
+        hotbar={hotbarInv}
+        selectedSlot={selectedSlot}
+        setSelectedSlot={setSelectedSlot}
+        disabled={!locked || inventoryOpen}
+      />
+
+>>>>>>> origin/try_implement_recipes
       <ConnectionStatus connected={connected} peers={[...peersRef.current.keys()]} />
 
       {/* Inventory Overlay */}

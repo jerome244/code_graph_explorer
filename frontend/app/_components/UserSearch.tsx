@@ -1,148 +1,222 @@
-"use client";
-import * as React from "react";
-import { useRouter } from "next/navigation";
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 type UserLite = { id: number; username: string };
 
 export default function UserSearch() {
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState<UserLite[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [active, setActive] = useState<number>(-1);
+
   const router = useRouter();
-  const [q, setQ] = React.useState("");
-  const [open, setOpen] = React.useState(false);
-  const [items, setItems] = React.useState<UserLite[]>([]);
-  const [busy, setBusy] = React.useState(false);
-  const [err, setErr] = React.useState<string | null>(null);
-  const [active, setActive] = React.useState(0);
-  const rootRef = React.useRef<HTMLDivElement | null>(null);
-  const abortRef = React.useRef<AbortController | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
-  React.useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    window.addEventListener("mousedown", onDown);
-    return () => window.removeEventListener("mousedown", onDown);
-  }, []);
+  // fetch suggestions (debounced)
+  useEffect(() => {
+    const term = q.trim();
+    if (!term) {
+      setResults([]);
+      setOpen(false);
+      setActive(-1);
+      abortRef.current?.abort();
+      return;
+    }
 
-  React.useEffect(() => {
-    const s = q.trim();
-    if (!s) { setItems([]); setErr(null); setBusy(false); return; }
-    setBusy(true); setErr(null);
-    const h = setTimeout(async () => {
+    setLoading(true);
+    const t = setTimeout(async () => {
+      abortRef.current?.abort();
+      const ctl = new AbortController();
+      abortRef.current = ctl;
+
       try {
-        abortRef.current?.abort();
-        const ctrl = new AbortController();
-        abortRef.current = ctrl;
-        const r = await fetch(`/api/auth/users/search/?q=${encodeURIComponent(s)}`, {
-          cache: "no-store",
-          signal: ctrl.signal,
+        const r = await fetch(`/api/auth/users/search/?q=${encodeURIComponent(term)}`, {
+          signal: ctl.signal,
+          cache: 'no-store',
         });
-        if (!r.ok) { setErr(`Search failed (${r.status})`); setItems([]); }
-        else { setItems((await r.json()).slice(0, 8)); setOpen(true); setActive(0); }
-      } catch (e: any) {
-        if (e?.name !== "AbortError") { setErr("Search failed"); setItems([]); }
-      } finally { setBusy(false); }
+        if (!r.ok) throw new Error(String(r.status));
+        const list: UserLite[] = await r.json();
+        setResults(list.slice(0, 8));
+        setOpen(true);
+      } catch {
+        // ignore errors (401/403/etc. show nothing)
+        setResults([]);
+        setOpen(false);
+      } finally {
+        setLoading(false);
+      }
     }, 250);
-    return () => clearTimeout(h);
+
+    return () => clearTimeout(t);
   }, [q]);
 
-  const pick = (u: UserLite) => {
+  // click outside to close
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (!boxRef.current) return;
+      if (!boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, []);
+
+  const goToAllResults = () => {
+    const term = q.trim();
+    if (!term) return;
     setOpen(false);
-    router.push(`/users/${encodeURIComponent(u.username)}`); // adjust if your user page differs
+    router.push(`/search/users?q=${encodeURIComponent(term)}`);
   };
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!open || items.length === 0) return;
-    if (e.key === "ArrowDown") { e.preventDefault(); setActive((i) => (i + 1) % items.length); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => (i - 1 + items.length) % items.length); }
-    else if (e.key === "Enter") { e.preventDefault(); pick(items[active]); }
-    else if (e.key === "Escape") setOpen(false);
+  const goToProfile = (u: UserLite) => {
+    setOpen(false);
+    router.push(`/users/${encodeURIComponent(u.username)}`);
   };
 
   return (
-    <div ref={rootRef} style={{ position: "relative", width: 320 }}>
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        onFocus={() => q.trim() && setOpen(true)}
-        onKeyDown={onKeyDown}
-        placeholder="Search users…"
-        aria-label="Search users"
-        role="combobox"
-        aria-expanded={open}
-        aria-controls="user-search-listbox"
-        style={{
-          width: "100%",
-          height: 34,
-          padding: "6px 12px",
-          borderRadius: 6,
-          border: "1px solid #e5e7eb",
-          fontSize: 14
+    <div ref={boxRef} style={{ position: 'relative', width: 280 }}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          // If a suggestion is highlighted, Enter will open it via onKeyDown.
+          // Otherwise, submit goes to the results page.
+          if (active < 0) goToAllResults();
         }}
-      />
-      <div style={{ position: "absolute", right: 10, top: 8, fontSize: 12, color: "#6b7280" }}>
-        {busy ? "…" : err ? "!" : ""}
-      </div>
+      >
+        <input
+          ref={inputRef}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onFocus={() => q.trim() && setOpen(true)}
+          onKeyDown={(e) => {
+            if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+              setOpen(true);
+              return;
+            }
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              setActive((i) => (results.length ? (i + 1) % results.length : -1));
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              setActive((i) => (results.length ? (i <= 0 ? results.length - 1 : i - 1) : -1));
+            } else if (e.key === 'Enter') {
+              if (active >= 0 && results[active]) {
+                e.preventDefault();
+                goToProfile(results[active]);
+              }
+            } else if (e.key === 'Escape') {
+              setOpen(false);
+              setActive(-1);
+            }
+          }}
+          placeholder="Search users…"
+          aria-label="Search users"
+          style={{
+            width: '100%',
+            height: 34,
+            padding: '0 10px',
+            border: '1px solid #e5e7eb',
+            borderRadius: 8,
+            fontSize: 14,
+            outline: 'none',
+          }}
+        />
+      </form>
 
-      {open && (items.length > 0 || err) && (
+      {open && (results.length > 0 || loading) && (
         <div
-          id="user-search-listbox"
           role="listbox"
           style={{
-            position: "absolute",
-            top: "calc(100% + 6px)",
+            position: 'absolute',
+            top: '110%',
             left: 0,
             right: 0,
-            maxHeight: 320,
-            overflowY: "auto",
-            background: "white",
-            border: "1px solid #e5e7eb",
+            background: 'white',
+            border: '1px solid #e5e7eb',
             borderRadius: 8,
-            boxShadow: "0 8px 24px rgba(0,0,0,.08)",
-            zIndex: 1000
+            boxShadow: '0 10px 30px rgba(0,0,0,0.08)',
+            padding: 6,
+            zIndex: 100,
           }}
         >
-          {err && (
-            <div style={{ padding: 10, fontSize: 13, color: "#b91c1c", borderBottom: "1px solid #f3f4f6" }}>
-              {err}
+          {loading && (
+            <div style={{ padding: '6px 8px', fontSize: 13, color: '#6b7280' }}>
+              Searching…
             </div>
           )}
-          {items.map((u, i) => {
-            const selected = i === active;
-            return (
-              <button
-                key={u.id}
-                role="option"
-                aria-selected={selected}
-                onMouseEnter={() => setActive(i)}
-                onClick={() => pick(u)}
+
+          {results.map((u, i) => (
+            <button
+              key={u.id}
+              role="option"
+              aria-selected={active === i}
+              onMouseEnter={() => setActive(i)}
+              onMouseLeave={() => setActive(-1)}
+              onClick={() => goToProfile(u)}
+              style={{
+                display: 'flex',
+                width: '100%',
+                alignItems: 'center',
+                gap: 8,
+                padding: '8px 10px',
+                border: 0,
+                background: active === i ? '#f3f4f6' : 'white',
+                borderRadius: 6,
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              <span
+                aria-hidden
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  width: "100%",
-                  padding: "10px 12px",
-                  background: selected ? "#f3f4f6" : "white",
-                  border: "none",
-                  borderTop: "1px solid #f3f4f6",
-                  cursor: "pointer",
-                  textAlign: "left"
+                  width: 22,
+                  height: 22,
+                  borderRadius: 999,
+                  background: '#eef2ff',
+                  display: 'grid',
+                  placeItems: 'center',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: '#4f46e5',
                 }}
               >
-                <div
-                  style={{
-                    width: 24, height: 24, borderRadius: 999, background: "#e5e7eb",
-                    display: "grid", placeItems: "center", fontSize: 12, fontWeight: 700, color: "#374151"
-                  }}
-                >
-                  {u.username[0]?.toUpperCase()}
-                </div>
-                <div style={{ fontWeight: 600, fontSize: 14 }}>{u.username}</div>
-              </button>
-            );
-          })}
-          {items.length === 0 && !err && (
-            <div style={{ padding: 10, fontSize: 13, color: "#6b7280" }}>No users found</div>
-          )}
+                {u.username[0]?.toUpperCase()}
+              </span>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>{u.username}</span>
+            </button>
+          ))}
+
+          <div
+            style={{
+              borderTop: '1px solid #f3f4f6',
+              marginTop: 6,
+              paddingTop: 6,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              fontSize: 12,
+              color: '#6b7280',
+            }}
+          >
+            <span>Press Enter to search all</span>
+            <button
+              onClick={goToAllResults}
+              style={{
+                border: '1px solid #e5e7eb',
+                background: 'white',
+                padding: '4px 8px',
+                borderRadius: 6,
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+            >
+              See all results
+            </button>
+          </div>
         </div>
       )}
     </div>

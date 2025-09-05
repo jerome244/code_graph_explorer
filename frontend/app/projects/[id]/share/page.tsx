@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import SharePanel from "@/app/_components/SharePanel";
+import SharePanel from "../../../_components/SharePanel";
 
 async function getProject(id: string) {
   const access = cookies().get("access")?.value;

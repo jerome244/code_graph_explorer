@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import * as cytoscapeImport from "cytoscape";
 const cytoscape = (cytoscapeImport as any).default ?? (cytoscapeImport as any);
 import ShapeOverlay, { Shape } from "./ShapeOverlay";
+import { useSearchParams } from "next/navigation";
 
 // Parsing + path helpers moved to a separate module
 import {
@@ -50,6 +51,8 @@ const buildPath = (x1: number, y1: number, x2: number, y2: number) => {
 // ------------------------------ Page ------------------------------
 
 export default function GraphPage() {
+  
+  const searchParams = useSearchParams();
 
   // --- FULLSCREEN: start ---
   const outerRef = useRef<HTMLDivElement>(null);
@@ -1071,6 +1074,19 @@ const setLocalAudioEnabled = (on: boolean) => {
     setShowLinesGlobal(false);
     setColorizeFunctions(false); // reset coloration to default OFF on load
   }
+
+ useEffect(() => {
+   const pid = searchParams.get("projectId") || searchParams.get("id"); // accept both
+   if (!pid) return;
+   const id = Number(pid);
+   if (!Number.isFinite(id) || id <= 0) return;
+   if (projectId === id) return; // already loaded
+   (async () => {
+     // Try to refresh cookies once; ignore errors.
+     try { await fetch("/api/auth/refresh", { method: "POST" }); } catch {}
+     await loadProject(id);
+   })();
+ }, [projectId, searchParams]);
 
   // Save popup contents: update fileMap + surgically update edges and function facts in cy (no relayout)
   const savePopup = useCallback(

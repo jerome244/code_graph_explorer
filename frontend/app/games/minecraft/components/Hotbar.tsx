@@ -3,10 +3,6 @@
 import { useEffect } from "react";
 import { BLOCKS } from "../lib/constants";
 import type { BlockId } from "../lib/types";
-<<<<<<< HEAD
-
-export default function Hotbar({ selected, setSelected, disabled = false }: { selected: BlockId; setSelected: (n: BlockId) => void; disabled?: boolean }) {
-=======
 import { ITEM_SPEC, type ItemId } from "../lib/items";
 import type { MaybeItem } from "../lib/crafting";
 
@@ -19,21 +15,10 @@ type Props = {
 
 export default function Hotbar({ hotbar, selectedSlot, setSelectedSlot, disabled }: Props) {
   // number keys 1..9 pick slots 0..8; mouse wheel cycles
->>>>>>> origin/try_implement_recipes
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (disabled) return;
       const n = parseInt(e.key, 10);
-<<<<<<< HEAD
-      if (n >= 1 && n <= 7) setSelected(n as BlockId);
-    };
-    const onWheel = (e: WheelEvent) => {
-      if (disabled) return;
-      setSelected((prev) => {
-        let next = (prev + (e.deltaY > 0 ? 1 : -1)) as BlockId;
-        if (next < 1) next = 7;
-        if (next > 7) next = 1;
-=======
       if (n >= 1 && n <= 9) setSelectedSlot(n - 1);
     };
     const onWheel = (e: WheelEvent) => {
@@ -42,7 +27,6 @@ export default function Hotbar({ hotbar, selectedSlot, setSelectedSlot, disabled
         let next = prev + (e.deltaY > 0 ? 1 : -1);
         if (next < 0) next = 8;
         if (next > 8) next = 0;
->>>>>>> origin/try_implement_recipes
         return next;
       });
     };
@@ -52,44 +36,11 @@ export default function Hotbar({ hotbar, selectedSlot, setSelectedSlot, disabled
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("wheel", onWheel);
     };
-<<<<<<< HEAD
-  }, [setSelected]);
-=======
   }, [disabled, setSelectedSlot]);
->>>>>>> origin/try_implement_recipes
 
   return (
     <div
       style={{
-<<<<<<< HEAD
-        position: "absolute",
-        bottom: 16,
-        left: "50%",
-        transform: "translateX(-50%)",
-        display: "flex",
-        gap: 8,
-      }}
-    >
-      {(Array.from({ length: 7 }) as unknown as BlockId[])
-        .map((_, i) => (i + 1) as BlockId)
-        .map((id) => (
-          <button
-            key={id}
-            onClick={() => setSelected(id)}
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 8,
-              border: id === selected ? "3px solid #2563eb" : "2px solid #1f2937",
-              background: BLOCKS[id].color,
-              opacity: BLOCKS[id].transparent ? 0.7 : 1,
-              boxShadow: id === selected ? "0 0 0 4px rgba(37,99,235,.2)" : undefined,
-              cursor: "pointer",
-            }}
-            title={`${id} – ${BLOCKS[id].name}`}
-          />
-        ))}
-=======
         position: "fixed",
         left: "50%",
         bottom: 20,
@@ -174,7 +125,6 @@ export default function Hotbar({ hotbar, selectedSlot, setSelectedSlot, disabled
           </div>
         );
       })}
->>>>>>> origin/try_implement_recipes
     </div>
   );
 }

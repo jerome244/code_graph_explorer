@@ -23,6 +23,9 @@ import { GameSocket } from "./lib/ws";
 // 👇 tool helpers
 import { isToolItemId, type ToolItemId } from "./lib/items";
 
+// 👇 clouds
+import CloudLayer from "./components/CloudLayer";
+
 // Drive chunk streaming from inside the Canvas
 function Streamer({ updateAround }: { updateAround: (p: THREE.Vector3) => void }) {
   const { camera } = useThree();
@@ -363,6 +366,12 @@ export default function GamePage() {
 
         {/* Sky */}
         <color attach="background" args={["#87CEEB"]} />
+        {/* Clouds */}
+        <CloudLayer height={60} size={3000} tile={280} threshold={0.5} opacity={0.85} speed={0.012} />
+        {/* Optional second layer for depth */}
+        {/* <CloudLayer height={74} size={3200} tile={360} threshold={0.6} opacity={0.65} speed={0.006} /> */}
+        {/* Optional: mild fog for distance fade */}
+        {/* <fog attach="fog" args={["#87CEEB", 120, 900]} /> */}
 
         {/* Stream chunks around the camera */}
         <Streamer updateAround={updateAround} />

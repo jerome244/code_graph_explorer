@@ -3,8 +3,11 @@ import { cookies } from "next/headers";
 import LogoutButton from "../(auth)/LogoutButton";
 
 async function getMe() {
-  const access = cookies().get("access")?.value;
+  // ✅ Next.js 15: await cookies() before using it
+  const cookieStore = await cookies();
+  const access = cookieStore.get("access")?.value;
   if (!access) return null;
+
   const r = await fetch(`${process.env.DJANGO_API_BASE}/api/auth/me/`, {
     headers: { Authorization: `Bearer ${access}` },
     cache: "no-store",

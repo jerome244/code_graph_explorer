@@ -1,160 +1,138 @@
-import * as React from "react";
+"use client";
+
+import { useEffect, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
-import { useMovementKeys } from "../hooks/useMovementKeys";
-import {
-  aabbIntersects, makeIsSolid,
-  PLAYER_RADIUS, PLAYER_HEIGHT, EYE_HEIGHT,
-  GRAVITY, WALK_SPEED, SPRINT_MULT, JUMP_VEL
-} from "../lib/collision";
+import { BACKWARD_KEYS, FORWARD_KEYS, LEFT_KEYS, RIGHT_KEYS } from "../lib/utils";
+import { depenetrate, moveWithCollisions, PLAYER_HEIGHT } from "../lib/physics";
+import { heightAt } from "../lib/worldgen";
 
-export type PlayerAPI = {
-  getFeet(): THREE.Vector3;   // feet position
-  getPos(): THREE.Vector3;    // feet position clone
-  nudgeUp(dy: number, absolute?: boolean): void; // bump up or set absolute feet Y
-  isGrounded(): boolean;      // expose grounded state
-};
-
-type Props = { active: boolean; solid: Set<string>; worldSize: number };
-
-/* ---- Crouch + camera tuning (local to player) ---- */
-const CROUCH_MULT = 0.6;                        // crouch speed factor
-const STAND_EYE = EYE_HEIGHT;                   // meters above feet
-const CROUCH_EYE = Math.max(0.8, EYE_HEIGHT - 0.42);
-const EYE_LERP = 0.25;                          // smoothing for camera height
-
-const Player = React.forwardRef<PlayerAPI, Props>(function Player({ active, solid, worldSize }, ref) {
+export default function Player({ hasBlock, paused = false }: { hasBlock: (x: number, y: number, z: number) => boolean; paused?: boolean }) {
   const { camera } = useThree();
-  const keys = useMovementKeys();
 
-  const pos = React.useRef(new THREE.Vector3(worldSize / 2, 3, worldSize / 2)); // feet
-  const vel = React.useRef(new THREE.Vector3());
-  const grounded = React.useRef(false);
+  // state
+  const vel = useRef(new THREE.Vector3());
+  const dir = useRef(new THREE.Vector3());
+  const grounded = useRef(true);
 
-  // sprint/crouch state + jump sprint latch (for mid-air behavior)
-  const crouchHeldRef = React.useRef(false);
-  const sprintAirLatchRef = React.useRef(1);    // 1 or SPRINT_MULT, fixed per airborne arc
-  const wasGroundedRef = React.useRef(true);
+  // input & jump helpers
+  const pressed = useRef<Set<string>>(new Set());
+  const lastFrameTime = useRef<number>(0);
+  const coyoteTimer = useRef<number>(0);
+  const bufferTimer = useRef<number>(0);
 
-  // camera smoothing for crouch eye height
-  const eyeHeightRef = React.useRef(STAND_EYE);
+  const COYOTE_MS = 100;
+  const BUFFER_MS = 100;
 
-  const isSolid = React.useMemo(() => makeIsSolid(solid, worldSize), [solid, worldSize]);
-
-  React.useEffect(() => {
-    if (!active) return;
-    let tries = 0;
-    while (aabbIntersects(pos.current, isSolid) && tries++ < 10) pos.current.y += 0.2;
-  }, [active, isSolid]);
-
-  // Hook up Ctrl for crouch (keep using your existing hook for all other keys)
-  React.useEffect(() => {
-    const onDown = (e: KeyboardEvent) => {
-      if (e.code === "ControlLeft" || e.code === "ControlRight") crouchHeldRef.current = true;
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      pressed.current.add(k);
+      if (k === " ") bufferTimer.current = BUFFER_MS;
     };
-    const onUp = (e: KeyboardEvent) => {
-      if (e.code === "ControlLeft" || e.code === "ControlRight") crouchHeldRef.current = false;
+    const up = (e: KeyboardEvent) => {
+      pressed.current.delete(e.key.toLowerCase());
     };
-    window.addEventListener("keydown", onDown);
-    window.addEventListener("keyup", onUp);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
     return () => {
-      window.removeEventListener("keydown", onDown);
-      window.removeEventListener("keyup", onUp);
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
     };
   }, []);
 
-  React.useImperativeHandle(ref, () => ({
-    getFeet: () => pos.current.clone(),
-    getPos: () => pos.current.clone(),
-    nudgeUp: (dy, absolute = false) => {
-      if (absolute) pos.current.y = dy;
-      else pos.current.y += dy;
+  // Spawn ON the terrain, not at a fixed y
+  useEffect(() => {
+    const x = 0, z = 6; // initial camera x/z you use
+    const surfaceY = heightAt(Math.round(x), Math.round(z));
+    camera.position.set(x, surfaceY + PLAYER_HEIGHT + 0.001, z);
+  }, [camera]);
+
+  useFrame((state, dt) => {
+    if (paused) { return; }
+
+    const now = state.clock.elapsedTime * 1000;
+    const frameDtMs = Math.min(50, now - (lastFrameTime.current || now));
+    lastFrameTime.current = now;
+
+    // 0) If something spawned on us, pop out gently
+    {
+      const { position: fixed, moved } = depenetrate(camera.position, hasBlock);
+      if (moved) camera.position.copy(fixed);
+    }
+
+    const SPEED = 6;
+    const GRAVITY = 24;
+    const JUMP_V = 8;
+
+    // 1) Movement intent
+    const forward = Array.from(pressed.current).some((k) => FORWARD_KEYS.has(k));
+    const backward = Array.from(pressed.current).some((k) => BACKWARD_KEYS.has(k));
+    const left = Array.from(pressed.current).some((k) => LEFT_KEYS.has(k));
+    const right = Array.from(pressed.current).some((k) => RIGHT_KEYS.has(k));
+
+    const fAxis = (forward ? 1 : 0) + (backward ? -1 : 0);
+    const rAxis = (right ? 1 : 0) + (left ? -1 : 0);
+
+    dir.current.set(rAxis, 0, fAxis);
+    if (dir.current.lengthSq() > 0) dir.current.normalize();
+
+    const forwardVec = new THREE.Vector3();
+    camera.getWorldDirection(forwardVec);
+    forwardVec.y = 0;
+    if (forwardVec.lengthSq() > 0) forwardVec.normalize();
+
+    const rightVec = new THREE.Vector3().crossVectors(forwardVec, new THREE.Vector3(0, 1, 0)).normalize();
+
+    const moveDir = new THREE.Vector3()
+      .addScaledVector(forwardVec, dir.current.z)
+      .addScaledVector(rightVec, dir.current.x);
+    if (moveDir.lengthSq() > 0) moveDir.normalize();
+
+    const sprint = pressed.current.has("shift") && !pressed.current.has(" ");
+    const speed = SPEED * (sprint ? 1.5 : 1);
+
+    // 2) Timers (coyote & jump buffer)
+    coyoteTimer.current = Math.max(0, coyoteTimer.current - frameDtMs);
+    bufferTimer.current = Math.max(0, bufferTimer.current - frameDtMs);
+    if (grounded.current) coyoteTimer.current = COYOTE_MS;
+
+    let doJump = false;
+    if (bufferTimer.current > 0 && coyoteTimer.current > 0) {
+      doJump = true;
+      bufferTimer.current = 0;
+      coyoteTimer.current = 0;
+    }
+
+    // 3) Vertical velocity
+    if (doJump) {
+      vel.current.y = JUMP_V;
       grounded.current = false;
-    },
-    isGrounded: () => grounded.current,
-  }), []);
-
-  useFrame((_, rawDt) => {
-    if (!active) return;
-    const dt = Math.min(0.05, rawDt);
-
-    // Resolve any initial penetration (e.g., player placed a block at feet)
-    let pushes = 0;
-    while (aabbIntersects(pos.current, isSolid) && pushes++ < 8) pos.current.y += 0.05;
-
-    // Camera basis
-    const forward = new THREE.Vector3();
-    camera.getWorldDirection(forward);
-    forward.y = 0; forward.normalize();
-    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
-
-    // Input
-    const k = keys.get();
-    const wish = new THREE.Vector3();
-    if (k.forward) wish.add(forward);
-    if (k.back)    wish.sub(forward);
-    if (k.right)   wish.add(right);
-    if (k.left)    wish.sub(right);
-    if (wish.lengthSq() > 1e-6) wish.normalize();
-
-    // --- Jump: when we take off, latch sprint multiplier for the whole airborne arc
-    const crouching = crouchHeldRef.current;
-    if (k.jump && grounded.current) {
-      vel.current.y = JUMP_VEL;
-      grounded.current = false;
-      // latch sprint at the instant of takeoff (disabled if crouching)
-      const sprintLiveAtTakeoff = k.sprint && !crouching;
-      sprintAirLatchRef.current = sprintLiveAtTakeoff ? SPRINT_MULT : 1;
     } else {
       vel.current.y -= GRAVITY * dt;
-      if (vel.current.y < -30) vel.current.y = -30;
     }
 
-    // --- Integrate Y early to detect ground transition (so we can also latch when walking off edges)
-    const p = pos.current;
-    const prevX = p.x, prevY = p.y, prevZ = p.z;
+    // 4) Integrate with collisions
+    const desiredVel = new THREE.Vector3(moveDir.x * speed, vel.current.y, moveDir.z * speed);
+    const { position, velocity, onGround } = moveWithCollisions(camera.position, desiredVel, dt, hasBlock);
 
-    p.y += vel.current.y * dt;
-    let hitFloor = false;
-    if (aabbIntersects(p, isSolid)) { if (vel.current.y < 0) hitFloor = true; p.y = prevY; vel.current.y = 0; }
-    grounded.current = hitFloor;
+    camera.position.copy(position);
+    vel.current.copy(velocity);
+    grounded.current = onGround;
 
-    // If we just left ground without jumping (e.g., stepped off), latch sprint state now
-    if (wasGroundedRef.current && !grounded.current && vel.current.y > -1e-6) {
-      const sprintLive = k.sprint && !crouching;
-      sprintAirLatchRef.current = sprintLive ? SPRINT_MULT : 1;
+    // 5) Dynamic terrain clamp: never let eye go below the local surface
+    {
+      const px = Math.round(camera.position.x);
+      const pz = Math.round(camera.position.z);
+      const surfaceY = heightAt(px, pz); // current column’s surface height
+      const minEyeY = surfaceY + PLAYER_HEIGHT + 0.001;
+      if (camera.position.y < minEyeY) {
+        camera.position.y = minEyeY;
+        vel.current.y = 0;
+        grounded.current = true;
+      }
     }
-    wasGroundedRef.current = grounded.current;
-
-    // --- Ground / air speed selection
-    const groundSprintMult = (k.sprint && !crouching) ? SPRINT_MULT : 1; // sprint disabled while crouched
-    const speedMult = grounded.current ? groundSprintMult : sprintAirLatchRef.current;
-    const crouchMult = crouching ? CROUCH_MULT : 1;
-    const speed = WALK_SPEED * speedMult * crouchMult;
-
-    // Apply horizontal velocity from wish direction
-    vel.current.x = wish.x * speed;
-    vel.current.z = wish.z * speed;
-
-    // Integrate X/Z with collisions
-    p.x += vel.current.x * dt;
-    if (aabbIntersects(p, isSolid)) { p.x = prevX; vel.current.x = 0; }
-
-    p.z += vel.current.z * dt;
-    if (aabbIntersects(p, isSolid)) { p.z = prevZ; vel.current.z = 0; }
-
-    // Clamp world bounds
-    p.x = THREE.MathUtils.clamp(p.x, 0 + PLAYER_RADIUS, worldSize - PLAYER_RADIUS);
-    p.z = THREE.MathUtils.clamp(p.z, 0 + PLAYER_RADIUS, worldSize - PLAYER_RADIUS);
-
-    // Smooth camera height for crouch
-    const eyeTarget = crouching ? CROUCH_EYE : STAND_EYE;
-    eyeHeightRef.current = THREE.MathUtils.lerp(eyeHeightRef.current, eyeTarget, EYE_LERP);
-
-    camera.position.set(p.x, p.y + eyeHeightRef.current, p.z);
   });
 
   return null;
-});
-
-export default Player;
+}

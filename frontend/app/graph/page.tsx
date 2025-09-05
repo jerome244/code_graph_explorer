@@ -352,7 +352,6 @@ export default function GraphPage() {
   const wsReadyRef = useRef(false);
   const applyingRemoteRef = useRef(false);
   const applyingRemotePopupRef = useRef(false);
-  const applyingRemoteViewportRef = useRef(false);
   const peersRef = useRef<Map<number, Peer>>(new Map());
   const [peers, setPeers] = useState<Peer[]>([]);
   const textTimersRef = useRef<Map<string, number>>(new Map());
@@ -789,23 +788,6 @@ const setLocalAudioEnabled = (on: boolean) => {
           if (r === "busy") setInfo(`${peersRef.current.get(from)?.username ?? "Peer"} is busy`);
         }
 
-        // --- Viewport sync: apply peers' zoom/pan (and initial state from server) ---
-        else if (msg.type === "viewport") {
-          const { zoom, pan, by } = msg.data || {};
-          if (by === me?.id) return; // ignore our own echoes
-          const cy = cyRef.current;
-          if (!cy) return;
-          applyingRemoteViewportRef.current = true;
-          if (typeof zoom === "number") cy.zoom(zoom);
-          if (pan && typeof pan.x === "number" && typeof pan.y === "number") {
-            cy.pan({ x: Number(pan.x), y: Number(pan.y) });
-          }
-          // let Cytoscape settle before re-enabling local broadcasts
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => { applyingRemoteViewportRef.current = false; });
-          });
-        }
-        
 
       } catch (err) { /* ignore parse/socket errors */ }
     };
@@ -1364,32 +1346,6 @@ const setLocalAudioEnabled = (on: boolean) => {
 
     root.addEventListener("mousemove", onMove);
     return () => { root.removeEventListener("mousemove", onMove); cancelAnimationFrame(raf); };
-  }, [projectId]);
-
-  // ------------------------------ Realtime: broadcast viewport (pan/zoom) ------------------
-  useEffect(() => {
-    const cy = cyRef.current;
-    if (!cy) return;
-
-    let raf = 0;
-    const onViewport = () => {
-      if (applyingRemoteViewportRef.current) return; // avoid echo loops
-      if (raf) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        const ws = wsRef.current;
-        if (!ws || ws.readyState !== 1) return;
-        const z = cy.zoom();
-        const p = cy.pan();
-        ws.send(JSON.stringify({ type: "viewport", zoom: z, pan: { x: p.x, y: p.y } }));
-      });
-    };
-
-    cy.on("pan zoom", onViewport);
-    return () => {
-      try { cy.off("pan zoom", onViewport); } catch {}
-      cancelAnimationFrame(raf);
-    };
   }, [projectId]);
 
   // ------------------------------ Popup Resize Sync ------------------------------

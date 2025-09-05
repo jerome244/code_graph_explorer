@@ -23,6 +23,10 @@ PRESENCE = {}
 CHAT_HISTORY = {}
 CHAT_HISTORY_MAX = 100  # cap backlog per project group
 
+# --- Viewport sync: last known viewport per project (ephemeral; per process) ---
+# { group_name: {"zoom": float, "pan": {"x": float, "y": float}} }
+VIEWPORT_STATE = {}
+
 
 def _color_for_user(uid: int) -> str:
     # stable pastel-ish color by uid
@@ -117,6 +121,11 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
         # Send current shapes snapshot to me
         shapes = await self._fetch_shapes()
         await self.send_json({"type": "shapes_full", "shapes": shapes})
+
+        # --- Viewport sync: send last known viewport (if any) so newcomers land where the team is
+        vp = VIEWPORT_STATE.get(self.group_name)
+        if vp:
+            await self.send_json({"type": "viewport", "data": {"zoom": vp.get("zoom"), "pan": vp.get("pan")}})
 
         # Announce my join to others
         await self.channel_layer.group_send(
@@ -381,6 +390,33 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
             await self.channel_layer.group_send(
                 self.group_name,
                 {"type": "broadcast", "payload": payload},
+            )
+
+        # --- Viewport sync: store + broadcast ---
+        elif t == "viewport":
+            # Expect: {type:"viewport", zoom: float, pan: {x: float, y: float}}
+            # Persist last known viewport for newcomers (ephemeral)
+            try:
+                zoom = float(content.get("zoom"))
+            except (TypeError, ValueError):
+                zoom = None
+            pan = content.get("pan") or {}
+            panx = pan.get("x")
+            pany = pan.get("y")
+
+            if zoom is not None and panx is not None and pany is not None:
+                VIEWPORT_STATE[self.group_name] = {"zoom": zoom, "pan": {"x": panx, "y": pany}}
+
+            # Fan-out to everyone (clients ignore echoes from themselves)
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "broadcast",
+                    "payload": {
+                        "type": "viewport",
+                        "data": {"zoom": zoom, "pan": {"x": panx, "y": pany}, "by": getattr(user, "id", None)},
+                    },
+                },
             )
 
         # Unknown → ignore silently

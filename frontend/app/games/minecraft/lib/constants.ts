@@ -17,4 +17,6 @@ export const BLOCKS: Record<BlockId, BlockSpec> = {
   5: { name: "Wood",  color: "#a26a2a", hardness: 0.70 },
   6: { name: "Brick", color: "#b04949", hardness: 1.60 },
   7: { name: "Glass", color: "#7dd3fc", opacity: 0.4, transparent: true, hardness: 0.20 },
+  8: { name: "Lava",  color: "#ff6a00", opacity: 0.85, transparent: true, hardness: Infinity },
+  9: { name: "Snow",  color: "#ffffff", hardness: 0.15 },
 };

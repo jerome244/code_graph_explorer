@@ -123,6 +123,8 @@ export default function GamePage() {
     a[1] = { id: 5, count: 18 };
     a[2] = { id: 7, count: 12 };
     a[3] = { id: "wooden_axe" as ToolItemId, count: 1 }; // sample tool
+    a[4] = { id: 8, count: 16 }; // Lava
+    a[5] = { id: 9, count: 32 }; // Snow
     return a;
   });
 

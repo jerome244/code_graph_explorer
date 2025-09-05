@@ -1,20 +1,21 @@
 // lib/worldgen.ts
-// Deterministic terrain + simple biomes (temperature × moisture) with no deps.
-// Taller relief + mountain belts, flat sea-level water and carved rivers.
-// Surface-only generation: one block per (x,z) column for performance.
+// Deterministic terrain + biomes (temperature × moisture) with no deps.
+// Alps mode: tall massifs, sharp ridges; rivers & seas; deeper oceans; stacked water columns.
+// Surface-only generation per (x,z) column; trees added via lib/trees.ts.
 
 import type { BlockId } from "./types";
 import { chunkBounds } from "./chunks";
-import { maybeAddTree } from "./trees";
+// Robust import to avoid transient hot-reload shape issues
+import * as Trees from "./trees";
 
-// -------- utils: hash, lerp, value noise, fbm --------
+// -------- utils: hash, lerp, noise, fbm --------
 function hash2(x: number, y: number, seed = 1337) {
   const h = ((x * 374761393) ^ (y * 668265263) ^ seed) >>> 0;
   return ((h ^ (h >>> 13)) * 1274126177 >>> 0) / 4294967296;
 }
 const clamp = (v: number, a = 0, b = 1) => Math.max(a, Math.min(b, v));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-const fade = (t: number) => t * t * t * (t * (t * 6 - 15) + 10); // Perlin
+const fade = (t: number) => t * t * t * (t * (t * 6 - 15) + 10); // Perlin fade
 function smoothStep01(e0: number, e1: number, x: number) {
   const t = clamp((x - e0) / Math.max(1e-6, e1 - e0), 0, 1);
   return t * t * (3 - 2 * t);
@@ -56,26 +57,34 @@ function fbm2(
 }
 
 // ----------------------- Height & Biomes -----------------------
-const WORLD_BASE = 12;        // base ground level
-const WORLD_VAR  = 24;        // was 18 → taller world
-const SEA_BAND   = 0.35;      // keeps coastlines reasonable with higher WORLD_VAR
-const MOUNTAIN_BAND = 0.72;   // rocky tops kick in earlier for visual mountains
+const WORLD_BASE = 12;
+const WORLD_VAR  = 36; // much taller world
 
-// Water configuration (using Glass (7) as a water stand-in)
+// Keep sea near a fixed height even as WORLD_VAR changes
+const SEA_LEVEL_TARGET = 20;
+const SEA_BAND = clamp((SEA_LEVEL_TARGET - WORLD_BASE) / WORLD_VAR, 0, 1);
+const MOUNTAIN_BAND = 0.70; // stone shows a bit earlier for mountain look
+
+// Water configuration (using Glass (7) as water for now)
 const WATER_BLOCK_ID = 7 as BlockId;
 export const SEA_LEVEL_Y = Math.floor(WORLD_BASE + SEA_BAND * WORLD_VAR);
 
-// River configuration
-const RIVER_SCALE = 420;          // bigger = longer, fewer rivers
-const RIVER_WIDTH = 0.035;        // ~half-width in noise space (lower => narrower)
-const RIVER_MAX_DEPTH = 4;        // deeper river cuts
+// Rivers
+const RIVER_SCALE = 420;      // bigger = longer, fewer rivers
+const RIVER_WIDTH = 0.035;    // ~half-width in noise space (lower => narrower)
+const RIVER_MAX_DEPTH = 5;    // a hair deeper to match bigger relief
 
-// Terrain roughness controls (reduce flats, emphasize relief)
-const RELIEF_GAIN      = 0.85; // was 0.5 → hillier regions get much hillier
-const WARP_STRENGTH    = 38;   // was 24 → more bendy structures
-const WARP_SCALE       = 160;  // was 180 → slightly tighter warps
-const MICRO_BUMP_AMPL  = 1.5;  // was 1.25 → tiny texture
-const MICRO_BUMP_SCALE = 14;   // was 16
+// Terrain roughness controls
+const RELIEF_GAIN      = 0.85; // hillier regions get much hillier
+const WARP_STRENGTH    = 38;   // stronger domain warp
+const WARP_SCALE       = 160;  // slightly tighter warps
+const MICRO_BUMP_AMPL  = 1.5;  // tiny texture
+const MICRO_BUMP_SCALE = 14;
+
+// Extra water depth settings
+const WATER_MAX_STACK   = 8;  // stack a short column for visual depth (perf cap)
+const OCEAN_BASIN_DEPTH = 6;  // extra carve below terrain for oceans
+const SHELF_WIDTH       = 0.08; // coastal shelf band kept shallow
 
 export function heightAt(x: number, z: number): number {
   // Domain warp to break up long, straight flats
@@ -84,32 +93,42 @@ export function heightAt(x: number, z: number): number {
   const xw = x + wx;
   const zw = z + wz;
 
-  // Continents (unwarped) + warped ridges/detail for local variety
+  // Base: continents (unwarped) + warped ridges/detail
   const continent = fbm2(x, z, { scale: 220, octaves: 4, gain: 0.55, seed: 42 });
-  const ridges    = 1 - Math.abs(2 * valueNoise2(xw, zw, 80, 7) - 1);
+  const ridges0   = 1 - Math.abs(2 * valueNoise2(xw, zw, 80, 7) - 1);
   const detail    = fbm2(xw + 1000, zw - 1000, { scale: 26, octaves: 4, gain: 0.55, seed: 99 });
 
-  // Initial blend
-  let elev01 = clamp(0.55 * continent + 0.30 * ridges + 0.15 * detail, 0, 1);
+  let elev01 = clamp(0.52 * continent + 0.30 * ridges0 + 0.18 * detail, 0, 1);
 
-  // Regional mountain mask → where mask is high, push highs higher
-  const mMask = fbm2(x + 8000, z - 8000, { scale: 360, octaves: 3, gain: 0.6, seed: 333 }); // 0..1
-  const high  = smoothStep01(0.55, 0.95, elev01) * 1.12; // steepen only near the top
-  elev01 = clamp(lerp(elev01, high, 0.55 * mMask), 0, 1);
+  // ---------- Big-mountain pass ----------
+  // Regional mask: where mountains are allowed to get extremely tall
+  const massifMask = fbm2(x - 12000, z + 12000, { scale: 520, octaves: 3, gain: 0.6, seed: 313 });
+  const massif = smoothStep01(0.55, 0.9, massifMask); // 0..1
 
-  // Relief variation — some regions are naturally hillier/steeper
+  // Emphasize only the high band
+  const highBand = smoothStep01(0.60, 0.98, elev01);
+
+  // Ridged spines (sharper)
+  const ridgeRaw = 1.0 - Math.abs(2.0 * valueNoise2(xw - 4000, zw + 4000, 72, 707) - 1.0);
+  const ridge = Math.pow(ridgeRaw, 1.6);
+
+  // Add a normalized lift to peaks; gated by massif & highBand
+  const PEAK_LIFT = 0.38; // how much of the normalized range we can add
+  elev01 = clamp(elev01 + PEAK_LIFT * massif * highBand * ridge, 0, 1);
+
+  // Regional relief variation — some areas much steeper
   const reliefMask = fbm2(x + 5000, z - 5000, { scale: 280, octaves: 3, gain: 0.6, seed: 222 });
   const relief = 1 + RELIEF_GAIN * (reliefMask * 2 - 1); // 1±RELIEF_GAIN
   elev01 = clamp(0.5 + (elev01 - 0.5) * relief, 0, 1);
 
-  // Micro bumps (± ~1–2 blocks) to kill broad flats and add texture
+  // Micro bumps (± ~1–2 blocks)
   const micro = (fbm2(x - 1234, z + 4321, { scale: MICRO_BUMP_SCALE, octaves: 2, gain: 0.55, seed: 777 }) - 0.5) * 2 * MICRO_BUMP_AMPL;
 
   const y = Math.floor(WORLD_BASE + elev01 * WORLD_VAR + micro);
   return y;
 }
 
-// — Temperature & Moisture fields (both [0,1]) —
+// — Temperature & Moisture (both [0,1]) —
 function temperatureAt(x: number, z: number, elevY: number) {
   const t = fbm2(x + 3000, z - 5000, { scale: 650, octaves: 4, gain: 0.55, seed: 1337 });
   const altitudePenalty = clamp((elevY - 18) / 28, 0, 1) * 0.55; // higher = colder
@@ -137,7 +156,7 @@ export function biomeAt(x: number, z: number): Biome {
   const elev01 = clamp((y - WORLD_BASE) / WORLD_VAR, 0, 1);
 
   // Hard elevation gates first
-  if (elev01 > 0.88) return temperatureAt(x, z, y) < 0.45 ? "alpine" : "mountains";
+  if (elev01 > 0.90) return temperatureAt(x, z, y) < 0.50 ? "alpine" : "mountains";
   if (elev01 < SEA_BAND + 0.02) return "beach";
 
   // Climate fields with contrast to reduce middling values (plains)
@@ -166,7 +185,7 @@ function riverStrengthAt(x: number, z: number) {
   return clamp((RIVER_WIDTH - d) / RIVER_WIDTH, 0, 1);
 }
 
-// Choose the visible top block for the column at a given surface height (no water logic)
+// Choose the visible top block at a given surface height (no water logic)
 function topBlockForAtHeight(x: number, z: number, y: number): BlockId {
   // Cheap slope probe (4-neighbors) → stone on steep slopes for mountain look
   const s = Math.max(
@@ -209,6 +228,36 @@ export function topBlockFor(x: number, z: number): BlockId {
   return topBlockForAtHeight(x, z, y);
 }
 
+// ----- Ocean bathymetry helpers -----
+function oceanExtraDepth(x: number, z: number, bedY: number) {
+  // Extra ocean depth depends on local basin noise and how far below sea we are.
+  const below = SEA_LEVEL_Y - bedY;
+  if (below <= 0) return 0;
+  const depth01 = clamp(below / (WORLD_VAR * 0.6), 0, 1);
+  const basin = fbm2(x + 15000, z - 15000, { scale: 340, octaves: 3, gain: 0.55, seed: 818 });
+  // Keep continental shelf (near shore) shallower:
+  const shelf01 = clamp((SEA_LEVEL_Y - bedY) / WORLD_VAR, 0, 1);
+  const shelfMask = 1.0 - smoothStep01(0.0, SHELF_WIDTH, shelf01); // 1 offshore, 0 on shelf
+  const extra = Math.floor((0.25 + 0.75 * basin) * depth01 * OCEAN_BASIN_DEPTH * shelfMask);
+  return Math.max(0, extra);
+}
+
+function waterBedAt(x: number, z: number) {
+  // Recreate the carve logic to know where the bed ends up (ocean or river).
+  const yTerrain = heightAt(x, z);
+  const elev01 = clamp((yTerrain - WORLD_BASE) / WORLD_VAR, 0, 1);
+  const d = Math.abs(0.5 - valueNoise2(x + 1111, z - 1111, RIVER_SCALE, 12345)) * 2;
+  const r = clamp((RIVER_WIDTH - d) / RIVER_WIDTH, 0, 1);
+  let bed = yTerrain;
+  if (r > 0 && elev01 > SEA_BAND + 0.02 && elev01 < 0.95) {
+    bed = yTerrain - Math.floor(r * RIVER_MAX_DEPTH);
+  }
+  if (bed < SEA_LEVEL_Y) {
+    bed -= oceanExtraDepth(x, z, bed);
+  }
+  return bed;
+}
+
 // Compute the visible surface (y,id) after rivers & sea are applied
 export function surfaceAt(x: number, z: number): { y: number; id: BlockId } {
   const yTerrain = heightAt(x, z);
@@ -221,8 +270,10 @@ export function surfaceAt(x: number, z: number): { y: number; id: BlockId } {
     yCarved = yTerrain - Math.floor(r * RIVER_MAX_DEPTH);
   }
 
-  // Oceans / seas (flat at SEA_LEVEL_Y)
+  // Oceans / seas (flat surface at SEA_LEVEL_Y)
   if (yCarved < SEA_LEVEL_Y) {
+    // deepen ocean basins under the surface before returning
+    yCarved -= oceanExtraDepth(x, z, yCarved);
     return { y: SEA_LEVEL_Y, id: WATER_BLOCK_ID };
   }
 
@@ -239,13 +290,14 @@ export function surfaceAt(x: number, z: number): { y: number; id: BlockId } {
 
 // Legacy helper kept for compatibility with other imports
 export function blockFor(y: number, h: number): BlockId {
-  if (y === h) return 1;              // Grass (unused by our generator; top is handled in surfaceAt)
+  if (y === h) return 1;              // Grass (unused; top is handled in surfaceAt)
   if (y < h && y >= h - 3) return 2;  // Dirt
   if (y < h - 3) return 3;            // Stone
   return 1 as BlockId;                // default
 }
 
-// Generate a whole chunk (surface-only): single block per column at (x, surfaceY, z)
+// Generate a whole chunk (surface-only): one block per column at (x, z)
+// + stacks water downward a bit for visible depth; + sparse trees on land.
 export function generateChunk(cx: number, cz: number) {
   const { x0, z0, x1, z1 } = chunkBounds(cx, cz);
   const blocks: Array<{ x: number; y: number; z: number; id: BlockId }> = [];
@@ -254,10 +306,17 @@ export function generateChunk(cx: number, cz: number) {
       const { y, id } = surfaceAt(x, z);
       blocks.push({ x, y, z, id });
 
-      // Sparse trees (separate module). Only on land.
-      if (id !== WATER_BLOCK_ID) {
+      if (id === WATER_BLOCK_ID) {
+        // Fill a short column of water down toward the bed for visual depth
+        const bed = waterBedAt(x, z);
+        let added = 0;
+        for (let wy = y - 1; wy > bed && added < WATER_MAX_STACK; wy--, added++) {
+          blocks.push({ x, y: wy, z, id: WATER_BLOCK_ID });
+        }
+      } else {
+        // Sparse trees (separate module). Only on land.
         const b = biomeAt(x, z);
-        maybeAddTree(
+        Trees.maybeAddTree?.(
           blocks,
           x, z, y,
           b,

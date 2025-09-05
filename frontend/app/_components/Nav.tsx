@@ -48,6 +48,13 @@ export default async function Nav() {
         <Link href="/games" style={navLinkStyle}>
           Games
         </Link>
+
+        {/* Private link — only when logged in */}
+        {me && (
+          <Link href="/profile" style={navLinkStyle}>
+            Profile
+          </Link>
+        )}
       </nav>
 
       {/* User Options */}

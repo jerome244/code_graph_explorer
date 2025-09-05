@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 // Only protect truly private pages. Graph & Games are PUBLIC.
-const PROTECTED_PATHS = ["/dashboard"];
+const PROTECTED_PATHS = ["/dashboard", "/profile"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

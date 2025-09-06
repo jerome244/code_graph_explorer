@@ -130,7 +130,13 @@ class MessageSendView(APIView):
         body = (request.data.get("body") or "").strip()
         if not to_username or not body:
             return Response({"detail": "Missing 'to' or 'body'."}, status=400)
+
         recipient = get_object_or_404(User, username__iexact=to_username)
+
+        # 🚫 block self-DM
+        if recipient == request.user:
+            return Response({"detail": "You cannot message yourself."}, status=400)
+
         msg = Message.objects.create(sender=request.user, recipient=recipient, body=body)
         ser = MessageSerializer(msg, context={"request": request})
         return Response(ser.data, status=201)

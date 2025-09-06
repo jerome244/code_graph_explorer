@@ -3,7 +3,6 @@ import { headers, cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import ProfileActions from "./ProfileActions";
-import MessagesPanel from "./MessagesPanel";
 
 type UserPublic = {
   // optional when enriched endpoint is available
@@ -51,7 +50,8 @@ async function getUser(username: string): Promise<UserPublic | null> {
 }
 
 async function getMeUsername(): Promise<string | null> {
-  const r = await fetch(absoluteUrl(`/api/auth/me`), {
+  // call Django directly to avoid needing a Next API proxy
+  const r = await fetch(`${process.env.DJANGO_API_BASE}/api/auth/me/`, {
     cache: "no-store",
     headers: authHeader(),
   });
@@ -61,10 +61,10 @@ async function getMeUsername(): Promise<string | null> {
 }
 
 async function getLastProjects(username: string): Promise<ProjectLite[]> {
-  const r = await fetch(absoluteUrl(`/api/users/${encodeURIComponent(username)}/projects?limit=4`), {
-    cache: "no-store",
-    headers: authHeader(),
-  });
+  const r = await fetch(
+    absoluteUrl(`/api/users/${encodeURIComponent(username)}/projects?limit=4`),
+    { cache: "no-store", headers: authHeader() }
+  );
   if (!r.ok) return [];
   return r.json();
 }
@@ -77,6 +77,9 @@ export default async function UserProfilePage({ params }: { params: { username: 
   ]);
   if (!user) return notFound();
 
+  const isSelf =
+    !!meUsername && meUsername.toLowerCase() === (user.username ?? "").toLowerCase();
+
   return (
     <main style={{ maxWidth: 980, margin: "24px auto", padding: "0 16px" }}>
       {/* Header */}
@@ -84,8 +87,15 @@ export default async function UserProfilePage({ params }: { params: { username: 
         <div
           aria-hidden
           style={{
-            width: 64, height: 64, borderRadius: 999, background: "#eef2ff",
-            display: "grid", placeItems: "center", fontWeight: 800, fontSize: 24, color: "#4f46e5",
+            width: 64,
+            height: 64,
+            borderRadius: 999,
+            background: "#eef2ff",
+            display: "grid",
+            placeItems: "center",
+            fontWeight: 800,
+            fontSize: 24,
+            color: "#4f46e5",
           }}
         >
           {user.username?.[0]?.toUpperCase() ?? "?"}
@@ -100,12 +110,13 @@ export default async function UserProfilePage({ params }: { params: { username: 
         </div>
       </header>
 
-      {/* Follow / Message actions + follower counts */}
+      {/* Follow / Message actions + follower counts (hidden when viewing your own profile) */}
       <ProfileActions
         username={user.username}
         isFollowing={!!user.is_following}
         followers={user.followers_count ?? 0}
         following={user.following_count ?? 0}
+        isSelf={isSelf}
       />
 
       {/* Bio */}
@@ -115,9 +126,6 @@ export default async function UserProfilePage({ params }: { params: { username: 
           <p style={{ marginTop: 0, whiteSpace: "pre-wrap" }}>{user.bio}</p>
         </section>
       )}
-
-      {/* Conversation with this user */}
-      <MessagesPanel otherUsername={user.username} meUsername={meUsername} />
 
       {/* Latest projects */}
       <section style={{ marginTop: 24 }}>

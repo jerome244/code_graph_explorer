@@ -3,14 +3,14 @@ import { headers, cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import ProfileActions from "./ProfileActions";
+import MessagesPanel from "./MessagesPanel";
 
 type UserPublic = {
-  // new optional fields (present when enriched endpoint is available)
+  // optional when enriched endpoint is available
   followers_count?: number;
   following_count?: number;
   is_following?: boolean;
 
-  // existing
   id: number;
   username: string;
   bio?: string | null;
@@ -28,7 +28,6 @@ type ProjectLite = {
 };
 
 function absoluteUrl(path: string) {
-  // Prefer explicit base if you set it; otherwise derive from request headers (works with proxies/tunnels)
   const h = headers();
   const base =
     process.env.NEXT_PUBLIC_BASE_URL ||
@@ -42,7 +41,6 @@ function authHeader() {
 }
 
 async function getUser(username: string): Promise<UserPublic | null> {
-  // Hit our own Next API route (proxy) with absolute URL so server-side fetch works
   const r = await fetch(absoluteUrl(`/api/users/${encodeURIComponent(username)}`), {
     cache: "no-store",
     headers: authHeader(),
@@ -52,20 +50,32 @@ async function getUser(username: string): Promise<UserPublic | null> {
   return r.json();
 }
 
+async function getMeUsername(): Promise<string | null> {
+  const r = await fetch(absoluteUrl(`/api/auth/me`), {
+    cache: "no-store",
+    headers: authHeader(),
+  });
+  if (!r.ok) return null;
+  const me = await r.json();
+  return me?.username ?? null;
+}
+
 async function getLastProjects(username: string): Promise<ProjectLite[]> {
-  const r = await fetch(
-    absoluteUrl(`/api/users/${encodeURIComponent(username)}/projects?limit=4`),
-    { cache: "no-store", headers: authHeader() }
-  );
+  const r = await fetch(absoluteUrl(`/api/users/${encodeURIComponent(username)}/projects?limit=4`), {
+    cache: "no-store",
+    headers: authHeader(),
+  });
   if (!r.ok) return [];
   return r.json();
 }
 
 export default async function UserProfilePage({ params }: { params: { username: string } }) {
-  const user = await getUser(params.username);
+  const [user, meUsername, projects] = await Promise.all([
+    getUser(params.username),
+    getMeUsername(),
+    getLastProjects(params.username),
+  ]);
   if (!user) return notFound();
-
-  const projects = await getLastProjects(params.username);
 
   return (
     <main style={{ maxWidth: 980, margin: "24px auto", padding: "0 16px" }}>
@@ -90,7 +100,7 @@ export default async function UserProfilePage({ params }: { params: { username: 
         </div>
       </header>
 
-      {/* Actions: Follow / Message (uses Next API proxies). Falls back if counts missing. */}
+      {/* Follow / Message actions + follower counts */}
       <ProfileActions
         username={user.username}
         isFollowing={!!user.is_following}
@@ -106,7 +116,10 @@ export default async function UserProfilePage({ params }: { params: { username: 
         </section>
       )}
 
-      {/* Last 4 projects */}
+      {/* Conversation with this user */}
+      <MessagesPanel otherUsername={user.username} meUsername={meUsername} />
+
+      {/* Latest projects */}
       <section style={{ marginTop: 24 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
           <h2 style={{ fontSize: 18, margin: 0 }}>Latest projects</h2>

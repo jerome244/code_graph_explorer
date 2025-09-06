@@ -1,4 +1,3 @@
-// app/api/users/[username]/follow/route.ts
 import { cookies } from "next/headers";
 const DJ = process.env.DJANGO_API_BASE!;
 
@@ -32,9 +31,6 @@ export async function DELETE(req: Request, { params }: { params: { username: str
   return new Response(await r.text(), { status: r.status, headers: { "content-type": "application/json" } });
 }
 
-export async function OPTIONS() {
-  return new Response(null, { status: 204 });
-}
-
+export async function OPTIONS() { return new Response(null, { status: 204 }); }
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";

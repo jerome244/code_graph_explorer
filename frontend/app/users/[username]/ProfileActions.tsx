@@ -36,7 +36,6 @@ export default function ProfileActions({
     if (r.ok) {
       setMsg('');
       setOpen(false);
-      alert('Message sent!');
     } else {
       const t = await r.text();
       alert('Failed to send: ' + t);
@@ -44,7 +43,7 @@ export default function ProfileActions({
   }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
       <button onClick={toggleFollow} style={btnStyle as any}>
         {isFollowing ? 'Unfollow' : 'Follow'}
       </button>
@@ -103,6 +102,7 @@ const modalBackdrop: React.CSSProperties = {
   background: 'rgba(0,0,0,0.35)',
   display: 'grid',
   placeItems: 'center',
+  zIndex: 60,
 };
 
 const modalCard: React.CSSProperties = {

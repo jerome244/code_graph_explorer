@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
 import LogoutButton from "../(auth)/LogoutButton";
+import UserSearch from "./UserSearch";
 
 async function getMe() {
-  // ✅ Next.js 15: await cookies() before using it
+  // Next.js 15: await cookies() before using it
   const cookieStore = await cookies();
   const access = cookieStore.get("access")?.value;
   if (!access) return null;
@@ -33,25 +34,31 @@ export default async function Nav() {
         top: 0,
         zIndex: 50,
         boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
+        gap: 16,
       }}
     >
-      {/* Navigation Links (PUBLIC) */}
-      <nav style={{ display: "flex", gap: 24 }}>
+      {/* Left: navigation links */}
+      <nav style={{ display: "flex", gap: 24, alignItems: "center" }}>
         <Link href={me ? "/dashboard" : "/"} style={navLinkStyle}>
           {me ? "Dashboard" : "Home"}
         </Link>
-
-        {/* Public links — no login required */}
         <Link href="/graph" style={navLinkStyle}>
           Graph
         </Link>
         <Link href="/games" style={navLinkStyle}>
           Games
         </Link>
+        {me && (
+          <Link href="/profile" style={navLinkStyle}>
+            Profile
+          </Link>
+        )}
       </nav>
 
-      {/* User Options */}
+      {/* Right: search + auth/user actions */}
       <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+        {me && <UserSearch />}
+
         {!me ? (
           <>
             <Link href="/login" style={authLinkStyle}>

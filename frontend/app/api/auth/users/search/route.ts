@@ -13,15 +13,26 @@ export async function GET(req: Request) {
   if (!access) return new Response("Unauthorized", { status: 401 });
 
   const { searchParams } = new URL(req.url);
-  const q = searchParams.get("q") ?? "";
+  const q = (searchParams.get("q") ?? "").trim();
+
+  // Don’t query backend for empty text
+  if (!q) return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+
   const r = await fetch(`${DJ}/api/auth/users/search/?q=${encodeURIComponent(q)}`, {
     headers: { Authorization: `Bearer ${access}` },
     cache: "no-store",
   });
+
   return new Response(await r.text(), {
     status: r.status,
     headers: { "content-type": r.headers.get("content-type") ?? "application/json" },
   });
 }
 
-export async function OPTIONS() { return new Response(null, { status: 204 }); }
+export async function OPTIONS() {
+  return new Response(null, { status: 204 }); // no body
+}
+
+// (Optional but recommended)
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";

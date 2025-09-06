@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import * as cytoscapeImport from "cytoscape";
 const cytoscape = (cytoscapeImport as any).default ?? (cytoscapeImport as any);
 import ShapeOverlay, { Shape } from "./ShapeOverlay";
+import { useSearchParams } from "next/navigation";
 
 // Parsing + path helpers moved to a separate module
 import {
@@ -50,6 +51,8 @@ const buildPath = (x1: number, y1: number, x2: number, y2: number) => {
 // ------------------------------ Page ------------------------------
 
 export default function GraphPage() {
+  
+  const searchParams = useSearchParams();
 
   // --- FULLSCREEN: start ---
   const outerRef = useRef<HTMLDivElement>(null);
@@ -352,6 +355,7 @@ export default function GraphPage() {
   const wsReadyRef = useRef(false);
   const applyingRemoteRef = useRef(false);
   const applyingRemotePopupRef = useRef(false);
+  const applyingRemoteViewportRef = useRef(false);
   const peersRef = useRef<Map<number, Peer>>(new Map());
   const [peers, setPeers] = useState<Peer[]>([]);
   const textTimersRef = useRef<Map<string, number>>(new Map());
@@ -788,6 +792,23 @@ const setLocalAudioEnabled = (on: boolean) => {
           if (r === "busy") setInfo(`${peersRef.current.get(from)?.username ?? "Peer"} is busy`);
         }
 
+        // --- Viewport sync: apply peers' zoom/pan (and initial state from server) ---
+        else if (msg.type === "viewport") {
+          const { zoom, pan, by } = msg.data || {};
+          if (by === me?.id) return; // ignore our own echoes
+          const cy = cyRef.current;
+          if (!cy) return;
+          applyingRemoteViewportRef.current = true;
+          if (typeof zoom === "number") cy.zoom(zoom);
+          if (pan && typeof pan.x === "number" && typeof pan.y === "number") {
+            cy.pan({ x: Number(pan.x), y: Number(pan.y) });
+          }
+          // let Cytoscape settle before re-enabling local broadcasts
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => { applyingRemoteViewportRef.current = false; });
+          });
+        }
+        
 
       } catch (err) { /* ignore parse/socket errors */ }
     };
@@ -1053,6 +1074,19 @@ const setLocalAudioEnabled = (on: boolean) => {
     setShowLinesGlobal(false);
     setColorizeFunctions(false); // reset coloration to default OFF on load
   }
+
+ useEffect(() => {
+   const pid = searchParams.get("projectId") || searchParams.get("id"); // accept both
+   if (!pid) return;
+   const id = Number(pid);
+   if (!Number.isFinite(id) || id <= 0) return;
+   if (projectId === id) return; // already loaded
+   (async () => {
+     // Try to refresh cookies once; ignore errors.
+     try { await fetch("/api/auth/refresh", { method: "POST" }); } catch {}
+     await loadProject(id);
+   })();
+ }, [projectId, searchParams]);
 
   // Save popup contents: update fileMap + surgically update edges and function facts in cy (no relayout)
   const savePopup = useCallback(
@@ -1346,6 +1380,32 @@ const setLocalAudioEnabled = (on: boolean) => {
 
     root.addEventListener("mousemove", onMove);
     return () => { root.removeEventListener("mousemove", onMove); cancelAnimationFrame(raf); };
+  }, [projectId]);
+
+  // ------------------------------ Realtime: broadcast viewport (pan/zoom) ------------------
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+
+    let raf = 0;
+    const onViewport = () => {
+      if (applyingRemoteViewportRef.current) return; // avoid echo loops
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const ws = wsRef.current;
+        if (!ws || ws.readyState !== 1) return;
+        const z = cy.zoom();
+        const p = cy.pan();
+        ws.send(JSON.stringify({ type: "viewport", zoom: z, pan: { x: p.x, y: p.y } }));
+      });
+    };
+
+    cy.on("pan zoom", onViewport);
+    return () => {
+      try { cy.off("pan zoom", onViewport); } catch {}
+      cancelAnimationFrame(raf);
+    };
   }, [projectId]);
 
   // ------------------------------ Popup Resize Sync ------------------------------
@@ -2640,4 +2700,3 @@ const setLocalAudioEnabled = (on: boolean) => {
     </div>
   );
 }
-

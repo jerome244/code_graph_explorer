@@ -11,9 +11,13 @@ export DARKWEB_MAX_BYTES=150000
 export DARKWEB_ARTICLE_BYTES=2000000
 export DARKWEB_ARTICLE_TEXT_LIMIT=200000
 
+
+
 mac os:
 brew install tor
 brew services start tor       # runs Tor as a background service
+
+
 
 ubuntu :
 sudo apt update
@@ -21,7 +25,10 @@ sudo apt install tor
 # service usually starts automatically; if not:
 sudo systemctl enable --now tor
 
-cd backend && python manage.py migrate
+
+
+
+cd backend
 daphne -p 8000 config.asgi:application
 
 

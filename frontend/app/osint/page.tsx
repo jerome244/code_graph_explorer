@@ -100,7 +100,8 @@ export default function OsintPage() {
         try {
           const t = json?.type ?? "unknown";
           const resp = await fetch(
-            `/api/osint/darkweb/?q=${encodeURIComponent(q)}&type=${encodeURIComponent(t)}`
+            `/api/osint/darkweb/?q=${encodeURIComponent(q)}&type=${encodeURIComponent(t)}`,
+            { cache: "no-store" }
           );
           const dj = (await resp.json()) as DarkWebResponse;
           if (resp.ok) {
@@ -222,7 +223,7 @@ export default function OsintPage() {
 
       {data && <Results data={data} />}
 
-      {/* NEW: Dark-web results section */}
+      {/* Dark-web results section with "Show more" */}
       {includeDark && (
         <div style={{ marginTop: 16 }}>
           <Card title="Dark-web results">
@@ -233,35 +234,7 @@ export default function OsintPage() {
             {!darkLoading && dark && dark.results.length > 0 && (
               <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 12 }}>
                 {dark.results.map((r, idx) => (
-                  <li
-                    key={idx}
-                    style={{
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 8,
-                      padding: 12,
-                      background: "#fafafa",
-                    }}
-                  >
-                    <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                      {r.title || "(no title)"}
-                    </div>
-                    <div
-                      style={{
-                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                        fontSize: 12,
-                        wordBreak: "break-all",
-                        opacity: 0.85,
-                      }}
-                    >
-                      {r.url}
-                    </div>
-                    <p style={{ marginTop: 8 }}>{r.snippet}</p>
-                    {!r.ok && r.error && (
-                      <div style={{ color: "#991b1b", marginTop: 6 }}>
-                        Fetch error: {r.error}
-                      </div>
-                    )}
-                  </li>
+                  <DarkWebItem key={idx} url={r.url} title={r.title} snippet={r.snippet} />
                 ))}
               </ul>
             )}
@@ -272,6 +245,70 @@ export default function OsintPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function DarkWebItem({ url, title, snippet }: { url: string; title: string; snippet: string }) {
+  const [loading, setLoading] = React.useState(false);
+  const [full, setFull] = React.useState<{ title: string; html: string; text: string; source: string } | null>(null);
+  const [err, setErr] = React.useState<string | null>(null);
+
+async function loadFull() {
+  setLoading(true); setErr(null);
+  try {
+    const r = await fetch(`/api/osint/darkweb/content?u=${encodeURIComponent(url)}`, { cache: "no-store" });
+    const ct = r.headers.get("content-type") || "";
+    const payload = ct.includes("application/json") ? await r.json() : { ok: false, error: await r.text() };
+
+    if (!r.ok || !payload?.ok) {
+      throw new Error(payload?.error || `HTTP ${r.status}`);
+    }
+    setFull(payload);
+  } catch (e: any) {
+    setErr(e?.message || "Failed to fetch content");
+  } finally {
+    setLoading(false);
+  }
+}
+
+
+  return (
+    <li
+      style={{
+        border: "1px solid #e5e7eb",
+        borderRadius: 8,
+        padding: 12,
+        background: "#fafafa",
+      }}
+    >
+      <div style={{ fontWeight: 700, marginBottom: 4 }}>
+        {title || "(no title)"}
+      </div>
+      <div
+        style={{
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontSize: 12,
+          wordBreak: "break-all",
+          opacity: 0.85,
+        }}
+      >
+        {url}
+      </div>
+      <p style={{ marginTop: 8 }}>{snippet}</p>
+      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <button onClick={loadFull} disabled={loading} className="px-3 py-1 rounded-lg border">
+          {loading ? "Loading…" : "Show more"}
+        </button>
+        <a href={url} className="px-3 py-1 rounded-lg border" target="_blank" rel="noreferrer">Open (Tor)</a>
+      </div>
+      {err && <div style={{ color: "#991b1b", marginTop: 6 }}>{err}</div>}
+      {full && (
+        <div className="prose prose-invert" style={{ marginTop: 12, maxHeight: "60vh", overflow: "auto" }}>
+          {/* Already sanitized server-side (no scripts/styles/iframes/img). */}
+          <div dangerouslySetInnerHTML={{ __html: full.html }} />
+        </div>
+      )}
+    </li>
   );
 }
 
@@ -319,8 +356,8 @@ function Results({ data }: { data: OsintResponse }) {
           <div style={{ display: "grid", gap: 8 }}>
             <KeyVal k="IPs" v={data.domain.ips} />
             <KeyVal k="Reverse DNS" v={data.domain.reverse_dns} />
-            {data.domain.ip_geo && <KeyVal k="IP Geo" v={(data.domain as any).ip_geo} />}
-            {data.domain.dns && (
+            {(data.domain as any).ip_geo && <KeyVal k="IP Geo" v={(data.domain as any).ip_geo} />}
+            {(data.domain as any).dns && (
               <>
                 <KeyVal k="MX" v={(data.domain as any).dns.mx} />
                 <KeyVal k="NS" v={(data.domain as any).dns.ns} />

@@ -1,0 +1,12 @@
+curl -i "http://127.0.0.1:3000/api/osint/darkweb?q=ciadotgov4sjwlzihbbgxnqg3xiyrg7so2r2o3lt5wz5ypk4sxyjstad.onion&type=domain"
+
+
+
+ curl -sS "http://127.0.0.1:8000/api/osint/darkweb?q=ciadotgov4sjwlzihbbgxnqg3xiyrg7so2r2o3lt5wz5ypk4sxyjstad.onion&type=domain" | jq .
+
+
+
+ curl -sS "http://127.0.0.1:8000/api/osint/darkweb/content?u=http://ciadotgov4sjwlzihbbgxnqg3xiyrg7so2r2o3lt5wz5ypk4sxyjstad.onion/" | jq .
+
+
+ curl -sS "http://127.0.0.1:3000/api/osint/darkweb/content?u=http://ciadotgov4sjwlzihbbgxnqg3xiyrg7so2r2o3lt5wz5ypk4sxyjstad.onion/" | jq .

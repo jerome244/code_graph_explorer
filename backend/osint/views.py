@@ -44,6 +44,88 @@ TB_UA = "Mozilla/5.0 (Windows NT 10.0; rv=115.0) Gecko/20100101 Firefox/115.0"
 SAFE_ACCEPT = "text/html,application/xhtml+xml"
 SAFE_ALANG = "en-US,en;q=0.8"
 
+
+# at top with other constants
+DARKWEB_ARTICLE_BYTES = int(os.getenv("DARKWEB_ARTICLE_BYTES", "2000000"))
+DARKWEB_ARTICLE_TEXT_LIMIT = int(os.getenv("DARKWEB_ARTICLE_TEXT_LIMIT", "200000"))
+
+def _safe_html_article(raw: bytes) -> Dict[str, str]:
+    from bs4 import BeautifulSoup
+    try:
+        text = raw.decode("utf-8", errors="ignore")
+    except Exception:
+        text = raw.decode("latin-1", errors="ignore")
+    soup = BeautifulSoup(text, "html.parser")
+    for tag in soup(["script", "style", "iframe", "object", "embed"]):
+        tag.decompose()
+    for img in soup.find_all("img"):
+        img.decompose()
+    title = ""
+    if soup.title:
+        title = soup.title.get_text(strip=True)[:200]
+    if not title:
+        h1 = soup.find("h1")
+        if h1:
+            title = h1.get_text(" ", strip=True)[:200]
+    text_content = " ".join(soup.get_text(" ").split())[:DARKWEB_ARTICLE_TEXT_LIMIT]
+    return {"title": title, "html": str(soup)[:500000], "text": text_content}
+
+def _fetch_full(url: str, ua: str, cap: int) -> Tuple[Dict[str, Any], Optional[BeautifulSoup], bytes]:
+    try:
+        with _tor_session(ua=ua) as s:
+            r = s.get(url, timeout=DARKWEB_FETCH_TIMEOUT, allow_redirects=True)
+            raw = r.content[:cap]
+            try:
+                soup = BeautifulSoup(raw.decode("utf-8","ignore") or raw.decode("latin-1","ignore"), "html.parser")
+            except Exception:
+                soup = None
+            info = {"ok": bool(raw and len(raw) > 256), "url": str(getattr(r, "url", url))}
+            return info, soup, raw
+    except Exception as e:
+        return {"ok": False, "error": str(e), "url": url}, None, b""
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+@throttle_classes([AnonRateThrottle])
+def darkweb_content(request):
+    u = (request.GET.get("u") or "").strip()
+    if not u or ".onion" not in u:
+        return Response({"ok": False, "error": "missing or invalid onion URL"}, status=400)
+
+    info, soup, raw = _fetch_full(u, ua=SAFE_UA, cap=DARKWEB_ARTICLE_BYTES)
+    if not info.get("ok") and soup:
+        nxt = _find_meta_refresh_target(soup, base_url=info.get("url") or u)
+        if nxt:
+            info2, soup2, raw2 = _fetch_full(nxt, ua=SAFE_UA, cap=DARKWEB_ARTICLE_BYTES)
+            if info2.get("ok"):
+                info, soup, raw = info2, soup2, raw2
+
+    if not info.get("ok"):
+        info3, soup3, raw3 = _fetch_full(u, ua=TB_UA, cap=DARKWEB_ARTICLE_BYTES)
+        if info3.get("ok"):
+            info, soup, raw = info3, soup3, raw3
+        elif soup3:
+            nxt = _find_meta_refresh_target(soup3, base_url=info3.get("url") or u)
+            if nxt:
+                info4, soup4, raw4 = _fetch_full(nxt, ua=TB_UA, cap=DARKWEB_ARTICLE_BYTES)
+                if info4.get("ok"):
+                    info, soup, raw = info4, soup4, raw4
+
+    if not info.get("ok"):
+        return Response(info, status=502)
+
+    article = _safe_html_article(raw)
+    return Response({
+        "ok": True,
+        "source": info.get("url") or u,
+        "title": article["title"],
+        "text": article["text"],
+        "html": article["html"],
+        "bytes": len(raw),
+        "disclaimer": "Fetched via Tor; scripts/styles/images/iframes stripped."
+    }, status=200)
+
+
 # --- Small utils ---
 def looks_like_ip(q: str) -> bool:
     return bool(IPV4_RE.match(q) or IPV6_RE.match(q))

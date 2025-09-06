@@ -1,7 +1,8 @@
 # backend/osint/views.py
-import re, socket, ssl, json, hashlib
+import re, socket, ssl, json, hashlib, time
 from typing import Dict, Any, List, Optional
 import requests
+import dns.resolver  # NEW
 
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny
@@ -18,6 +19,9 @@ SITES = [
     ("X (Twitter)", "https://x.com/{u}"),
     ("Instagram", "https://www.instagram.com/{u}/"),
 ]
+
+DNS_TIMEOUT = 4.0
+HTTP_TIMEOUT = 6.0
 
 def looks_like_ip(q: str) -> bool:
     return bool(IPV4_RE.match(q) or IPV6_RE.match(q))
@@ -37,7 +41,76 @@ def uniq(seq):
             seen.add(x)
     return out
 
+def dns_query(domain: str, rtype: str) -> List[str]:
+    """Simple DNS query helper with timeouts; returns list of stringified records."""
+    try:
+        resolver = dns.resolver.Resolver()
+        resolver.lifetime = DNS_TIMEOUT
+        resolver.timeout = DNS_TIMEOUT
+        answers = resolver.resolve(domain, rtype)
+        rows = []
+        for r in answers:
+            s = r.to_text().strip().rstrip(".")
+            rows.append(s)
+        return rows
+    except Exception:
+        return []
+
+def parse_spf(txt_records: List[str]) -> Optional[str]:
+    for t in txt_records:
+        if t.lower().startswith("v=spf1"):
+            return t
+    return None
+
+def get_dmarc(domain: str) -> Optional[str]:
+    # _dmarc subdomain TXT
+    txt = dns_query(f"_dmarc.{domain}", "TXT")
+    for t in txt:
+        if t.lower().startswith("v=dmarc1"):
+            return t
+    return None
+
+def crtsh_subdomains(domain: str, limit: int = 100) -> List[str]:
+    """Fetch subdomains seen in certificate transparency logs via crt.sh (public)."""
+    # %25 is URL-encoded %; pattern like %.example.com
+    url = f"https://crt.sh/?q=%25.{domain}&output=json"
+    try:
+        r = requests.get(url, timeout=HTTP_TIMEOUT)
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        names = []
+        for row in data[:300]:  # keep a cap
+            name_value = row.get("name_value", "")
+            # name_value can be multiline with wildcards; split and clean
+            for n in name_value.split("\n"):
+                n = n.strip().lower().rstrip(".")
+                if n and n.endswith(f".{domain}") or n == domain:
+                    # skip bare domain; we want subdomains
+                    names.append(n)
+        # de-dupe and trim
+        names = [n for n in uniq(names) if n != domain]
+        return names[:limit]
+    except Exception:
+        return []
+
+def ip_geo(ip: str) -> Optional[Dict[str, Any]]:
+    """Basic GeoIP/ASN via ip-api.com (no key, community limits)."""
+    try:
+        r = requests.get(f"http://ip-api.com/json/{ip}?fields=status,country,org,as,query", timeout=HTTP_TIMEOUT)
+        j = r.json()
+        if j.get("status") == "success":
+            return {
+                "country": j.get("country"),
+                "org": j.get("org"),
+                "asn": j.get("as"),
+            }
+    except Exception:
+        pass
+    return None
+
 def resolve_domain(domain: str) -> Dict[str, Any]:
+    # A/AAAA
     ips: List[str] = []
     try:
         infos = socket.getaddrinfo(domain, None)
@@ -49,6 +122,7 @@ def resolve_domain(domain: str) -> Dict[str, Any]:
         pass
     ips = uniq(ips)
 
+    # Reverse DNS
     reverse_dns: Dict[str, Optional[str]] = {}
     for ip in ips:
         try:
@@ -57,11 +131,19 @@ def resolve_domain(domain: str) -> Dict[str, Any]:
         except Exception:
             reverse_dns[ip] = None
 
+    # NEW: DNS records
+    mx = dns_query(domain, "MX")   # e.g. "10 aspmx.l.google.com"
+    ns = dns_query(domain, "NS")
+    txt = dns_query(domain, "TXT")
+    spf = parse_spf(txt)
+    dmarc = get_dmarc(domain)
+
+    # HTTP heads
     http_checks = []
     for scheme in ("https", "http"):
         url = f"{scheme}://{domain}"
         try:
-            r = requests.head(url, timeout=6, allow_redirects=True)
+            r = requests.head(url, timeout=HTTP_TIMEOUT, allow_redirects=True)
             http_checks.append({
                 "url": url,
                 "ok": r.ok,
@@ -73,13 +155,13 @@ def resolve_domain(domain: str) -> Dict[str, Any]:
         except Exception:
             http_checks.append({"url": url, "ok": False})
 
+    # TLS quick peek
     tls_info: Optional[Dict[str, Any]] = None
     try:
         ctx = ssl.create_default_context()
-        with socket.create_connection((domain, 443), timeout=6) as sock:
+        with socket.create_connection((domain, 443), timeout=HTTP_TIMEOUT) as sock:
             with ctx.wrap_socket(sock, server_hostname=domain) as ssock:
                 cert = ssock.getpeercert()
-                # Normalize subject/issuer as dicts
                 def name_list_to_dict(nl):
                     d = {}
                     for tup in nl:
@@ -95,11 +177,28 @@ def resolve_domain(domain: str) -> Dict[str, Any]:
     except Exception:
         tls_info = None
 
+    # NEW: Subdomains from CT
+    subdomains = crtsh_subdomains(domain, limit=100)
+
+    # NEW: Geo for first few IPs to keep it snappy
+    ip_geo_map: Dict[str, Any] = {}
+    for ip in ips[:5]:
+        ip_geo_map[ip] = ip_geo(ip)
+
     return {
         "ips": ips,
         "reverse_dns": reverse_dns,
         "http": http_checks,
         "tls": tls_info,
+        "dns": {
+            "mx": mx,
+            "ns": ns,
+            "txt": txt,
+            "spf": spf,
+            "dmarc": dmarc,
+        },
+        "subdomains": subdomains,
+        "ip_geo": ip_geo_map,
     }
 
 def reverse_ptr(ip: str) -> Dict[str, Any]:
@@ -114,7 +213,7 @@ def gravatar(email: str) -> Dict[str, Any]:
     url = f"https://www.gravatar.com/avatar/{h}"
     exists: Optional[bool] = None
     try:
-        r = requests.get(url + "?d=404", timeout=6)
+        r = requests.get(url + "?d=404", timeout=HTTP_TIMEOUT)
         exists = (r.status_code == 200)
     except Exception:
         exists = None
@@ -131,7 +230,7 @@ def username_checks(u: str) -> Dict[str, Any]:
         ok: Optional[bool] = None
         status: Optional[int] = None
         try:
-            r = requests.head(url, timeout=6, allow_redirects=True)
+            r = requests.head(url, timeout=HTTP_TIMEOUT, allow_redirects=True)
             status = r.status_code
             if status == 200:
                 ok = True
@@ -145,7 +244,7 @@ def username_checks(u: str) -> Dict[str, Any]:
     return {"checks": checks}
 
 class BurstThrottle(AnonRateThrottle):
-    rate = "60/hour"  # adjust as you like
+    rate = "60/hour"  # adjust as needed
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -165,7 +264,7 @@ def scan(request):
     if looks_like_email(q):
         result["type"] = "email"
         result["email"] = gravatar(q)
-        # also run on the email's domain for convenience
+        # also gather the domain details
         result["domain"] = resolve_domain(result["email"]["domain"])
         return Response(result)
 

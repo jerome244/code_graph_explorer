@@ -185,20 +185,23 @@ function Results({ data }: { data: OsintResponse }) {
           <div style={{ display: "grid", gap: 8 }}>
             <KeyVal k="IPs" v={data.domain.ips} />
             <KeyVal k="Reverse DNS" v={data.domain.reverse_dns} />
+            {data.domain.ip_geo && <KeyVal k="IP Geo" v={data.domain.ip_geo} />}
+            {data.domain.dns && (
+              <>
+                <KeyVal k="MX" v={data.domain.dns.mx} />
+                <KeyVal k="NS" v={data.domain.dns.ns} />
+                <KeyVal k="TXT" v={data.domain.dns.txt} />
+                <KeyVal k="SPF" v={data.domain.dns.spf} />
+                <KeyVal k="DMARC" v={data.domain.dns.dmarc} />
+              </>
+            )}
             {data.domain.tls && <KeyVal k="TLS" v={data.domain.tls} />}
             {data.domain.http?.length ? (
               <div>
                 <div style={{ color: "#6b7280", marginBottom: 6 }}>HTTP checks</div>
                 <div style={{ display: "grid", gap: 8 }}>
                   {data.domain.http.map((h, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        border: "1px solid #e5e7eb",
-                        borderRadius: 8,
-                        padding: 10,
-                      }}
-                    >
+                    <div key={i} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 10 }}>
                       <KeyVal k="URL" v={h.url} />
                       <KeyVal k="OK" v={h.ok} />
                       <KeyVal k="Status" v={h.status} />
@@ -210,9 +213,20 @@ function Results({ data }: { data: OsintResponse }) {
                 </div>
               </div>
             ) : null}
+            {Array.isArray((data.domain as any).subdomains) && (data.domain as any).subdomains.length > 0 && (
+              <div>
+                <div style={{ color: "#6b7280", marginBottom: 6 }}>Subdomains (CT)</div>
+                <div style={{ display: "grid", gap: 4 }}>
+                  {(data.domain as any).subdomains.map((s: string, idx: number) => (
+                    <div key={idx} style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{s}</div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </Card>
       )}
+
 
       {data.ip && (
         <Card title="IP">

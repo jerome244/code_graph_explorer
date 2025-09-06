@@ -19,13 +19,13 @@ export default function MessagesPanel({
   const [loading, setLoading] = useState(true);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [draft, setDraft] = useState('');
+  const [deleting, setDeleting] = useState<number | null>(null);
 
   async function load() {
     setLoading(true);
     const r = await fetch(`/api/messages/thread/${encodeURIComponent(otherUsername)}?page_size=50`, { cache: 'no-store' });
     if (r.ok) {
       const j = await r.json();
-      // API is paginated; messages live in j.results if paginated_response, else array
       setMsgs(Array.isArray(j) ? j : (j?.results ?? []));
     }
     setLoading(false);
@@ -40,10 +40,21 @@ export default function MessagesPanel({
       body: JSON.stringify({ to: otherUsername, body }),
     });
     if (r.ok) {
-      setDraft('');
+      setDraft('');          // clear input after sending
       await load();
     } else {
       alert('Failed to send');
+    }
+  }
+
+  async function onDelete(id: number) {
+    setDeleting(id);
+    const r = await fetch(`/api/messages/${id}`, { method: 'DELETE' });
+    setDeleting(null);
+    if (r.ok) {
+      setMsgs(prev => prev.filter(m => m.id !== id));
+    } else {
+      alert('Failed to delete message');
     }
   }
 
@@ -90,6 +101,20 @@ export default function MessagesPanel({
                     {new Date(m.created_at).toLocaleString()}
                   </div>
                   <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>
+
+                  {mine && (
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+                      <button
+                        onClick={() => onDelete(m.id)}
+                        disabled={deleting === m.id}
+                        style={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, padding: '2px 6px', background: '#fff', cursor: 'pointer' }}
+                        aria-label="Delete message"
+                        title="Delete message"
+                      >
+                        {deleting === m.id ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             );

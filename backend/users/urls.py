@@ -8,7 +8,8 @@ from .views import (
     FollowView,
     MessageThreadView,
     MessageSendView,
-    ConversationsView
+    ConversationsView,
+    MessageDeleteView,
 )
 
 urlpatterns = [
@@ -21,5 +22,5 @@ urlpatterns = [
     path("messages/thread/<str:username>/", MessageThreadView.as_view(), name="messages_thread"),
     path("messages/send/", MessageSendView.as_view(), name="messages_send"),
     path("messages/conversations/", ConversationsView.as_view(), name="messages_conversations"),
-
+    path("messages/<int:pk>/", MessageDeleteView.as_view(), name="messages_delete"),
 ]

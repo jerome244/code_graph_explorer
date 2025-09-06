@@ -191,3 +191,16 @@ class ConversationsView(APIView):
                 break
 
         return Response(out)
+
+
+# --- NEW: Delete a message (sender only) ---
+
+class MessageDeleteView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, pk: int):
+        msg = get_object_or_404(Message, pk=pk)
+        if msg.sender_id != request.user.id:
+            return Response({"detail": "You can only delete your own messages."}, status=status.HTTP_403_FORBIDDEN)
+        msg.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

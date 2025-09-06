@@ -44,19 +44,14 @@ export default async function MessagesPage() {
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 8 }}>
           {convos.map((c) => (
-            <li key={c.user.id}>
-              <Link
-                href={`/messages/${encodeURIComponent(c.user.username)}`}
+            <li key={c.user.id} style={{ border: "1px solid #e5e7eb", borderRadius: 10, background: "#fff" }}>
+              <div
                 style={{
                   display: "grid",
                   gridTemplateColumns: "40px 1fr auto",
                   alignItems: "center",
                   gap: 12,
                   padding: 12,
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 10,
-                  textDecoration: "none",
-                  background: "#fff",
                 }}
               >
                 <div
@@ -76,34 +71,31 @@ export default async function MessagesPage() {
                 </div>
 
                 <div style={{ overflow: "hidden" }}>
-                  <div style={{ fontWeight: 700, color: "#111827" }}>@{c.user.username}</div>
+                  {/* username → public profile */}
+                  <Link href={`/users/${encodeURIComponent(c.user.username)}`} style={{ fontWeight: 700, color: "#111827" }}>
+                    @{c.user.username}
+                  </Link>
                   <div style={{ color: "#6b7280", fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {c.last_message.from_me ? "You: " : ""}{c.last_message.body}
+                    {c.last_message.from_me ? "You: " : ""}
+                    {c.last_message.body}
                   </div>
                 </div>
 
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ color: "#9ca3af", fontSize: 12 }}>
-                    {new Date(c.last_message.created_at).toLocaleString()}
-                  </div>
-                  {c.unread_count > 0 && (
-                    <div
-                      style={{
-                        marginTop: 6,
-                        display: "inline-block",
-                        padding: "2px 6px",
-                        fontSize: 12,
-                        borderRadius: 999,
-                        background: "#ef4444",
-                        color: "#fff",
-                        fontWeight: 700,
-                      }}
-                    >
-                      {c.unread_count}
-                    </div>
-                  )}
-                </div>
-              </Link>
+                {/* Open thread button */}
+                <Link
+                  href={`/messages/${encodeURIComponent(c.user.username)}`}
+                  aria-label={`Open conversation with @${c.user.username}`}
+                  style={{
+                    padding: "6px 10px",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 8,
+                    textDecoration: "none",
+                    color: "#111827",
+                  }}
+                >
+                  Open
+                </Link>
+              </div>
             </li>
           ))}
         </ul>

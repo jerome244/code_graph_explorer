@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     "users",
     "projects",
     "game",
+    "osint",
 ]
 
 MIDDLEWARE = [

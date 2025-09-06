@@ -10,6 +10,10 @@ type UserPublic = {
   following_count?: number;
   is_following?: boolean;
 
+  // NEW (from backend PublicUserView)
+  is_blocked_by_me?: boolean;
+  has_blocked_me?: boolean;
+
   id: number;
   username: string;
   bio?: string | null;
@@ -110,13 +114,16 @@ export default async function UserProfilePage({ params }: { params: { username: 
         </div>
       </header>
 
-      {/* Follow / Message actions + follower counts (hidden when viewing your own profile) */}
+      {/* Follow / Message / Block actions (hidden when viewing your own profile) */}
       <ProfileActions
         username={user.username}
         isFollowing={!!user.is_following}
         followers={user.followers_count ?? 0}
         following={user.following_count ?? 0}
         isSelf={isSelf}
+        // NEW: pass block flags
+        isBlockedByMe={!!user.is_blocked_by_me}
+        hasBlockedMe={!!user.has_blocked_me}
       />
 
       {/* Bio */}

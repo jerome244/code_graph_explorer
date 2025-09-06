@@ -1,63 +1,156 @@
+// app/users/[username]/ProfileActions.tsx
 'use client';
 
-import Link from 'next/link';
 import { useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 export default function ProfileActions({
   username,
-  isFollowing: initialFollowing,
+  isFollowing,
   followers,
   following,
-  isSelf = false, // 👈 new prop
+  isSelf,
+
+  // NEW
+  isBlockedByMe = false,
+  hasBlockedMe = false,
 }: {
   username: string;
   isFollowing: boolean;
   followers: number;
   following: number;
-  isSelf?: boolean;
+  isSelf: boolean;
+
+  isBlockedByMe?: boolean;
+  hasBlockedMe?: boolean;
 }) {
-  const [isFollowing, setIsFollowing] = useState<boolean>(initialFollowing);
-  const [counts, setCounts] = useState<{followers: number; following: number}>({ followers, following });
+  const [busyFollow, setBusyFollow] = useState(false);
+  const [busyBlock, setBusyBlock] = useState(false);
+  const [followingNow, setFollowingNow] = useState(isFollowing);
+  const [followersCount, setFollowersCount] = useState(followers);
+  const [blockedByMe, setBlockedByMe] = useState(isBlockedByMe);
+
+  const router = useRouter();
+
+  if (isSelf) {
+    return (
+      <section style={{ marginTop: 12, color: '#6b7280', fontSize: 14 }}>
+        This is your profile.
+      </section>
+    );
+  }
 
   async function toggleFollow() {
-    if (isSelf) return; // guard
-    const url = `/api/users/${encodeURIComponent(username)}/follow`;
-    const r = await fetch(url, { method: isFollowing ? 'DELETE' : 'POST' });
+    if (busyFollow || blockedByMe || hasBlockedMe) return;
+    setBusyFollow(true);
+    const method = followingNow ? 'DELETE' : 'POST';
+    const r = await fetch(`/api/users/${encodeURIComponent(username)}/follow`, { method });
+    setBusyFollow(false);
     if (r.ok) {
-      const now = !isFollowing;
-      setIsFollowing(now);
-      setCounts(c => ({ ...c, followers: c.followers + (now ? 1 : -1) }));
+      setFollowingNow(!followingNow);
+      setFollowersCount(c => c + (followingNow ? -1 : 1));
+      router.refresh();
     } else {
-      alert('Failed to update follow. Are you logged in?');
+      alert('Failed to update follow');
     }
   }
 
+  async function toggleBlock() {
+    if (busyBlock) return;
+    setBusyBlock(true);
+    const method = blockedByMe ? 'DELETE' : 'POST';
+    const r = await fetch(`/api/blocks/${encodeURIComponent(username)}`, { method });
+    setBusyBlock(false);
+    if (r.ok) {
+      setBlockedByMe(!blockedByMe);
+      if (!blockedByMe && followingNow) {
+        // backend also cleans follow, but reflect immediately
+        setFollowingNow(false);
+        setFollowersCount(c => Math.max(0, c - 1));
+      }
+      router.refresh();
+    } else {
+      alert('Failed to update block');
+    }
+  }
+
+  const actionsDisabled = blockedByMe || hasBlockedMe;
+
   return (
-    <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:12, flexWrap:'wrap' }}>
-      {isSelf ? (
-        <span style={{ fontSize: 13, color: '#6b7280' }}>This is you</span>
-      ) : (
-        <>
-          <button onClick={toggleFollow} style={btnStyle as any}>
-            {isFollowing ? 'Unfollow' : 'Follow'}
-          </button>
-          <Link href={`/messages/${encodeURIComponent(username)}`} style={secondaryBtn as any}>
-            Message
-          </Link>
-        </>
-      )}
-      <div style={{ color:'#6b7280', fontSize:13 }}>
-        <strong>{counts.followers}</strong> followers · <strong>{counts.following}</strong> following
+    <section
+      style={{
+        marginTop: 12,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        flexWrap: 'wrap',
+      }}
+    >
+      {/* Follower stats */}
+      <div style={{ color: '#6b7280', fontSize: 13, marginRight: 'auto' }}>
+        <strong style={{ color: '#111827' }}>{followersCount}</strong> followers ·{' '}
+        <strong style={{ color: '#111827' }}>{following}</strong> following
       </div>
-    </div>
+
+      {/* Message */}
+      {hasBlockedMe ? (
+        <span style={{ color: '#ef4444', fontWeight: 600 }}>You’re blocked</span>
+      ) : blockedByMe ? (
+        <span style={{ color: '#6b7280' }}>Unblock to message</span>
+      ) : (
+        <Link
+          href={`/messages/${encodeURIComponent(username)}`}
+          style={{
+            textDecoration: 'none',
+            border: '1px solid #4f46e5',
+            background: '#4f46e5',
+            color: 'white',
+            padding: '6px 10px',
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 700,
+          }}
+        >
+          Message @{username}
+        </Link>
+      )}
+
+      {/* Follow */}
+      <button
+        onClick={toggleFollow}
+        disabled={busyFollow || actionsDisabled}
+        style={{
+          padding: '6px 10px',
+          borderRadius: 8,
+          border: '1px solid #2563eb',
+          background: followingNow ? '#fff' : '#2563eb',
+          color: followingNow ? '#2563eb' : '#fff',
+          fontWeight: 700,
+          cursor: actionsDisabled ? 'not-allowed' : 'pointer',
+          opacity: actionsDisabled ? 0.6 : 1,
+        }}
+        title={actionsDisabled ? 'Unavailable due to block' : (followingNow ? 'Unfollow' : 'Follow')}
+      >
+        {busyFollow ? 'Working…' : followingNow ? 'Unfollow' : 'Follow'}
+      </button>
+
+      {/* Block / Unblock */}
+      <button
+        onClick={toggleBlock}
+        disabled={busyBlock}
+        style={{
+          padding: '6px 10px',
+          borderRadius: 8,
+          border: '1px solid #ef4444',
+          background: blockedByMe ? '#fff' : '#ef4444',
+          color: blockedByMe ? '#ef4444' : '#fff',
+          fontWeight: 700,
+          cursor: 'pointer',
+        }}
+      >
+        {busyBlock ? 'Working…' : blockedByMe ? 'Unblock' : 'Block'}
+      </button>
+    </section>
   );
 }
-
-const btnStyle: React.CSSProperties = {
-  padding:'8px 12px', borderRadius:8, border:'1px solid #4f46e5',
-  background:'#4f46e5', color:'#fff', fontWeight:700, cursor:'pointer'
-};
-const secondaryBtn: React.CSSProperties = {
-  padding:'8px 12px', borderRadius:8, border:'1px solid #d1d5db',
-  background:'#fff', color:'#111827', fontWeight:600, textDecoration:'none'
-};

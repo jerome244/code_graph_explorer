@@ -7,7 +7,7 @@ export async function OPTIONS() {
   return new Response(null, { status: 204 });
 }
 
-export async function POST(req: Request) {
+export async function GET(req: Request) {
   try {
     const base = process.env.DJANGO_API_BASE; // e.g. http://127.0.0.1:8000
     if (!base) {
@@ -17,12 +17,11 @@ export async function POST(req: Request) {
       );
     }
 
-    const body = await req.json();
+    const url = new URL(req.url);
+    const qs = url.search || ""; // preserves full query string
 
-    const upstream = await fetch(`${base}/api/osint/scan/`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+    const upstream = await fetch(`${base}/api/osint/darkweb${qs}`, {
+      method: "GET",
       cache: "no-store",
     });
 

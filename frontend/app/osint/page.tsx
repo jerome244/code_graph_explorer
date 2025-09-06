@@ -23,6 +23,7 @@ type OsintResponse = {
       not_before?: string | null;
       not_after?: string | null;
     } | null;
+    // existing page renders optional fields like dns, ip_geo, subdomains via (data.domain as any)
   };
   ip?: {
     ptr?: string | null;
@@ -38,16 +39,40 @@ type OsintResponse = {
   error?: string;
 };
 
+type DarkResult = {
+  url: string;
+  url_hash: string;
+  ok: boolean;
+  title: string;
+  snippet: string;
+  error?: string;
+};
+
+type DarkWebResponse = {
+  count: number;
+  results: DarkResult[];
+  type: OsintResponse["type"] | "auto";
+  query: string;
+  source: string;
+  disclaimer: string;
+};
+
 export default function OsintPage() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<OsintResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
+  // NEW: dark web toggle + state
+  const [includeDark, setIncludeDark] = useState(false);
+  const [darkLoading, setDarkLoading] = useState(false);
+  const [dark, setDark] = useState<DarkWebResponse | null>(null);
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
     setData(null);
+    setDark(null);
     const q = query.trim();
     if (!q) {
       setErr("Please enter a domain, IP, email, or username.");
@@ -55,17 +80,53 @@ export default function OsintPage() {
     }
     setLoading(true);
     try {
-        const r = await fetch("/api/osint/scan", {
+      // Clear-web scan (your existing endpoint, unchanged)
+      const r = await fetch("/api/osint/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: q }),
-        });
+      });
 
       const json = (await r.json()) as OsintResponse;
       if (!r.ok) {
         setErr(json?.error || `Request failed (${r.status}).`);
-      } else {
-        setData(json);
+        return;
+      }
+      setData(json);
+
+      // Optional dark-web lookup (GET) using detected type from clear-web pass
+      if (includeDark) {
+        setDarkLoading(true);
+        try {
+          const t = json?.type ?? "unknown";
+          const resp = await fetch(
+            `/api/osint/darkweb/?q=${encodeURIComponent(q)}&type=${encodeURIComponent(t)}`
+          );
+          const dj = (await resp.json()) as DarkWebResponse;
+          if (resp.ok) {
+            setDark(dj);
+          } else {
+            setDark({
+              count: 0,
+              results: [],
+              type: t,
+              query: q,
+              source: "ahmia",
+              disclaimer: dj?.disclaimer || "Dark-web lookup failed.",
+            });
+          }
+        } catch (e) {
+          setDark({
+            count: 0,
+            results: [],
+            type: json?.type ?? "unknown",
+            query: q,
+            source: "ahmia",
+            disclaimer: "Dark-web lookup failed.",
+          });
+        } finally {
+          setDarkLoading(false);
+        }
       }
     } catch (e: any) {
       setErr(e?.message || "Network error.");
@@ -89,6 +150,7 @@ export default function OsintPage() {
           gap: 12,
           alignItems: "center",
           marginBottom: 16,
+          flexWrap: "wrap",
         }}
       >
         <input
@@ -97,12 +159,34 @@ export default function OsintPage() {
           placeholder="ex: example.com, 1.1.1.1, alice@example.com, octocat"
           style={{
             flex: 1,
+            minWidth: 260,
             padding: "12px 14px",
             border: "1px solid #e5e7eb",
             borderRadius: 8,
             fontSize: 16,
           }}
         />
+        <label
+          title="Query onion directories and fetch small HTML previews via Tor (text-only, capped)."
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "8px 10px",
+            border: "1px solid #e5e7eb",
+            borderRadius: 8,
+            background: "#fff",
+            cursor: "pointer",
+            userSelect: "none",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={includeDark}
+            onChange={(e) => setIncludeDark(e.target.checked)}
+          />
+          Include dark web
+        </label>
         <button
           disabled={loading}
           type="submit"
@@ -137,6 +221,56 @@ export default function OsintPage() {
       )}
 
       {data && <Results data={data} />}
+
+      {/* NEW: Dark-web results section */}
+      {includeDark && (
+        <div style={{ marginTop: 16 }}>
+          <Card title="Dark-web results">
+            {darkLoading && <div>Querying Ahmia & fetching onion previews via Tor…</div>}
+            {!darkLoading && dark && dark.count === 0 && (
+              <div>No onion hits found.</div>
+            )}
+            {!darkLoading && dark && dark.results.length > 0 && (
+              <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 12 }}>
+                {dark.results.map((r, idx) => (
+                  <li
+                    key={idx}
+                    style={{
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 8,
+                      padding: 12,
+                      background: "#fafafa",
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                      {r.title || "(no title)"}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                        fontSize: 12,
+                        wordBreak: "break-all",
+                        opacity: 0.85,
+                      }}
+                    >
+                      {r.url}
+                    </div>
+                    <p style={{ marginTop: 8 }}>{r.snippet}</p>
+                    {!r.ok && r.error && (
+                      <div style={{ color: "#991b1b", marginTop: 6 }}>
+                        Fetch error: {r.error}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
+              Previews are small HTML excerpts fetched via Tor. Images/scripts are never fetched.
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
@@ -185,14 +319,14 @@ function Results({ data }: { data: OsintResponse }) {
           <div style={{ display: "grid", gap: 8 }}>
             <KeyVal k="IPs" v={data.domain.ips} />
             <KeyVal k="Reverse DNS" v={data.domain.reverse_dns} />
-            {data.domain.ip_geo && <KeyVal k="IP Geo" v={data.domain.ip_geo} />}
+            {data.domain.ip_geo && <KeyVal k="IP Geo" v={(data.domain as any).ip_geo} />}
             {data.domain.dns && (
               <>
-                <KeyVal k="MX" v={data.domain.dns.mx} />
-                <KeyVal k="NS" v={data.domain.dns.ns} />
-                <KeyVal k="TXT" v={data.domain.dns.txt} />
-                <KeyVal k="SPF" v={data.domain.dns.spf} />
-                <KeyVal k="DMARC" v={data.domain.dns.dmarc} />
+                <KeyVal k="MX" v={(data.domain as any).dns.mx} />
+                <KeyVal k="NS" v={(data.domain as any).dns.ns} />
+                <KeyVal k="TXT" v={(data.domain as any).dns.txt} />
+                <KeyVal k="SPF" v={(data.domain as any).dns.spf} />
+                <KeyVal k="DMARC" v={(data.domain as any).dns.dmarc} />
               </>
             )}
             {data.domain.tls && <KeyVal k="TLS" v={data.domain.tls} />}
@@ -226,7 +360,6 @@ function Results({ data }: { data: OsintResponse }) {
           </div>
         </Card>
       )}
-
 
       {data.ip && (
         <Card title="IP">

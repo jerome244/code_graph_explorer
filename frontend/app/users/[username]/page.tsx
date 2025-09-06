@@ -2,8 +2,15 @@
 import { headers, cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import ProfileActions from "./ProfileActions";
 
 type UserPublic = {
+  // new optional fields (present when enriched endpoint is available)
+  followers_count?: number;
+  following_count?: number;
+  is_following?: boolean;
+
+  // existing
   id: number;
   username: string;
   bio?: string | null;
@@ -82,6 +89,14 @@ export default async function UserProfilePage({ params }: { params: { username: 
           )}
         </div>
       </header>
+
+      {/* Actions: Follow / Message (uses Next API proxies). Falls back if counts missing. */}
+      <ProfileActions
+        username={user.username}
+        isFollowing={!!user.is_following}
+        followers={user.followers_count ?? 0}
+        following={user.following_count ?? 0}
+      />
 
       {/* Bio */}
       {user.bio && (

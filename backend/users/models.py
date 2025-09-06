@@ -17,3 +17,35 @@ from django.dispatch import receiver
 def create_profile(sender, instance, created, **kwargs):
     if created:
         Profile.objects.create(user=instance)
+
+
+class Follow(models.Model):
+    follower = models.ForeignKey(User, on_delete=models.CASCADE, related_name="following")
+    target = models.ForeignKey(User, on_delete=models.CASCADE, related_name="followers")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("follower", "target")
+        indexes = [models.Index(fields=["follower", "target"])]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.follower.username} -> {self.target.username}"
+
+
+class Message(models.Model):
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name="sent_messages")
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name="received_messages")
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_read = models.BooleanField(default=False)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["sender", "recipient", "created_at"]),
+            models.Index(fields=["recipient", "is_read"]),
+        ]
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"Msg<{self.id}> {self.sender_id}->{self.recipient_id}"

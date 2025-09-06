@@ -134,3 +134,54 @@ class MessageSendView(APIView):
         msg = Message.objects.create(sender=request.user, recipient=recipient, body=body)
         ser = MessageSerializer(msg, context={"request": request})
         return Response(ser.data, status=201)
+
+
+class ConversationsView(APIView):
+    """
+    List unique conversations (one per other user), including:
+    - the other user's public info
+    - the last message snippet and time
+    - unread count (messages to me that are not read)
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        limit = int(request.GET.get("limit", "50"))
+
+        # Recent messages involving me
+        qs = (
+            Message.objects
+            .filter(Q(sender=request.user) | Q(recipient=request.user))
+            .select_related("sender", "recipient")
+            .order_by("-created_at")[:1000]
+        )
+
+        # Unread counts keyed by other user id
+        unread = {}
+        for m in qs:
+            if m.recipient_id == request.user.id and not m.is_read:
+                other_id = m.sender_id
+                unread[other_id] = unread.get(other_id, 0) + 1
+
+        # Build unique conversation list in recency order
+        out = []
+        seen = set()
+        for m in qs:
+            other = m.recipient if m.sender_id == request.user.id else m.sender
+            if other.id in seen:
+                continue
+            seen.add(other.id)
+            out.append({
+                "user": PublicUserSerializer(other, context={"request": request}).data,
+                "last_message": {
+                    "id": m.id,
+                    "body": m.body,
+                    "created_at": m.created_at.isoformat(),
+                    "from_me": (m.sender_id == request.user.id),
+                },
+                "unread_count": unread.get(other.id, 0),
+            })
+            if len(out) >= limit:
+                break
+
+        return Response(out)

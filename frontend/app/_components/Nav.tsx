@@ -1,10 +1,10 @@
+// frontend/app/_components/Nav.tsx
 import Link from "next/link";
 import { cookies } from "next/headers";
 import LogoutButton from "../(auth)/LogoutButton";
 import UserSearch from "./UserSearch";
 
 async function getMe() {
-  // Next.js 15: await cookies() before using it
   const cookieStore = await cookies();
   const access = cookieStore.get("access")?.value;
   if (!access) return null;
@@ -42,16 +42,13 @@ export default async function Nav() {
         <Link href={me ? "/dashboard" : "/"} style={navLinkStyle}>
           {me ? "Dashboard" : "Home"}
         </Link>
-        <Link href="/graph" style={navLinkStyle}>
-          Graph
-        </Link>
-        <Link href="/games" style={navLinkStyle}>
-          Games
-        </Link>
+        <Link href="/graph" style={navLinkStyle}>Graph</Link>
+        <Link href="/games" style={navLinkStyle}>Games</Link>
         {me && (
-          <Link href="/profile" style={navLinkStyle}>
-            Profile
-          </Link>
+          <>
+            <Link href="/messages" style={navLinkStyle}>Messages</Link>
+            <Link href="/profile" style={navLinkStyle}>Profile</Link>
+          </>
         )}
       </nav>
 
@@ -61,12 +58,8 @@ export default async function Nav() {
 
         {!me ? (
           <>
-            <Link href="/login" style={authLinkStyle}>
-              Login
-            </Link>
-            <Link href="/register" style={authLinkStyle}>
-              Register
-            </Link>
+            <Link href="/login" style={authLinkStyle}>Login</Link>
+            <Link href="/register" style={authLinkStyle}>Register</Link>
           </>
         ) : (
           <>
@@ -86,7 +79,6 @@ const navLinkStyle: React.CSSProperties = {
   textDecoration: "none",
   transition: "color 0.3s ease",
 };
-
 const authLinkStyle: React.CSSProperties = {
   fontSize: "14px",
   fontWeight: 500,
@@ -96,7 +88,6 @@ const authLinkStyle: React.CSSProperties = {
   borderRadius: "4px",
   transition: "background-color 0.3s ease",
 };
-
 const userGreetingStyle: React.CSSProperties = {
   fontSize: "14px",
   color: "#4b5563",

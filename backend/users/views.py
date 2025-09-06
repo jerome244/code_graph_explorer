@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.pagination import PageNumberPagination
 
-from .models import Profile, Follow, Message
+from .models import Profile, Follow, Message, Block
 from .serializers import (
     RegisterSerializer,
     UserSerializer,
@@ -77,13 +77,15 @@ class PublicUserView(APIView):
         user = get_object_or_404(User, username__iexact=username)
         followers_count = Follow.objects.filter(target=user).count()
         following_count = Follow.objects.filter(follower=user).count()
-        # annotate counts via attributes available during serialization
         user.followers_count = followers_count  # type: ignore
         user.following_count = following_count  # type: ignore
         ser = PublicUserSerializer(user, context={"request": request})
         data = ser.data
         data["followers_count"] = followers_count
         data["following_count"] = following_count
+        # NEW: block status
+        data["is_blocked_by_me"] = Block.objects.filter(blocker=request.user, blocked=user).exists()
+        data["has_blocked_me"] = Block.objects.filter(blocker=user, blocked=request.user).exists()
         return Response(data)
 
 
@@ -103,6 +105,48 @@ class FollowView(APIView):
         return Response({"following": False}, status=200)
 
 
+# --- Blocks ---
+
+class BlockView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, username: str):
+        target = get_object_or_404(User, username__iexact=username)
+        if target == request.user:
+            return Response({"detail": "You cannot block yourself."}, status=400)
+        Block.objects.get_or_create(blocker=request.user, blocked=target)
+        # optional: remove follow relations both ways
+        Follow.objects.filter(follower=request.user, target=target).delete()
+        Follow.objects.filter(follower=target, target=request.user).delete()
+        return Response({"blocked": True}, status=201)
+
+    def delete(self, request, username: str):
+        target = get_object_or_404(User, username__iexact=username)
+        Block.objects.filter(blocker=request.user, blocked=target).delete()
+        return Response({"blocked": False}, status=200)
+
+    def get(self, request, username: str):
+        target = get_object_or_404(User, username__iexact=username)
+        return Response({
+            "is_blocked_by_me": Block.objects.filter(blocker=request.user, blocked=target).exists(),
+            "has_blocked_me": Block.objects.filter(blocker=target, blocked=request.user).exists(),
+        })
+
+
+class BlocksListView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        qs = Block.objects.filter(blocker=request.user).select_related("blocked").order_by("-created_at")
+        data = [
+            {
+                "user": PublicUserSerializer(b.blocked, context={"request": request}).data,
+                "created_at": b.created_at.isoformat(),
+            }
+            for b in qs
+        ]
+        return Response(data)
+
+
 # --- Messages (DM) ---
 
 class MessageThreadView(APIView):
@@ -110,6 +154,12 @@ class MessageThreadView(APIView):
 
     def get(self, request, username: str):
         other = get_object_or_404(User, username__iexact=username)
+
+        # NEW: block check (either direction)
+        if Block.objects.filter(blocker=request.user, blocked=other).exists() or \
+           Block.objects.filter(blocker=other, blocked=request.user).exists():
+            return Response({"detail": "You cannot view this conversation."}, status=403)
+
         qs = Message.objects.filter(
             Q(sender=request.user, recipient=other)
             | Q(sender=other, recipient=request.user)
@@ -137,6 +187,11 @@ class MessageSendView(APIView):
         if recipient == request.user:
             return Response({"detail": "You cannot message yourself."}, status=400)
 
+        # NEW: block check (either direction)
+        if Block.objects.filter(blocker=request.user, blocked=recipient).exists() or \
+           Block.objects.filter(blocker=recipient, blocked=request.user).exists():
+            return Response({"detail": "Messaging is not allowed because one of you has blocked the other."}, status=403)
+
         msg = Message.objects.create(sender=request.user, recipient=recipient, body=body)
         ser = MessageSerializer(msg, context={"request": request})
         return Response(ser.data, status=201)
@@ -153,6 +208,10 @@ class ConversationsView(APIView):
 
     def get(self, request):
         limit = int(request.GET.get("limit", "50"))
+
+        # Exclude users I blocked or who blocked me
+        blocked_ids = set(Block.objects.filter(blocker=request.user).values_list("blocked_id", flat=True))
+        blocked_me_ids = set(Block.objects.filter(blocked=request.user).values_list("blocker_id", flat=True))
 
         # Recent messages involving me
         qs = (
@@ -176,6 +235,8 @@ class ConversationsView(APIView):
             other = m.recipient if m.sender_id == request.user.id else m.sender
             if other.id in seen:
                 continue
+            if other.id in blocked_ids or other.id in blocked_me_ids:
+                continue
             seen.add(other.id)
             out.append({
                 "user": PublicUserSerializer(other, context={"request": request}).data,
@@ -193,7 +254,7 @@ class ConversationsView(APIView):
         return Response(out)
 
 
-# --- NEW: Delete a message (sender only) ---
+# --- Delete a message (sender only) ---
 
 class MessageDeleteView(APIView):
     permission_classes = [permissions.IsAuthenticated]

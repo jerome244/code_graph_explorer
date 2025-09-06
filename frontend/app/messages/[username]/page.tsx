@@ -3,11 +3,17 @@ import { headers, cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import ChatComposer from "./ChatComposer";
-import SentToast from "./SentToast";
 import MessageList, { Msg } from "./MessageList";
+import BlockToggle from "./BlockToggle";
 
 type MsgUser = { id: number; username: string; avatar_url?: string | null };
-type PublicUser = { id: number; username: string; avatar_url?: string | null };
+type PublicUser = {
+  id: number;
+  username: string;
+  avatar_url?: string | null;
+  is_blocked_by_me?: boolean;
+  has_blocked_me?: boolean;
+};
 
 function absoluteUrl(path: string) {
   const h = headers();
@@ -67,42 +73,7 @@ async function getThread(withUser: string): Promise<Msg[]> {
   return Array.isArray(j) ? j : (j?.results ?? []);
 }
 
-// Server action to send a reply (keeps redirect so the field resets)
-export async function sendReply(formData: FormData) {
-  "use server";
-  const to = formData.get("to")?.toString().trim() || "";
-  const body = formData.get("body")?.toString().trim() || "";
-  if (!to || !body) return;
-
-  const meResp = await fetch(`${process.env.DJANGO_API_BASE}/api/auth/me/`, {
-    headers: authHeader(),
-    cache: "no-store",
-  });
-  if (meResp.ok) {
-    const me = await meResp.json();
-    if ((me?.username ?? "").toLowerCase() === to.toLowerCase()) {
-      return redirect("/messages");
-    }
-  }
-
-  await fetch(`${process.env.DJANGO_API_BASE}/api/auth/messages/send/`, {
-    method: "POST",
-    headers: { ...authHeader(), "Content-Type": "application/json" },
-    cache: "no-store",
-    body: JSON.stringify({ to, body }),
-  });
-
-  // Redirect back with ?sent=1; a client toast will auto-dismiss and clean the URL
-  redirect(`/messages/${encodeURIComponent(to)}?sent=1`);
-}
-
-export default async function MessagesThreadPage({
-  params,
-  searchParams,
-}: {
-  params: { username: string };
-  searchParams?: { sent?: string };
-}) {
+export default async function MessagesThreadPage({ params }: { params: { username: string } }) {
   const me = await getMe();
 
   // 🚫 prevent opening a thread with yourself
@@ -110,13 +81,16 @@ export default async function MessagesThreadPage({
     redirect("/messages");
   }
 
-  const [msgs, otherUser] = await Promise.all([
-    getThread(params.username),
+  const [otherUser, msgs] = await Promise.all([
     getOtherUser(params.username),
+    getThread(params.username),
   ]);
 
   const meAvatar = toMediaProxy(me?.avatar_url);
   const otherAvatar = toMediaProxy(otherUser?.avatar_url);
+
+  const blockedByMe = !!otherUser?.is_blocked_by_me;
+  const hasBlockedMe = !!otherUser?.has_blocked_me;
 
   return (
     <main style={{ maxWidth: 880, margin: "32px auto", padding: "0 16px" }}>
@@ -124,47 +98,57 @@ export default async function MessagesThreadPage({
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 8 }}>
         <div
-          style={{
-            width: 40, height: 40, borderRadius: 999, overflow: "hidden",
-            border: "1px solid #e5e7eb", background: "#f3f4f6",
-          }}
+          style={{ width: 40, height: 40, borderRadius: 999, overflow: "hidden", border: "1px solid #e5e7eb", background: "#f3f4f6" }}
           aria-hidden
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={otherAvatar || "/api/empty-avatar.png"} alt="" width={40} height={40} />
         </div>
-        {/* username → public profile */}
+
         <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>
           <Link href={`/users/${encodeURIComponent(params.username)}`} style={{ color: "#111827", textDecoration: "none" }}>
             @{params.username}
           </Link>
         </h1>
-      </div>
 
-      {/* Auto-dismissing toast */}
-      <SentToast showInitially={searchParams?.sent === "1"} />
+        <div style={{ marginLeft: "auto" }}>
+          <BlockToggle username={params.username} isBlockedByMe={blockedByMe} hasBlockedMe={hasBlockedMe} />
+        </div>
+      </div>
 
       <div
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 8,
-          padding: 12,
-          maxHeight: 460,
-          overflowY: "auto",
-          background: "#fff",
-          marginBottom: 12,
-        }}
+        style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 12, maxHeight: 460, overflowY: "auto", background: "#fff", marginBottom: 12 }}
       >
-        <MessageList
-          initialMsgs={msgs}
-          meUsername={me.username}
-          meAvatar={meAvatar}
-          otherAvatar={otherAvatar}
-          otherUsername={params.username}  
-        />
+        {hasBlockedMe ? (
+          <div style={{ color: "#ef4444", fontWeight: 600 }}>
+            You can’t view this conversation because @{params.username} has blocked you.
+          </div>
+        ) : blockedByMe ? (
+          <div style={{ color: "#6b7280" }}>
+            You’ve blocked @{params.username}. Unblock to view and send messages.
+          </div>
+        ) : (
+          <MessageList
+            initialMsgs={msgs}
+            meUsername={me.username}
+            meAvatar={meAvatar}
+            otherAvatar={otherAvatar}
+            otherUsername={params.username}
+          />
+        )}
       </div>
 
-      <ChatComposer toUsername={params.username} action={sendReply} />
+      {hasBlockedMe ? (
+        <div style={{ color: "#ef4444", fontWeight: 600 }}>
+          You can’t message @{params.username} because they have blocked you.
+        </div>
+      ) : blockedByMe ? (
+        <div style={{ color: "#6b7280" }}>
+          You’ve blocked @{params.username}. Unblock to send a message.
+        </div>
+      ) : (
+        <ChatComposer toUsername={params.username} />
+      )}
     </main>
   );
 }

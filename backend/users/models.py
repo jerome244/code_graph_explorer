@@ -49,3 +49,18 @@ class Message(models.Model):
 
     def __str__(self):
         return f"Msg<{self.id}> {self.sender_id}->{self.recipient_id}"
+
+
+# NEW: simple block relation
+class Block(models.Model):
+    blocker = models.ForeignKey(User, on_delete=models.CASCADE, related_name="blocks_initiated")
+    blocked = models.ForeignKey(User, on_delete=models.CASCADE, related_name="blocks_received")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("blocker", "blocked")
+        indexes = [models.Index(fields=["blocker", "blocked"])]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.blocker.username} ⛔ {self.blocked.username}"

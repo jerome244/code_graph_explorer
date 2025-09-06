@@ -3,11 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-export default function ChatComposer({
-  toUsername,
-}: {
-  toUsername: string;
-}) {
+export default function ChatComposer({ toUsername }: { toUsername: string }) {
   const [body, setBody] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
   const [showDoc, setShowDoc] = useState(false);
@@ -36,50 +32,44 @@ export default function ChatComposer({
     }
   }
 
-// inside ChatComposer.tsx
-async function onSubmit(e: React.FormEvent) {
-  e.preventDefault();
-  const text = body.trim();
-  if (!text) return;
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const text = body.trim();
+    if (!text) return;
 
-  const res = await fetch('/api/messages/send', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ to: toUsername, body: text }),
-  });
+    const res = await fetch('/api/messages/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ to: toUsername, body: text }),
+    });
 
-  if (res.ok) {
-    const created = await res.json();
+    if (res.status === 403) {
+      alert((await res.text().catch(() => '')) || 'Messaging is blocked between you and this user.');
+      return;
+    }
 
-    // clear UI
-    setBody('');
-    setShowEmoji(false);
-    setShowDoc(false);
-    setDocUrl('');
-    setProjId('');
-    setSent(true);
-    setTimeout(() => setSent(false), 2000);
+    if (res.ok) {
+      const created = await res.json();
+      setBody('');
+      setShowEmoji(false);
+      setShowDoc(false);
+      setDocUrl('');
+      setProjId('');
+      setSent(true);
+      setTimeout(() => setSent(false), 2000);
 
-    // 🔔 tell the MessageList which thread this is for
-    window.dispatchEvent(
-      new CustomEvent('dm:new', { detail: { message: created, threadWith: toUsername } })
-    );
-
-    // also revalidate server data
-    router.refresh();
-  } else {
-    alert((await res.text().catch(() => '')) || 'Failed to send');
+      // notify thread + revalidate
+      window.dispatchEvent(new CustomEvent('dm:new', { detail: { message: created, threadWith: toUsername } }));
+      router.refresh();
+    } else {
+      alert((await res.text().catch(() => '')) || 'Failed to send');
+    }
   }
-}
-
 
   return (
     <form onSubmit={onSubmit} style={{ display: 'grid', gap: 8 }}>
       {sent && (
-        <div role="status" aria-live="polite" style={{
-          background: '#10b981', color: '#fff', padding: '6px 10px',
-          borderRadius: 8, fontWeight: 600
-        }}>
+        <div role="status" aria-live="polite" style={{ background: '#10b981', color: '#fff', padding: '6px 10px', borderRadius: 8, fontWeight: 600 }}>
           Message sent ✓
         </div>
       )}
@@ -92,15 +82,10 @@ async function onSubmit(e: React.FormEvent) {
       {showEmoji && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, border: '1px solid #e5e7eb', borderRadius: 8, padding: 8, background: '#fff' }}>
           {emojis.map((e) => (
-            <button
-              type="button"
-              key={e}
-              onClick={() => insert(e)}
+            <button key={e} type="button" onClick={() => insert(e)}
               style={{ fontSize: 20, lineHeight: '28px', width: 32, height: 32, borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer' }}
               aria-label={`Insert ${e}`}
-            >
-              {e}
-            </button>
+            >{e}</button>
           ))}
         </div>
       )}
@@ -133,11 +118,8 @@ async function onSubmit(e: React.FormEvent) {
       />
 
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        <button
-          type="submit"
-          disabled={!body.trim()}
-          style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid #2563eb', background: '#2563eb', color: '#fff', fontWeight: 600, cursor: 'pointer', opacity: body.trim() ? 1 : 0.6 }}
-        >
+        <button type="submit" disabled={!body.trim()}
+          style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid #2563eb', background: '#2563eb', color: '#fff', fontWeight: 600, cursor: 'pointer', opacity: body.trim() ? 1 : 0.6 }}>
           Send
         </button>
       </div>
@@ -145,36 +127,7 @@ async function onSubmit(e: React.FormEvent) {
   );
 }
 
-const input: React.CSSProperties = {
-  padding: '10px 12px',
-  border: '1px solid #e5e7eb',
-  borderRadius: 8,
-  fontSize: 14,
-};
-const toolBtn: React.CSSProperties = {
-  padding: '6px 10px',
-  borderRadius: 8,
-  border: '1px solid #e5e7eb',
-  background: '#fff',
-  color: '#111827',
-  fontWeight: 600,
-  cursor: 'pointer',
-};
-const primaryBtn: React.CSSProperties = {
-  padding: '8px 12px',
-  borderRadius: 8,
-  border: '1px solid #2563eb',
-  background: '#2563eb',
-  color: '#fff',
-  fontWeight: 600,
-  cursor: 'pointer',
-};
-const secondaryBtn: React.CSSProperties = {
-  padding: '8px 12px',
-  borderRadius: 8,
-  border: '1px solid #e5e7eb',
-  background: '#fff',
-  color: '#111827',
-  fontWeight: 600,
-  cursor: 'pointer',
-};
+const input: React.CSSProperties = { padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 14 };
+const toolBtn: React.CSSProperties = { padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', color: '#111827', fontWeight: 600, cursor: 'pointer' };
+const primaryBtn: React.CSSProperties = { padding: '8px 12px', borderRadius: 8, border: '1px solid #2563eb', background: '#2563eb', color: '#fff', fontWeight: 600, cursor: 'pointer' };
+const secondaryBtn: React.CSSProperties = { padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', color: '#111827', fontWeight: 600, cursor: 'pointer' };

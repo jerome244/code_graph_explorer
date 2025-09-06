@@ -20,7 +20,7 @@ urlpatterns = [
     path("me/avatar/", AvatarUploadView.as_view(), name="me_avatar"),
     path("users/search/", UserSearchView.as_view(), name="user_search"),
     path("users/<str:username>/", PublicUserView.as_view(), name="user_public"),
-    path("users/<str:username>/follow/", FollowView.as_view(), name="user_follow"),
+    path("users/<str:username}/follow/", FollowView.as_view(), name="user_follow"),
 
     # messages — specific first
     path("messages/send/", MessageSendView.as_view(), name="messages_send"),

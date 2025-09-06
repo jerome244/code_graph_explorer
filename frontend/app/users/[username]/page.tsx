@@ -1,218 +1,147 @@
-// app/users/[username]/page.tsx
 import { headers, cookies } from "next/headers";
-import { notFound } from "next/navigation";
+import { redirect } from "next/navigation";
 import Link from "next/link";
-import ProfileActions from "./ProfileActions";
+import BlockToggle from "./BlockToggle";
+import FollowToggle from "./FollowToggle";
 
-type UserPublic = {
-  // optional when enriched endpoint is available
-  followers_count?: number;
-  following_count?: number;
-  is_following?: boolean;
-
+type PublicUser = {
   id: number;
   username: string;
-  bio?: string | null;
-  joined?: string | null;
   avatar_url?: string | null;
+  bio?: string | null;
+  followers_count?: number;
+  following_count?: number;
+  is_blocked_by_me?: boolean;
+  has_blocked_me?: boolean;
+  is_following?: boolean;
 };
-
-type ProjectLite = {
-  id: number;
-  name: string;
-  owner_username: string;
-  file_count?: number;
-  my_role?: string;
-  updated_at?: string | null;
-};
-
-function absoluteUrl(path: string) {
-  const h = headers();
-  const base =
-    process.env.NEXT_PUBLIC_BASE_URL ||
-    `${h.get("x-forwarded-proto") ?? "http"}://${h.get("x-forwarded-host") ?? h.get("host")}`;
-  return `${base}${path}`;
-}
 
 function authHeader() {
   const access = cookies().get("access")?.value;
-  return access ? { Authorization: `Bearer ${access}` } : {};
+  if (!access) redirect(`/login?next=${encodeURIComponent(`/users`)}`);
+  return { Authorization: `Bearer ${access}` };
 }
 
-async function getUser(username: string): Promise<UserPublic | null> {
-  const r = await fetch(absoluteUrl(`/api/users/${encodeURIComponent(username)}`), {
-    cache: "no-store",
+function toMediaProxy(raw?: string | null) {
+  if (!raw) return "";
+  try {
+    const base = (process.env.DJANGO_API_BASE || "").replace(/\/$/, "");
+    const u = new URL(raw, base);
+    const idx = u.pathname.indexOf("/media/");
+    if (idx === -1) return raw;
+    const pathAfter = u.pathname.slice(idx + "/media/".length);
+    const qs = u.search || "";
+    return `/api/media/${pathAfter}${qs}`;
+  } catch {
+    return raw || "";
+  }
+}
+
+async function getMe() {
+  const r = await fetch(`${process.env.DJANGO_API_BASE}/api/auth/me/`, {
     headers: authHeader(),
+    cache: "no-store",
   });
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`User fetch failed: ${r.status}`);
+  if (!r.ok) redirect(`/login?next=${encodeURIComponent(`/users`)}`);
   return r.json();
 }
 
-async function getMeUsername(): Promise<string | null> {
-  // call Django directly to avoid needing a Next API proxy
-  const r = await fetch(`${process.env.DJANGO_API_BASE}/api/auth/me/`, {
-    cache: "no-store",
+async function getPublicUser(username: string): Promise<PublicUser | null> {
+  const r = await fetch(`${process.env.DJANGO_API_BASE}/api/auth/users/${encodeURIComponent(username)}/`, {
     headers: authHeader(),
+    cache: "no-store",
   });
   if (!r.ok) return null;
-  const me = await r.json();
-  return me?.username ?? null;
-}
-
-async function getLastProjects(username: string): Promise<ProjectLite[]> {
-  const r = await fetch(
-    absoluteUrl(`/api/users/${encodeURIComponent(username)}/projects?limit=4`),
-    { cache: "no-store", headers: authHeader() }
-  );
-  if (!r.ok) return [];
   return r.json();
 }
 
-export default async function UserProfilePage({ params }: { params: { username: string } }) {
-  const [user, meUsername, projects] = await Promise.all([
-    getUser(params.username),
-    getMeUsername(),
-    getLastProjects(params.username),
-  ]);
-  if (!user) return notFound();
+export default async function PublicProfilePage({ params }: { params: { username: string } }) {
+  const me = await getMe();
+  const user = await getPublicUser(params.username);
+  if (!user) {
+    return <main style={{ maxWidth: 880, margin: "32px auto", padding: "0 16px" }}><h1>User not found</h1></main>;
+  }
 
-  const isSelf =
-    !!meUsername && meUsername.toLowerCase() === (user.username ?? "").toLowerCase();
+  const isMe = (me?.username ?? "").toLowerCase() === (user.username ?? "").toLowerCase();
+  const isBlockedByMe = !!user.is_blocked_by_me;
+  const hasBlockedMe = !!user.has_blocked_me;
+  const isFollowing = !!user.is_following;
+
+  const avatar = toMediaProxy(user.avatar_url);
 
   return (
-    <main style={{ maxWidth: 980, margin: "24px auto", padding: "0 16px" }}>
-      {/* Header */}
-      <header style={{ display: "flex", alignItems: "center", gap: 16 }}>
-        <div
-          aria-hidden
-          style={{
-            width: 64,
-            height: 64,
-            borderRadius: 999,
-            background: "#eef2ff",
-            display: "grid",
-            placeItems: "center",
-            fontWeight: 800,
-            fontSize: 24,
-            color: "#4f46e5",
-          }}
-        >
-          {user.username?.[0]?.toUpperCase() ?? "?"}
-        </div>
-        <div>
-          <h1 style={{ margin: 0 }}>{user.username}</h1>
-          {user.joined && (
-            <div style={{ color: "#6b7280", fontSize: 13 }}>
-              Joined {new Date(user.joined).toLocaleDateString()}
-            </div>
-          )}
-        </div>
-      </header>
-
-      {/* Follow / Message actions + follower counts (hidden when viewing your own profile) */}
-      <ProfileActions
-        username={user.username}
-        isFollowing={!!user.is_following}
-        followers={user.followers_count ?? 0}
-        following={user.following_count ?? 0}
-        isSelf={isSelf}
-      />
-
-      {/* Bio */}
-      {user.bio && (
-        <section style={{ marginTop: 16 }}>
-          <h2 style={{ fontSize: 16, marginBottom: 6 }}>Bio</h2>
-          <p style={{ marginTop: 0, whiteSpace: "pre-wrap" }}>{user.bio}</p>
-        </section>
-      )}
-
-      {/* Latest projects */}
-      <section style={{ marginTop: 24 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
-          <h2 style={{ fontSize: 18, margin: 0 }}>Latest projects</h2>
-          <span style={{ color: "#6b7280", fontSize: 13 }}>
-            {projects.length ? `${projects.length} shown` : "None yet"}
-          </span>
+    <main style={{ maxWidth: 880, margin: "32px auto", padding: "0 16px" }}>
+      <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+        <div style={{ width: 64, height: 64, borderRadius: 999, overflow: "hidden", border: "1px solid #e5e7eb", background: "#f3f4f6" }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={avatar || "/api/empty-avatar.png"} alt="" width={64} height={64} />
         </div>
 
-        {projects.length === 0 ? (
-          <div style={{ color: "#6b7280", fontSize: 14 }}>No public/visible projects to show.</div>
-        ) : (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
-              gap: 12,
-            }}
-          >
-            {projects.slice(0, 4).map((p) => (
-              <article
-                key={p.id}
-                style={{
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 12,
-                  padding: 14,
-                  background: "white",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                  <h3 style={{ margin: 0, fontSize: 16, lineHeight: 1.2 }}>{p.name}</h3>
-                  {p.updated_at && (
-                    <time
-                      dateTime={p.updated_at}
-                      style={{ color: "#9ca3af", fontSize: 11, whiteSpace: "nowrap" }}
-                      title={new Date(p.updated_at).toLocaleString()}
-                    >
-                      {new Date(p.updated_at).toLocaleDateString()}
-                    </time>
-                  )}
-                </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800 }}>@{user.username}</h1>
+          <div style={{ color: "#6b7280", fontSize: 14 }}>
+            <span>{user.followers_count ?? 0} followers</span>
+            {" · "}
+            <span>{user.following_count ?? 0} following</span>
+          </div>
+        </div>
 
-                <div style={{ color: "#6b7280", fontSize: 13, marginTop: 6 }}>
-                  files: {p.file_count ?? "—"}
-                  {p.my_role ? <> • role: {p.my_role}</> : null}
-                </div>
-
-                <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                  <Link
-                    href={`/graph?projectId=${p.id}`}
-                    style={{
-                      textDecoration: "none",
-                      border: "1px solid #e5e7eb",
-                      background: "#111827",
-                      color: "white",
-                      padding: "6px 10px",
-                      borderRadius: 8,
-                      fontSize: 13,
-                    }}
-                  >
-                    Open
-                  </Link>
-                  <Link
-                    href={`/projects/${p.id}/share`}
-                    style={{
-                      textDecoration: "none",
-                      border: "1px solid #e5e7eb",
-                      background: "white",
-                      color: "#111827",
-                      padding: "6px 10px",
-                      borderRadius: 8,
-                      fontSize: 13,
-                    }}
-                  >
-                    Share…
-                  </Link>
-                </div>
-              </article>
-            ))}
+        {!isMe && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <FollowToggle
+              username={user.username}
+              isFollowing={isFollowing}
+              disabled={isBlockedByMe || hasBlockedMe}
+            />
+            <BlockToggle
+              username={user.username}
+              isBlockedByMe={isBlockedByMe}
+              hasBlockedMe={hasBlockedMe}
+            />
           </div>
         )}
-      </section>
+      </div>
+
+      {hasBlockedMe && (
+        <div style={{ marginTop: 12, padding: 10, borderRadius: 8, background: "#fee2e2", color: "#991b1b", fontWeight: 600 }}>
+          You can’t interact with @{user.username} because they have blocked you.
+        </div>
+      )}
+
+      {isBlockedByMe && !hasBlockedMe && (
+        <div style={{ marginTop: 12, padding: 10, borderRadius: 8, background: "#f3f4f6", color: "#374151" }}>
+          You’ve blocked @{user.username}. Unblock to follow or message.
+        </div>
+      )}
+
+      {user?.bio && <p style={{ marginTop: 16, whiteSpace: "pre-wrap" }}>{user.bio}</p>}
+
+      {!isMe && (
+        <section style={{ marginTop: 16, display: "grid", gap: 12 }}>
+          {hasBlockedMe ? (
+            <div style={{ color: "#ef4444", fontWeight: 600 }}>Messaging unavailable.</div>
+          ) : isBlockedByMe ? (
+            <div style={{ color: "#6b7280" }}>Unblock to send a message.</div>
+          ) : (
+            <Link
+              href={`/messages/${encodeURIComponent(user.username)}`}
+              style={{
+                display: "inline-block",
+                padding: "8px 12px",
+                borderRadius: 8,
+                border: "1px solid #4f46e5",
+                background: "#4f46e5",
+                color: "#fff",
+                fontWeight: 700,
+                textDecoration: "none",
+                width: "fit-content",
+              }}
+            >
+              Message @{user.username}
+            </Link>
+          )}
+        </section>
+      )}
     </main>
   );
-}
-
-export function generateMetadata({ params }: { params: { username: string } }) {
-  return { title: `${params.username} • Profile` };
 }

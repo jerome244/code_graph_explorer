@@ -83,9 +83,10 @@ class PublicUserView(APIView):
         data = ser.data
         data["followers_count"] = followers_count
         data["following_count"] = following_count
-        # NEW: block status
+        # block + follow status relative to requester
         data["is_blocked_by_me"] = Block.objects.filter(blocker=request.user, blocked=user).exists()
         data["has_blocked_me"] = Block.objects.filter(blocker=user, blocked=request.user).exists()
+        data["is_following"] = Follow.objects.filter(follower=request.user, target=user).exists()
         return Response(data)
 
 
@@ -155,7 +156,7 @@ class MessageThreadView(APIView):
     def get(self, request, username: str):
         other = get_object_or_404(User, username__iexact=username)
 
-        # NEW: block check (either direction)
+        # block check (either direction)
         if Block.objects.filter(blocker=request.user, blocked=other).exists() or \
            Block.objects.filter(blocker=other, blocked=request.user).exists():
             return Response({"detail": "You cannot view this conversation."}, status=403)
@@ -187,7 +188,7 @@ class MessageSendView(APIView):
         if recipient == request.user:
             return Response({"detail": "You cannot message yourself."}, status=400)
 
-        # NEW: block check (either direction)
+        # block check (either direction)
         if Block.objects.filter(blocker=request.user, blocked=recipient).exists() or \
            Block.objects.filter(blocker=recipient, blocked=request.user).exists():
             return Response({"detail": "Messaging is not allowed because one of you has blocked the other."}, status=403)

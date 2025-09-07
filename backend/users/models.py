@@ -64,3 +64,39 @@ class Block(models.Model):
 
     def __str__(self):
         return f"{self.blocker.username} ⛔ {self.blocked.username}"
+
+
+# ===== NEW: Group chat models =====
+
+class MessageGroup(models.Model):
+    title = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name="created_message_groups")
+    participants = models.ManyToManyField(User, through="MessageGroupMembership", related_name="message_groups")
+
+    def __str__(self):
+        return self.title or f"Group #{self.pk}"
+
+
+class MessageGroupMembership(models.Model):
+    group = models.ForeignKey(MessageGroup, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("group", "user")
+        indexes = [models.Index(fields=["group", "user"])]
+
+
+class GroupMessage(models.Model):
+    group = models.ForeignKey(MessageGroup, on_delete=models.CASCADE, related_name="messages")
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name="group_messages_sent")
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["group", "-created_at"])]
+
+    def __str__(self):
+        return f"GMsg<{self.id}> g:{self.group_id} from:{self.sender_id}"

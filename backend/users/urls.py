@@ -12,6 +12,12 @@ from .views import (
     MessageDeleteView,
     BlockView,
     BlocksListView,
+
+    # NEW: group chat
+    CreateGroupView,
+    GroupDetailView,
+    GroupSendView,
+    GroupMessageDeleteView,
 )
 
 urlpatterns = [
@@ -27,6 +33,12 @@ urlpatterns = [
     path("messages/conversations/", ConversationsView.as_view(), name="messages_conversations"),
     path("messages/<int:pk>/", MessageDeleteView.as_view(), name="messages_delete"),
     path("messages/thread/<str:username>/", MessageThreadView.as_view(), name="messages_thread"),
+
+    # NEW: group messages
+    path("messages/groups/", CreateGroupView.as_view(), name="messages_create_group"),
+    path("messages/groups/<int:pk>/", GroupDetailView.as_view(), name="messages_group_detail"),
+    path("messages/groups/send/", GroupSendView.as_view(), name="messages_group_send"),
+    path("messages/groups/messages/<int:pk>/", GroupMessageDeleteView.as_view(), name="messages_group_message_delete"),
 
     # blocks
     path("blocks/", BlocksListView.as_view(), name="blocks_list"),

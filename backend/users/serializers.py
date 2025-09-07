@@ -2,8 +2,8 @@ from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from rest_framework import serializers
-from .models import Profile, Message, Follow
-
+from .models import Profile, Message, Follow, \
+    MessageGroup, GroupMessage  # NEW
 
 def absolute_media_url(request, path: str | None) -> str | None:
     if not path:
@@ -133,4 +133,34 @@ class MessageSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         self.fields["sender"].context["request"] = request
         self.fields["recipient"].context["request"] = request
+        return super().to_representation(instance)
+
+
+# --- NEW: Group chat serializers ---
+
+class GroupMessageSerializer(serializers.ModelSerializer):
+    sender = PublicUserSerializer(read_only=True, context={"request": None})
+
+    class Meta:
+        model = GroupMessage
+        fields = ("id", "sender", "body", "created_at")
+
+    def to_representation(self, instance):
+        request = self.context.get("request")
+        self.fields["sender"].context["request"] = request
+        return super().to_representation(instance)
+
+
+class MessageGroupSerializer(serializers.ModelSerializer):
+    participants = PublicUserSerializer(many=True, read_only=True, context={"request": None})
+    messages = GroupMessageSerializer(many=True, read_only=True, context={"request": None})
+
+    class Meta:
+        model = MessageGroup
+        fields = ("id", "title", "participants", "messages")
+
+    def to_representation(self, instance):
+        request = self.context.get("request")
+        self.fields["participants"].context["request"] = request
+        self.fields["messages"].context["request"] = request
         return super().to_representation(instance)

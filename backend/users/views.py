@@ -7,13 +7,25 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.pagination import PageNumberPagination
 
-from .models import Profile, Follow, Message, Block
+from .models import (
+    Profile,
+    Follow,
+    Message,
+    Block,
+    # NEW: group chat
+    MessageGroup,
+    MessageGroupMembership,
+    GroupMessage,
+)
 from .serializers import (
     RegisterSerializer,
     UserSerializer,
     PublicUserSerializer,
     MeUpdateSerializer,
     MessageSerializer,
+    # NEW: group chat
+    MessageGroupSerializer,
+    GroupMessageSerializer,
 )
 
 # --- Auth / Profile ---
@@ -198,24 +210,25 @@ class MessageSendView(APIView):
         return Response(ser.data, status=201)
 
 
+# --- Conversations (DM + Groups) ---
+
 class ConversationsView(APIView):
     """
-    List unique conversations (one per other user), including:
-    - the other user's public info
-    - the last message snippet and time
-    - unread count (messages to me that are not read)
+    Unified conversations feed:
+      - DM items:   { type:'dm',    user: PublicUser, last_message:{...}, unread_count:int }
+      - Group items:{ type:'group', group:{id,title,participants:[...]}, last_message:{...}, unread_count:int }
+    Sorted by last activity (last_message.created_at desc). Group unread_count is 0 unless you add read-tracking.
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         limit = int(request.GET.get("limit", "50"))
 
-        # Exclude users I blocked or who blocked me
+        # ===== DMs =====
         blocked_ids = set(Block.objects.filter(blocker=request.user).values_list("blocked_id", flat=True))
         blocked_me_ids = set(Block.objects.filter(blocked=request.user).values_list("blocker_id", flat=True))
 
-        # Recent messages involving me
-        qs = (
+        dm_qs = (
             Message.objects
             .filter(Q(sender=request.user) | Q(recipient=request.user))
             .select_related("sender", "recipient")
@@ -223,23 +236,22 @@ class ConversationsView(APIView):
         )
 
         # Unread counts keyed by other user id
-        unread = {}
-        for m in qs:
+        dm_unread = {}
+        for m in dm_qs:
             if m.recipient_id == request.user.id and not m.is_read:
-                other_id = m.sender_id
-                unread[other_id] = unread.get(other_id, 0) + 1
+                dm_unread[m.sender_id] = dm_unread.get(m.sender_id, 0) + 1
 
-        # Build unique conversation list in recency order
-        out = []
-        seen = set()
-        for m in qs:
+        dm_items = []
+        dm_seen = set()
+        for m in dm_qs:
             other = m.recipient if m.sender_id == request.user.id else m.sender
-            if other.id in seen:
+            if other.id in dm_seen:
                 continue
             if other.id in blocked_ids or other.id in blocked_me_ids:
                 continue
-            seen.add(other.id)
-            out.append({
+            dm_seen.add(other.id)
+            dm_items.append({
+                "type": "dm",
                 "user": PublicUserSerializer(other, context={"request": request}).data,
                 "last_message": {
                     "id": m.id,
@@ -247,12 +259,67 @@ class ConversationsView(APIView):
                     "created_at": m.created_at.isoformat(),
                     "from_me": (m.sender_id == request.user.id),
                 },
-                "unread_count": unread.get(other.id, 0),
+                "unread_count": dm_unread.get(other.id, 0),
             })
-            if len(out) >= limit:
+
+        # ===== Groups =====
+        # Requires the group models from earlier: MessageGroup, MessageGroupMembership, GroupMessage
+        groups = (
+            MessageGroup.objects
+            .filter(participants=request.user)
+            .prefetch_related("participants")
+            .only("id", "title")
+        )
+
+        # Gather latest message per group (in one pass)
+        latest_msgs = (
+            GroupMessage.objects
+            .filter(group__in=groups)
+            .select_related("group", "sender")
+            .order_by("-created_at")[:2000]
+        )
+        group_last = {}
+        for gm in latest_msgs:
+            gid = gm.group_id
+            if gid not in group_last:
+                group_last[gid] = gm
+            # stop once we captured a latest for many groups
+            if len(group_last) >= groups.count():
                 break
 
-        return Response(out)
+        group_items = []
+        for g in groups:
+            participants_ser = PublicUserSerializer(list(g.participants.all()), many=True, context={"request": request}).data
+            lm = group_last.get(g.id)
+            last_payload = None
+            if lm:
+                last_payload = {
+                    "id": lm.id,
+                    "body": lm.body,
+                    "created_at": lm.created_at.isoformat(),
+                    "from_me": (lm.sender_id == request.user.id),
+                    "sender": PublicUserSerializer(lm.sender, context={"request": request}).data,
+                }
+            group_items.append({
+                "type": "group",
+                "group": { "id": g.id, "title": g.title or "", "participants": participants_ser },
+                "last_message": last_payload,
+                "unread_count": 0,  # add real read-tracking later if desired
+            })
+
+        # ===== Merge + sort by last activity =====
+        def last_ts(item):
+            lm = item.get("last_message") or {}
+            return lm.get("created_at") or ""
+
+        merged = dm_items + group_items
+        merged.sort(key=last_ts, reverse=True)
+
+        # Apply limit
+        if limit and limit > 0:
+            merged = merged[:limit]
+
+        return Response(merged)
 
 
 # --- Delete a message (sender only) ---
@@ -266,3 +333,85 @@ class MessageDeleteView(APIView):
             return Response({"detail": "You can only delete your own messages."}, status=status.HTTP_403_FORBIDDEN)
         msg.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --- NEW: Group chat ---
+
+class CreateGroupView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        usernames = request.data.get("usernames") or []
+        title = (request.data.get("title") or "").strip()
+
+        # normalize and ensure requester is included
+        norm = []
+        for u in usernames:
+            if not u:
+                continue
+            u = str(u).strip().lstrip("@")
+            if u:
+                norm.append(u)
+        if request.user.username not in norm:
+            norm.append(request.user.username)
+
+        users = list(User.objects.filter(username__in=norm))
+        uniq = {u.username for u in users}
+        if len(uniq) < 2:
+            return Response({"detail": "Need at least two participants."}, status=400)
+
+        group = MessageGroup.objects.create(title=title, created_by=request.user)
+        for u in users:
+            MessageGroupMembership.objects.get_or_create(group=group, user=u)
+
+        data = MessageGroupSerializer(group, context={"request": request}).data
+        return Response(data, status=status.HTTP_201_CREATED)
+
+
+class GroupDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, pk: int):
+        group = get_object_or_404(MessageGroup, pk=pk)
+        # Ensure the requester is a participant
+        if not group.participants.filter(pk=request.user.pk).exists():
+            return Response({"detail": "Not a participant."}, status=403)
+
+        page_size = int(request.query_params.get("page_size") or 200)
+        msgs = group.messages.select_related("sender").order_by("-created_at")[:page_size]
+        data = MessageGroupSerializer(group, context={"request": request}).data
+        data["messages"] = GroupMessageSerializer(msgs, many=True, context={"request": request}).data
+        return Response(data, status=200)
+
+
+class GroupSendView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        group_id = request.data.get("group_id")
+        body = (request.data.get("body") or "").strip()
+        if not group_id or not body:
+            return Response({"detail": "group_id and body are required."}, status=400)
+
+        group = get_object_or_404(MessageGroup, pk=group_id)
+        if not group.participants.filter(pk=request.user.pk).exists():
+            return Response({"detail": "Not a participant."}, status=403)
+
+        # Optional: pairwise block enforcement
+        other_ids = list(group.participants.exclude(pk=request.user.pk).values_list("id", flat=True))
+        if Block.objects.filter(blocker=request.user, blocked_id__in=other_ids).exists() or \
+           Block.objects.filter(blocker_id__in=other_ids, blocked=request.user).exists():
+            return Response({"detail": "Messaging not allowed due to blocking."}, status=403)
+
+        msg = GroupMessage.objects.create(group=group, sender=request.user, body=body)
+        return Response(GroupMessageSerializer(msg, context={"request": request}).data, status=201)
+
+class GroupMessageDeleteView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, pk: int):
+        msg = get_object_or_404(GroupMessage, pk=pk)
+        if msg.sender_id != request.user.id:
+            return Response({"detail": "You can only delete your own messages."}, status=403)
+        msg.delete()
+        return Response(status=204)

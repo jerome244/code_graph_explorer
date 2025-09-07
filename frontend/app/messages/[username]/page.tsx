@@ -5,6 +5,7 @@ import Link from "next/link";
 import ChatComposer from "./ChatComposer";
 import MessageList, { Msg } from "./MessageList";
 import BlockToggle from "./BlockToggle";
+import AddParticipants from "./AddParticipants";
 
 type MsgUser = { id: number; username: string; avatar_url?: string | null };
 type PublicUser = {
@@ -112,7 +113,10 @@ export default async function MessagesThreadPage({ params }: { params: { usernam
         </h1>
 
         <div style={{ marginLeft: "auto" }}>
-          <BlockToggle username={params.username} isBlockedByMe={blockedByMe} hasBlockedMe={hasBlockedMe} />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <AddParticipants currentUsername={params.username} />
+            <BlockToggle username={params.username} isBlockedByMe={blockedByMe} hasBlockedMe={hasBlockedMe} />
+          </div>
         </div>
       </div>
 

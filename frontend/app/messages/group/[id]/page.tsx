@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import GroupComposer from "./GroupComposer";
 import GroupMessageList, { type GroupMsg } from "./GroupMessageList";
+import ManageGroup from "./ManageGroup";
 
 type MsgUser = { id: number; username: string; avatar_url?: string | null };
 type Group = {
@@ -11,6 +12,7 @@ type Group = {
   title?: string | null;
   participants: MsgUser[];
   messages?: GroupMsg[];
+  created_by?: MsgUser | null; // ← needed to know if current user is the creator
 };
 
 export const dynamic = "force-dynamic";
@@ -70,7 +72,7 @@ export default async function GroupChatPage({ params }: { params: { id: string }
   if (!group) {
     return (
       <main style={{ maxWidth: 880, margin: "32px auto", padding: "0 16px" }}>
-        <a href="/messages" style={{ textDecoration: "none", color: "#2563eb" }}>← All conversations</a>
+        <Link href="/messages" style={{ textDecoration: "none", color: "#2563eb" }}>← All conversations</Link>
         <div style={{ marginTop: 16, color: '#ef4444', fontWeight: 700 }}>Group not found or server does not support groups.</div>
       </main>
     );
@@ -86,14 +88,25 @@ export default async function GroupChatPage({ params }: { params: { id: string }
     sender: { ...m.sender, avatar_url: toMediaProxy(m.sender?.avatar_url) }
   }));
 
+  const isCreator =
+    (group.created_by?.username || '').toLowerCase() === (me?.username || '').toLowerCase();
+
   return (
     <main style={{ maxWidth: 880, margin: "32px auto", padding: "0 16px" }}>
-      <a href="/messages" style={{ textDecoration: "none", color: "#2563eb" }}>← All conversations</a>
+      <Link href="/messages" style={{ textDecoration: "none", color: "#2563eb" }}>← All conversations</Link>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 8 }}>
         <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>{title}</h1>
         <div style={{ fontSize: 12, color: '#6b7280' }}>
           {participants.length} members · {participants.map(p => '@' + p.username).join(', ')}
+        </div>
+        <div style={{ marginLeft: "auto" }}>
+          <ManageGroup
+            groupId={group.id}
+            participants={participants}
+            meUsername={me.username}
+            isCreator={isCreator}
+          />
         </div>
       </div>
 

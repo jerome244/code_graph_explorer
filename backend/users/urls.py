@@ -18,6 +18,9 @@ from .views import (
     GroupDetailView,
     GroupSendView,
     GroupMessageDeleteView,
+    GroupAddMembersView, 
+    GroupRemoveMembersView, 
+    GroupLeaveView,
 )
 
 urlpatterns = [
@@ -39,6 +42,9 @@ urlpatterns = [
     path("messages/groups/<int:pk>/", GroupDetailView.as_view(), name="messages_group_detail"),
     path("messages/groups/send/", GroupSendView.as_view(), name="messages_group_send"),
     path("messages/groups/messages/<int:pk>/", GroupMessageDeleteView.as_view(), name="messages_group_message_delete"),
+    path("messages/groups/<int:pk>/add/", GroupAddMembersView.as_view(), name="messages_group_add"),       # ← NEW
+    path("messages/groups/<int:pk>/remove/", GroupRemoveMembersView.as_view(), name="messages_group_remove"), # ← NEW
+    path("messages/groups/<int:pk>/leave/", GroupLeaveView.as_view(), name="messages_group_leave"),        # ← NEW
 
     # blocks
     path("blocks/", BlocksListView.as_view(), name="blocks_list"),

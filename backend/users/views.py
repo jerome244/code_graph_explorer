@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import Q
 from django.contrib.auth.models import User
 from django.shortcuts import get_object_or_404
@@ -415,3 +416,93 @@ class GroupMessageDeleteView(APIView):
             return Response({"detail": "You can only delete your own messages."}, status=403)
         msg.delete()
         return Response(status=204)
+
+
+class GroupAddMembersView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk: int):
+        group = get_object_or_404(MessageGroup, pk=pk)
+        if group.created_by_id != request.user.id:
+            return Response({"detail": "Only the creator can add members."}, status=403)
+
+        usernames = request.data.get("usernames") or []
+        if not isinstance(usernames, list) or not usernames:
+            return Response({"detail": "Provide usernames list."}, status=400)
+
+        cleaned = {str(u).strip().lstrip("@") for u in usernames if str(u).strip()}
+        if not cleaned:
+            return Response({"detail": "No valid usernames."}, status=400)
+
+        users = list(User.objects.filter(username__in=cleaned))
+        if not users:
+            return Response({"detail": "No matching users."}, status=404)
+
+        with transaction.atomic():
+            for u in users:
+                MessageGroupMembership.objects.get_or_create(group=group, user=u)
+
+        return Response({"added": [u.username for u in users]}, status=200)
+
+
+class GroupRemoveMembersView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk: int):
+        group = get_object_or_404(MessageGroup, pk=pk)
+        if group.created_by_id != request.user.id:
+            return Response({"detail": "Only the creator can remove members."}, status=403)
+
+        usernames = request.data.get("usernames") or []
+        if not isinstance(usernames, list) or not usernames:
+            return Response({"detail": "Provide usernames list."}, status=400)
+
+        cleaned = {str(u).strip().lstrip("@") for u in usernames if str(u).strip()}
+        if not cleaned:
+            return Response({"detail": "No valid usernames."}, status=400)
+
+        # Do not allow removing the creator
+        cleaned.discard(group.created_by.username)
+
+        users = list(User.objects.filter(username__in=cleaned))
+        with transaction.atomic():
+            MessageGroupMembership.objects.filter(group=group, user__in=users).delete()
+
+        return Response({"removed": [u.username for u in users]}, status=200)
+
+
+class GroupLeaveView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk: int):
+        group = get_object_or_404(MessageGroup, pk=pk)
+
+        # If the user is not a participant, 204 (idempotent)
+        if not group.participants.filter(pk=request.user.pk).exists():
+            return Response(status=204)
+
+        # If creator leaves, transfer ownership to oldest remaining member (if any)
+        with transaction.atomic():
+            MessageGroupMembership.objects.filter(group=group, user=request.user).delete()
+
+            remaining = group.participants.all()
+            if group.created_by_id == request.user.id:
+                if remaining.exists():
+                    # oldest member by added_at gets creator
+                    oldest = (
+                        MessageGroupMembership.objects
+                        .filter(group=group)
+                        .order_by("added_at")
+                        .select_related("user")
+                        .first()
+                    )
+                    if oldest:
+                        group.created_by = oldest.user
+                        group.save(update_fields=["created_by"])
+                else:
+                    # no one left — optionally delete the group
+                    group.delete()
+                    return Response(status=204)
+
+        return Response(status=204)
+    

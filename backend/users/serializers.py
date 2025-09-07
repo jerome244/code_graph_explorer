@@ -154,13 +154,16 @@ class GroupMessageSerializer(serializers.ModelSerializer):
 class MessageGroupSerializer(serializers.ModelSerializer):
     participants = PublicUserSerializer(many=True, read_only=True, context={"request": None})
     messages = GroupMessageSerializer(many=True, read_only=True, context={"request": None})
+    created_by = PublicUserSerializer(read_only=True, context={"request": None})  # ← NEW
 
     class Meta:
         model = MessageGroup
-        fields = ("id", "title", "participants", "messages")
+        fields = ("id", "title", "participants", "messages", "created_by")  # ← include created_by
 
     def to_representation(self, instance):
         request = self.context.get("request")
         self.fields["participants"].context["request"] = request
         self.fields["messages"].context["request"] = request
+        self.fields["created_by"].context["request"] = request
         return super().to_representation(instance)
+

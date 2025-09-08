@@ -45,6 +45,8 @@ export default async function Nav() {
         <Link href="/graph" style={navLinkStyle}>Graph</Link>
         <Link href="/games" style={navLinkStyle}>Games</Link>
         <Link href="/osint" style={navLinkStyle}>OSINT</Link>
+        <Link href="/pico" style={navLinkStyle}>Pico</Link>
+
         {me && (
           <>
             <Link href="/messages" style={navLinkStyle}>Messages</Link>

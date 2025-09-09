@@ -77,6 +77,15 @@ export default function PicoDashboard() {
             <div style={cardDesc}>I²C 16×2 text display controls.</div>
           </div>
         </Link>
+        
+        {/* Dual LEDs */}
+        <Link href="/pico/leds" style={{ textDecoration: 'none' }}>
+          <div style={cardStyle}>
+            <div style={{ fontSize: 32 }}>🔴🟢</div>
+            <div style={cardTitle}>Dual LEDs</div>
+            <div style={cardDesc}>Control separate red & green LEDs.</div>
+          </div>
+        </Link>
 
       </div>
     </main>

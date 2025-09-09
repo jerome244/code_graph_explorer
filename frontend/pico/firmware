@@ -1,31 +1,34 @@
 /*
-  Pico W — LED · RFID · Relay (non-blocking pulse) · Thermistor (HTTP API) · Buzzer
+  Pico W — LED · RFID · Relay (non-blocking pulse) · Thermistor · Buzzer · DHT11 (HTTP API)
 
   Endpoints (GET):
-    /api/status                    -> {state:"off|on|blinking"}               // LED status
-    /api/led?state=on|off          -> {state:"on|off"}                        // LED control
-    /api/blink?hz=1..20            -> {state:"blinking"}                      // LED blink
+    /api/status                    -> {state:"off|on|blinking"}                 // LED status
+    /api/led?state=on|off          -> {state:"on|off"}                          // LED control
+    /api/blink?hz=1..20            -> {state:"blinking"}                        // LED blink
 
-    /api/rfid/status               -> {uid, present, at_ms, age_ms, empty_ms, autoclear_ms}
+    /api/rfid/status               -> {uid,present,at_ms,age_ms,empty_ms,autoclear_ms}
     /api/rfid/last                 -> {uid,at_ms,age_ms}
-    /api/rfid/scan[?ms=100..5000]  -> {uid,at_ms,age_ms}                      // active windowed scan
+    /api/rfid/scan[?ms=100..5000]  -> {uid,at_ms,age_ms}                        // active windowed scan
     /api/rfid/clear                -> {ok:true}
-    /api/rfid/autoclear?ms=0..5000 -> {autoclear_ms}  // 0 disables auto-clear
+    /api/rfid/autoclear?ms=0..5000 -> {autoclear_ms}                            // 0 disables auto-clear
     /api/rfid/debug                -> {version_reg,antenna_on,status2,error,selftest}
     /api/rfid/reinit               -> {reinit:true,version_reg:"0x.."}
 
     /api/relay/status              -> {state:"on|off"}
     /api/relay?state=on|off        -> {state:"on|off"}
-    /api/relay/pulse?ms=10..10000  -> {state:"pulsing",ms:N}                  // non-blocking
+    /api/relay/pulse?ms=10..10000  -> {state:"pulsing",ms:N}                    // non-blocking
 
     /api/thermistor/read           -> {raw,raw_bits,voltage,resistance_ohm,temp_c,ntc_to_3v3}
 
     /api/buzzer/status             -> {state:"on|off",alarm:true|false}
-    /api/buzzer?state=on|off       -> {state:"on|off"}                        // immediate set
-    /api/buzzer/beep?ms=10..5000   -> {state:"beeping",ms:N}                  // non-blocking
+    /api/buzzer?state=on|off       -> {state:"on|off"}                          // immediate set
+    /api/buzzer/beep?ms=10..5000   -> {state:"beeping",ms:N}                    // non-blocking
     /api/buzzer/alarm?cmd=start|stop&on_ms=10..5000&off_ms=10..5000
                                     -> start: {state:"alarm",on_ms:N,off_ms:N}
                                        stop:  {state:"stopped"}
+
+    /api/dht11/read[?settle_ms=0..1000]
+                                   -> {valid,humidity,temp_c,temp_f,heat_index_c,heat_index_f,err?}
 
   Pins (default):
     LED_BUILTIN                      — onboard LED
@@ -40,6 +43,11 @@
       RST     -> GP22
       3.3V/GND to module power
 
+    DHT11:
+      DATA    -> GP13  (add 10k pull-up to 3V3 if bare 4-pin sensor)
+      VCC     -> 3V3(OUT)
+      GND     -> GND
+
     Thermistor (NTC 10k, B=3950), voltage divider (orientation selectable):
       If NTC_TO_3V3 = 1: 3V3 -> NTC -> node -> 10k -> GND (node -> GP26/ADC0)
       If NTC_TO_3V3 = 0: 3V3 -> 10k -> node -> NTC -> GND (node -> GP26/ADC0)
@@ -53,10 +61,16 @@
 #include <WebServer.h>
 #include <SPI.h>
 
-// --- RFID clone-friendly: slow SPI clock for MFRC522/FM17522 clones ---
+// RFID clone-friendly: slow SPI clock for MFRC522/FM17522 clones
 #define MFRC522_SPICLOCK 4000000
 #include <MFRC522.h>
 #include <math.h>
+
+// DHT11
+#include <DHT.h>
+#define DHT11_PIN 13
+#define DHTTYPE   DHT11
+DHT dht(DHT11_PIN, DHTTYPE);
 
 // ================= WIFI =================
 const char* SSID     = "";
@@ -102,7 +116,7 @@ unsigned long lastSeenMs = 0;
 // Presence/auto-clear state
 volatile bool     rfidPresent = false;
 unsigned long     rfidNoCardSince = 0;
-uint32_t          RFID_AUTOCLEAR_MS = 600;  // 0 disables
+uint32_t          RFID_AUTOCLEAR_MS = 600;  // 0 disables auto-clear
 
 // ================ THERMISTOR (NTC 10k) =================
 #define NTC_TO_3V3 0
@@ -193,7 +207,6 @@ void RFID_BackgroundPoll() {
   if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
     found = true;
   } else {
-    // Also allow re-read if card is still in field
     if (mfrc522.PICC_ReadCardSerial()) found = true;
   }
 
@@ -206,12 +219,10 @@ void RFID_BackgroundPoll() {
     mfrc522.PCD_StopCrypto1();
   } else {
     if (rfidPresent) {
-      // first time we see no card after being present
       rfidPresent = false;
       rfidNoCardSince = millis();
     } else if (rfidNoCardSince && RFID_AUTOCLEAR_MS > 0) {
       if ((millis() - rfidNoCardSince) > RFID_AUTOCLEAR_MS) {
-        // auto-clear the last UID after the field has been empty long enough
         lastUID = "";
         lastSeenMs = 0;
         rfidNoCardSince = 0;
@@ -283,7 +294,7 @@ void handleBlink() {
   int hz = server.hasArg("hz") ? server.arg("hz").toInt() : 2;
   if (hz < 1) hz = 1;
   if (hz > 20) hz = 20;
-  blinkIntervalMs = (uint32_t)(500.0 / (double)hz);
+  blinkIntervalMs = (uint32_t)(500.0 / (double)hz); // toggle period
   currentMode = MODE_BLINK;
   server.send(200, "application/json", "{\"state\":\"blinking\"}");
 }
@@ -338,7 +349,6 @@ void handleRfidScan() {
   if (window < 100)  window = 100;
   if (window > 5000) window = 5000;
 
-  // Ensure clean state before scan
   mfrc522.PCD_StopCrypto1();
   mfrc522.PCD_ClearRegisterBitMask(MFRC522::Status2Reg, 0x08); // MFCrypto1On = 0
 
@@ -347,11 +357,9 @@ void handleRfidScan() {
   unsigned long until = millis() + window;
 
   while (millis() < until) {
-    // Normal path
     if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
       found = true;
     } else {
-      // Force wake a tag already in the field
       byte atqa[2]; byte atqaSize = 2;
       MFRC522::StatusCode s = mfrc522.PICC_RequestA(atqa, &atqaSize);
       if (s != MFRC522::STATUS_OK) s = mfrc522.PICC_WakeupA(atqa, &atqaSize);
@@ -388,7 +396,7 @@ void handleRfidDebug() {
   byte error   = mfrc522.PCD_ReadRegister(MFRC522::ErrorReg);
   bool selfok  = mfrc522.PCD_PerformSelfTest();
 
-  bool antennaOn = (tx & 0x03) == 0x03;  // both TX1 & TX2 enabled
+  bool antennaOn = (tx & 0x03) == 0x03;
   String json = "{";
   json += "\"version_reg\":\"0x" + String(ver, HEX) + "\"";
   json += ",\"antenna_on\":" + String(antennaOn ? "true" : "false");
@@ -508,7 +516,7 @@ void handleBuzzerAlarm() {
   enableCORS();
   String cmd = server.arg("cmd"); cmd.toLowerCase();
   if (cmd == "start") {
-    buzzerOnMs = server.hasArg("on_ms") ? server.arg("on_ms").toInt() : 200;
+    buzzerOnMs  = server.hasArg("on_ms")  ? server.arg("on_ms").toInt()  : 200;
     buzzerOffMs = server.hasArg("off_ms") ? server.arg("off_ms").toInt() : 200;
     if (buzzerOnMs < 10) buzzerOnMs = 10; if (buzzerOnMs > 5000) buzzerOnMs = 5000;
     if (buzzerOffMs < 10) buzzerOffMs = 10; if (buzzerOffMs > 5000) buzzerOffMs = 5000;
@@ -529,6 +537,39 @@ void handleBuzzerAlarm() {
   } else {
     server.send(400, "application/json", "{\"error\":\"cmd must be start|stop\"}");
   }
+}
+
+// ----------------- HTTP Handlers: DHT11 ----------------
+void handleDht11Read() {
+  enableCORS();
+
+  int settle = server.hasArg("settle_ms") ? server.arg("settle_ms").toInt() : 0;
+  if (settle < 0) settle = 0;
+  if (settle > 1000) settle = 1000;
+  if (settle) delay(settle);
+
+  float h  = dht.readHumidity();
+  float tc = dht.readTemperature();      // Celsius
+  float tf = dht.readTemperature(true);  // Fahrenheit
+
+  String json = "{";
+  if (isnan(h) || isnan(tc) || isnan(tf)) {
+    json += "\"valid\":false,\"err\":\"nan\"}";
+    server.send(200, "application/json", json);
+    return;
+  }
+
+  float hic = dht.computeHeatIndex(tc, h, false);
+  float hif = dht.computeHeatIndex(tf, h, true);
+
+  json += "\"valid\":true";
+  json += ",\"humidity\":" + String(h, 1);
+  json += ",\"temp_c\":" + String(tc, 1);
+  json += ",\"temp_f\":" + String(tf, 1);
+  json += ",\"heat_index_c\":" + String(hic, 1);
+  json += ",\"heat_index_f\":" + String(hif, 1);
+  json += "}";
+  server.send(200, "application/json", json);
 }
 
 // ----------------- Misc -----------------
@@ -561,6 +602,7 @@ void setup() {
   Serial.print("IP: "); Serial.println(WiFi.localIP());
 
   RFID_Init();
+  dht.begin();
 
   // Routes
   server.on("/api/status",          HTTP_GET, handleStatus);
@@ -586,11 +628,14 @@ void setup() {
   server.on("/api/buzzer/beep",     HTTP_GET, handleBuzzerBeep);
   server.on("/api/buzzer/alarm",    HTTP_GET, handleBuzzerAlarm);
 
+  server.on("/api/dht11/read",      HTTP_GET, handleDht11Read);
+
   // CORS preflight
   server.on("/",                    HTTP_OPTIONS, handleOptions);
   server.on("/api/status",          HTTP_OPTIONS, handleOptions);
   server.on("/api/led",             HTTP_OPTIONS, handleOptions);
   server.on("/api/blink",           HTTP_OPTIONS, handleOptions);
+
   server.on("/api/rfid/status",     HTTP_OPTIONS, handleOptions);
   server.on("/api/rfid/last",       HTTP_OPTIONS, handleOptions);
   server.on("/api/rfid/clear",      HTTP_OPTIONS, handleOptions);
@@ -598,14 +643,19 @@ void setup() {
   server.on("/api/rfid/scan",       HTTP_OPTIONS, handleOptions);
   server.on("/api/rfid/debug",      HTTP_OPTIONS, handleOptions);
   server.on("/api/rfid/reinit",     HTTP_OPTIONS, handleOptions);
+
   server.on("/api/relay/status",    HTTP_OPTIONS, handleOptions);
   server.on("/api/relay",           HTTP_OPTIONS, handleOptions);
   server.on("/api/relay/pulse",     HTTP_OPTIONS, handleOptions);
+
   server.on("/api/thermistor/read", HTTP_OPTIONS, handleOptions);
+
   server.on("/api/buzzer/status",   HTTP_OPTIONS, handleOptions);
   server.on("/api/buzzer",          HTTP_OPTIONS, handleOptions);
   server.on("/api/buzzer/beep",     HTTP_OPTIONS, handleOptions);
   server.on("/api/buzzer/alarm",    HTTP_OPTIONS, handleOptions);
+
+  server.on("/api/dht11/read",      HTTP_OPTIONS, handleOptions);
 
   server.onNotFound(handleNotFound);
   server.begin();

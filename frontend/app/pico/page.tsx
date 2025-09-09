@@ -59,6 +59,16 @@ export default function PicoDashboard() {
             <div style={cardDesc}>Beep or start/stop an alarm pattern.</div>
           </div>
         </Link>
+
+        {/* DHT11 */}
+        <Link href="/pico/dht11" style={{ textDecoration: "none" }}>
+          <div style={cardStyle}>
+            <div style={{ fontSize: 32 }}>🌡️💧</div>
+            <div style={cardTitle}>DHT11</div>
+            <div style={cardDesc}>Read temperature & humidity.</div>
+          </div>
+        </Link>
+
       </div>
     </main>
   );

@@ -1,0 +1,143 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#ifdef ARDUINO_ARCH_RP2040
+  #include <RPC.h>
+#endif
+
+// --------- CONFIG ---------
+const char* SSID     = "YOUR_WIFI_SSID";
+const char* PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* MDNS_NAME = "picow"; // resolves to http://picow.local
+
+// --------- STATE ---------
+WebServer server(80);
+enum LedMode { MODE_OFF, MODE_ON, MODE_BLINK };
+volatile LedMode currentMode = MODE_OFF;
+volatile uint32_t blinkIntervalMs = 500; // default 2Hz (on/off each 250ms toggling -> 500ms full cycle per state change)
+unsigned long lastToggle = 0;
+bool ledLevel = false;
+
+// CORS helper
+void enableCORS() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+void handleOptions() {
+  enableCORS();
+  server.send(204); // No Content
+}
+
+void handleStatus() {
+  enableCORS();
+  String state = "unknown";
+  switch (currentMode) {
+    case MODE_OFF:  state = "off"; break;
+    case MODE_ON:   state = "on"; break;
+    case MODE_BLINK:state = "blinking"; break;
+  }
+  String json = String("{\"state\":\"") + state + "\"}";
+  server.send(200, "application/json", json);
+}
+
+void handleLed() {
+  enableCORS();
+  String state = server.hasArg("state") ? server.arg("state") : "";
+  state.toLowerCase();
+  if (state == "on") {
+    currentMode = MODE_ON;
+    digitalWrite(LED_BUILTIN, HIGH);
+    ledLevel = true;
+    server.send(200, "application/json", "{\"state\":\"on\"}");
+  } else if (state == "off") {
+    currentMode = MODE_OFF;
+    digitalWrite(LED_BUILTIN, LOW);
+    ledLevel = false;
+    server.send(200, "application/json", "{\"state\":\"off\"}");
+  } else {
+    server.send(400, "application/json", "{\"error\":\"state must be on|off\"}");
+  }
+}
+
+void handleBlink() {
+  enableCORS();
+  if (!server.hasArg("hz")) {
+    server.send(400, "application/json", "{\"error\":\"hz required\"}");
+    return;
+  }
+  int hz = server.arg("hz").toInt();
+  if (hz < 1) hz = 1;
+  if (hz > 20) hz = 20;
+  // Each full on+off cycle is 1/hz seconds; toggle interval is half that:
+  blinkIntervalMs = (uint32_t)(500.0 / (double)hz); // toggle period in ms
+  currentMode = MODE_BLINK;
+  server.send(200, "application/json", "{\"state\":\"blinking\"}");
+}
+
+void handleNotFound() {
+  enableCORS();
+  server.send(404, "text/plain", "Not found");
+}
+
+void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("\nBooting...");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(SSID, PASSWORD);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(400);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.print("Connected! IP: ");
+  Serial.println(WiFi.localIP());
+
+  // mDNS (optional; skip if your core doesn't provide it)
+  // Some cores expose ArduinoMDNS; others auto-start mDNS.
+  // If unavailable, comment this block and use the IP.
+  #ifdef ARDUINO_MDNS
+    if (MDNS.begin(MDNS_NAME)) {
+      Serial.print("mDNS responder started: http://");
+      Serial.print(MDNS_NAME);
+      Serial.println(".local");
+    } else {
+      Serial.println("mDNS start failed");
+    }
+  #endif
+
+  // Routes
+  server.on("/api/status", HTTP_GET, handleStatus);
+  server.on("/api/led",    HTTP_GET, handleLed);
+  server.on("/api/blink",  HTTP_GET, handleBlink);
+
+  // CORS preflight
+  server.onNotFound(handleNotFound);
+  server.on("/", HTTP_OPTIONS, handleOptions);
+  server.on("/api/status", HTTP_OPTIONS, handleOptions);
+  server.on("/api/led", HTTP_OPTIONS, handleOptions);
+  server.on("/api/blink", HTTP_OPTIONS, handleOptions);
+
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+void loop() {
+  server.handleClient();
+
+  // Blink state machine
+  if (currentMode == MODE_BLINK) {
+    unsigned long now = millis();
+    if (now - lastToggle >= blinkIntervalMs) {
+      ledLevel = !ledLevel;
+      digitalWrite(LED_BUILTIN, ledLevel ? HIGH : LOW);
+      lastToggle = now;
+    }
+  }
+}

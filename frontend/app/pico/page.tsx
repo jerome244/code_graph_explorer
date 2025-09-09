@@ -42,12 +42,21 @@ export default function PicoDashboard() {
           </div>
         </Link>
 
-        {/* NEW: Thermistor */}
+        {/* Thermistor */}
         <Link href="/pico/thermistor" style={{ textDecoration: "none" }}>
           <div style={cardStyle}>
             <div style={{ fontSize: 32 }}>🌡️</div>
             <div style={cardTitle}>Thermistor</div>
             <div style={cardDesc}>Read temperature via ADC (10k NTC).</div>
+          </div>
+        </Link>
+
+        {/* NEW: Buzzer */}
+        <Link href="/pico/buzzer" style={{ textDecoration: "none" }}>
+          <div style={cardStyle}>
+            <div style={{ fontSize: 32 }}>🔔</div>
+            <div style={cardTitle}>Buzzer</div>
+            <div style={cardDesc}>Beep or start/stop an alarm pattern.</div>
           </div>
         </Link>
       </div>

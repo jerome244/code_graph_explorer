@@ -9,7 +9,7 @@ async function fetchWithTimeout(url: string, ms: number) {
   const ctl = new AbortController();
   const id = setTimeout(() => ctl.abort(), ms);
   try {
-    return await fetch(url, { method: "GET", signal: ctl.signal });
+    return await fetch(url, { method: "GET", signal: ctl.signal, cache: "no-store" });
   } finally {
     clearTimeout(id);
   }
@@ -27,7 +27,7 @@ export async function GET(
   let base = (targetFromQuery || targetFromHeader || "").trim();
 
   if (base && !/^https?:\/\//i.test(base)) base = "http://" + base;
-  if (base) base = base.replace(/\/+$/, "");
+  if (base) base = base.replace(/\/+$/, ""); // strip trailing slash
 
   // Forward all original query params except our control ones
   const sp = new URLSearchParams(url.searchParams);
@@ -44,10 +44,26 @@ export async function GET(
     );
   }
 
-  const picoPath = joinPath(ctx.params?.path);
+  // ---- Build device path with /api normalization ----
+  // raw examples: "/rfid/last" OR "/api/rfid/last"
+  const rawPath = joinPath(ctx.params?.path);
+  const baseHasApi = /\/api$/i.test(base);
+  const pathHasApi = /^\/api(\/|$)/i.test(rawPath);
+
+  // Ensure exactly ONE "/api" between base and path
+  let devicePath = rawPath;
+  if (baseHasApi && pathHasApi) {
+    // both include /api -> strip it from path
+    devicePath = rawPath.replace(/^\/api(\/|$)/i, "/");
+  } else if (!baseHasApi && !pathHasApi) {
+    // neither includes /api -> add it to path
+    devicePath = "/api" + rawPath;
+  }
+  // else: exactly one side has /api → leave rawPath as-is
+
   const forwardUrl = sp.toString()
-    ? `${base}${picoPath}?${sp.toString()}`
-    : `${base}${picoPath}`;
+    ? `${base}${devicePath}?${sp.toString()}`
+    : `${base}${devicePath}`;
 
   try {
     const r = await fetchWithTimeout(forwardUrl, t);
@@ -62,7 +78,8 @@ export async function GET(
       JSON.stringify({
         error: e?.message || "Failed to reach Pico",
         target: base,
-        path: picoPath,
+        path: devicePath,
+        forwarded: forwardUrl,
       }),
       { status: 502, headers: { "Content-Type": "application/json" } }
     );

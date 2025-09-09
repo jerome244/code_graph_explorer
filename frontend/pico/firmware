@@ -1,56 +1,107 @@
 #include <WiFi.h>
 #include <WebServer.h>
-#ifdef ARDUINO_ARCH_RP2040
-  #include <RPC.h>
-#endif
+#include <SPI.h>
+#include <MFRC522.h>
 
-// --------- CONFIG ---------
+// ================= WIFI =================
 const char* SSID     = "YOUR_WIFI_SSID";
 const char* PASSWORD = "YOUR_WIFI_PASSWORD";
-const char* MDNS_NAME = "picow"; // resolves to http://picow.local
 
-// --------- STATE ---------
-WebServer server(80);
+// ================= LED ==================
 enum LedMode { MODE_OFF, MODE_ON, MODE_BLINK };
 volatile LedMode currentMode = MODE_OFF;
-volatile uint32_t blinkIntervalMs = 500; // default 2Hz (on/off each 250ms toggling -> 500ms full cycle per state change)
+volatile uint32_t blinkIntervalMs = 500;  // toggle interval (ms)
 unsigned long lastToggle = 0;
 bool ledLevel = false;
 
-// CORS helper
+// ================ RFID (RC522 on SPI0) ================
+// Wiring (default SPI0 on Pico W):
+//   RC522 SDA/NSS/SS -> GP17  (RFID_SS_PIN)
+//   RC522 SCK        -> GP18  (SPI0 SCK)
+//   RC522 MOSI       -> GP19  (SPI0 TX)
+//   RC522 MISO       -> GP16  (SPI0 RX)
+//   RC522 RST        -> GP22  (RFID_RST_PIN)
+//   RC522 3.3V       -> 3V3
+//   RC522 GND        -> GND
+#define RFID_SS_PIN   17
+#define RFID_RST_PIN  22
+MFRC522 mfrc522(RFID_SS_PIN, RFID_RST_PIN);
+
+String lastUID = "";
+unsigned long lastSeenMs = 0;
+
+// ================= HTTP SERVER =================
+WebServer server(80);
+
+// ----------------- Helpers -----------------
 void enableCORS() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-void handleOptions() {
-  enableCORS();
-  server.send(204); // No Content
+String uidToString(MFRC522::Uid *uid) {
+  String s;
+  for (byte i = 0; i < uid->size; i++) {
+    if (i) s += ":";
+    if (uid->uidByte[i] < 0x10) s += "0";
+    s += String(uid->uidByte[i], HEX);
+  }
+  s.toUpperCase();
+  return s;
 }
 
+// ----------------- RFID init & polling -----------------
+void RFID_Init() {
+  pinMode(RFID_SS_PIN, OUTPUT);
+  digitalWrite(RFID_SS_PIN, HIGH); // deselect RC522 before init
+
+  // Explicit SPI0 pin mapping (helps on some cores)
+  SPI.setSCK(18);
+  SPI.setTX(19);
+  SPI.setRX(16);
+  SPI.begin();
+
+  mfrc522.PCD_Init();   // uses pins from constructor
+  delay(50);
+  mfrc522.PCD_AntennaOn();
+
+  byte ver = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+  Serial.print("RC522 VersionReg: 0x");
+  Serial.println(ver, HEX);
+}
+
+void RFID_BackgroundPoll() {
+  if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
+    lastUID   = uidToString(&mfrc522.uid);
+    lastSeenMs = millis();
+    mfrc522.PICC_HaltA();
+    mfrc522.PCD_StopCrypto1();
+  }
+}
+
+// ----------------- HTTP Handlers: LED -----------------
 void handleStatus() {
   enableCORS();
-  String state = "unknown";
+  const char* state = "unknown";
   switch (currentMode) {
     case MODE_OFF:  state = "off"; break;
     case MODE_ON:   state = "on"; break;
     case MODE_BLINK:state = "blinking"; break;
   }
-  String json = String("{\"state\":\"") + state + "\"}";
-  server.send(200, "application/json", json);
+  server.send(200, "application/json", String("{\"state\":\"") + state + "\"}");
 }
 
 void handleLed() {
   enableCORS();
-  String state = server.hasArg("state") ? server.arg("state") : "";
-  state.toLowerCase();
-  if (state == "on") {
+  String st = server.arg("state");
+  st.toLowerCase();
+  if (st == "on") {
     currentMode = MODE_ON;
     digitalWrite(LED_BUILTIN, HIGH);
     ledLevel = true;
     server.send(200, "application/json", "{\"state\":\"on\"}");
-  } else if (state == "off") {
+  } else if (st == "off") {
     currentMode = MODE_OFF;
     digitalWrite(LED_BUILTIN, LOW);
     ledLevel = false;
@@ -62,76 +113,121 @@ void handleLed() {
 
 void handleBlink() {
   enableCORS();
-  if (!server.hasArg("hz")) {
-    server.send(400, "application/json", "{\"error\":\"hz required\"}");
-    return;
-  }
-  int hz = server.arg("hz").toInt();
+  int hz = server.hasArg("hz") ? server.arg("hz").toInt() : 2;
   if (hz < 1) hz = 1;
   if (hz > 20) hz = 20;
-  // Each full on+off cycle is 1/hz seconds; toggle interval is half that:
-  blinkIntervalMs = (uint32_t)(500.0 / (double)hz); // toggle period in ms
+  blinkIntervalMs = (uint32_t)(500.0 / (double)hz); // toggle period
   currentMode = MODE_BLINK;
   server.send(200, "application/json", "{\"state\":\"blinking\"}");
 }
 
-void handleNotFound() {
+// ----------------- HTTP Handlers: RFID -----------------
+void handleRfidLast() {
   enableCORS();
-  server.send(404, "text/plain", "Not found");
+  unsigned long age = lastUID.length() ? (millis() - lastSeenMs) : 0;
+  String json = "{\"uid\":";
+  json += lastUID.length() ? ("\"" + lastUID + "\"") : String("null");
+  json += ",\"at_ms\":" + String(lastSeenMs);
+  json += ",\"age_ms\":" + String(age);
+  json += "}";
+  server.send(200, "application/json", json);
 }
 
+void handleRfidClear() {
+  enableCORS();
+  lastUID = "";
+  lastSeenMs = 0;
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+// Try for ~300ms to catch a tag now
+void handleRfidScan() {
+  enableCORS();
+  unsigned long until = millis() + 300;
+  bool found = false;
+
+  while (millis() < until) {
+    if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
+      lastUID = uidToString(&mfrc522.uid);
+      lastSeenMs = millis();
+      found = true;
+      mfrc522.PICC_HaltA();
+      mfrc522.PCD_StopCrypto1();
+      break;
+    }
+    delay(5);
+  }
+
+  String json = "{\"uid\":";
+  json += found ? ("\"" + lastUID + "\"") : String("null");
+  json += ",\"at_ms\":" + String(lastSeenMs);
+  json += ",\"age_ms\":" + String(found ? 0 : (lastUID.length() ? millis() - lastSeenMs : 0));
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+// Simple sanity: read VersionReg
+void handleRfidDebug() {
+  enableCORS();
+  byte ver = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+  String json = String("{\"version_reg\":\"0x") + String(ver, HEX) + "\"}";
+  server.send(200, "application/json", json);
+}
+
+// ----------------- Misc -----------------
+void handleOptions() { enableCORS(); server.send(204); }
+void handleNotFound() { enableCORS(); server.send(404, "text/plain", "Not found"); }
+
+// ================== SETUP ==================
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
 
   Serial.begin(115200);
-  delay(1000);
-  Serial.println("\nBooting...");
+  delay(500);
+  Serial.println("Booting...");
 
+  // WiFi
   WiFi.mode(WIFI_STA);
   WiFi.begin(SSID, PASSWORD);
-  Serial.print("Connecting to WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(400);
-    Serial.print(".");
-  }
+  Serial.print("Connecting");
+  while (WiFi.status() != WL_CONNECTED) { delay(400); Serial.print("."); }
   Serial.println();
-  Serial.print("Connected! IP: ");
-  Serial.println(WiFi.localIP());
+  Serial.print("IP: "); Serial.println(WiFi.localIP());
 
-  // mDNS (optional; skip if your core doesn't provide it)
-  // Some cores expose ArduinoMDNS; others auto-start mDNS.
-  // If unavailable, comment this block and use the IP.
-  #ifdef ARDUINO_MDNS
-    if (MDNS.begin(MDNS_NAME)) {
-      Serial.print("mDNS responder started: http://");
-      Serial.print(MDNS_NAME);
-      Serial.println(".local");
-    } else {
-      Serial.println("mDNS start failed");
-    }
-  #endif
+  // RFID
+  RFID_Init();
 
   // Routes
-  server.on("/api/status", HTTP_GET, handleStatus);
-  server.on("/api/led",    HTTP_GET, handleLed);
-  server.on("/api/blink",  HTTP_GET, handleBlink);
+  server.on("/api/status",     HTTP_GET, handleStatus);
+  server.on("/api/led",        HTTP_GET, handleLed);
+  server.on("/api/blink",      HTTP_GET, handleBlink);
+
+  server.on("/api/rfid/last",  HTTP_GET, handleRfidLast);
+  server.on("/api/rfid/clear", HTTP_GET, handleRfidClear);
+  server.on("/api/rfid/scan",  HTTP_GET, handleRfidScan);
+  server.on("/api/rfid/debug", HTTP_GET, handleRfidDebug);
 
   // CORS preflight
-  server.onNotFound(handleNotFound);
-  server.on("/", HTTP_OPTIONS, handleOptions);
-  server.on("/api/status", HTTP_OPTIONS, handleOptions);
-  server.on("/api/led", HTTP_OPTIONS, handleOptions);
-  server.on("/api/blink", HTTP_OPTIONS, handleOptions);
+  server.on("/",               HTTP_OPTIONS, handleOptions);
+  server.on("/api/status",     HTTP_OPTIONS, handleOptions);
+  server.on("/api/led",        HTTP_OPTIONS, handleOptions);
+  server.on("/api/blink",      HTTP_OPTIONS, handleOptions);
+  server.on("/api/rfid/last",  HTTP_OPTIONS, handleOptions);
+  server.on("/api/rfid/clear", HTTP_OPTIONS, handleOptions);
+  server.on("/api/rfid/scan",  HTTP_OPTIONS, handleOptions);
+  server.on("/api/rfid/debug", HTTP_OPTIONS, handleOptions);
 
+  server.onNotFound(handleNotFound);
   server.begin();
   Serial.println("HTTP server started");
 }
 
+// ================== LOOP ===================
 void loop() {
   server.handleClient();
 
-  // Blink state machine
+  // LED blink
   if (currentMode == MODE_BLINK) {
     unsigned long now = millis();
     if (now - lastToggle >= blinkIntervalMs) {
@@ -140,4 +236,7 @@ void loop() {
       lastToggle = now;
     }
   }
+
+  // RFID background update
+  RFID_BackgroundPoll();
 }

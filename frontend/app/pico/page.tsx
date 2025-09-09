@@ -1,41 +1,12 @@
 import Link from "next/link";
 
-const cards: Array<{ href: string; title: string; desc: string; emoji: string }> = [
-  {
-    href: "/pico/led",
-    title: "LED Test",
-    desc: "Turn ON/OFF or Blink the onboard LED.",
-    emoji: "💡",
-  },
-  {
-    href: "/pico/network",
-    title: "Network",
-    desc: "View and set the device URL used by the proxy.",
-    emoji: "🌐",
-  },
-  {
-    href: "/pico/info",
-    title: "Device Info",
-    desc: "(placeholder) Show firmware, IP, uptime, etc.",
-    emoji: "ℹ️",
-  },
-];
-
 export default function PicoDashboard() {
   return (
-    <main
-      style={{
-        maxWidth: 900,
-        margin: "32px auto",
-        padding: 24,
-      }}
-    >
+    <main style={{ maxWidth: 900, margin: "32px auto", padding: 24 }}>
       <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 8 }}>
         Raspberry Pi Pico W
       </h1>
-      <p style={{ color: "#6b7280", marginBottom: 24 }}>
-        Choose a tool:
-      </p>
+      <p style={{ color: "#6b7280", marginBottom: 24 }}>Choose a tool:</p>
 
       <div
         style={{
@@ -44,26 +15,21 @@ export default function PicoDashboard() {
           gap: 16,
         }}
       >
+        {/* LED card (existing) */}
         <Link href="/pico/led" style={{ textDecoration: "none" }}>
-          <div
-            style={{
-              display: "grid",
-              gap: 8,
-              padding: 16,
-              border: "1px solid #e5e7eb",
-              borderRadius: 12,
-              background: "#fff",
-              boxShadow: "0 4px 12px rgba(0,0,0,0.06)",
-              height: "100%",
-            }}
-          >
+          <div style={cardStyle}>
             <div style={{ fontSize: 32 }}>💡</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>
-              LED Test
-            </div>
-            <div style={{ color: "#6b7280" }}>
-              Turn ON/OFF or Blink the onboard LED.
-            </div>
+            <div style={cardTitle}>LED Test</div>
+            <div style={cardDesc}>Turn ON/OFF or Blink the onboard LED.</div>
+          </div>
+        </Link>
+
+        {/* NEW: RFID card */}
+        <Link href="/pico/rfid" style={{ textDecoration: "none" }}>
+          <div style={cardStyle}>
+            <div style={{ fontSize: 32 }}>🪪</div>
+            <div style={cardTitle}>RFID</div>
+            <div style={cardDesc}>Read tag UID via MFRC522 and view last scan.</div>
           </div>
         </Link>
       </div>
@@ -71,3 +37,15 @@ export default function PicoDashboard() {
   );
 }
 
+const cardStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 8,
+  padding: 16,
+  border: "1px solid #e5e7eb",
+  borderRadius: 12,
+  background: "#fff",
+  boxShadow: "0 4px 12px rgba(0,0,0,0.06)",
+  height: "100%",
+};
+const cardTitle: React.CSSProperties = { fontSize: 18, fontWeight: 700, color: "#111827" };
+const cardDesc: React.CSSProperties = { color: "#6b7280" };

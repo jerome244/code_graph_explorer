@@ -27,6 +27,10 @@ export async function GET(req: NextRequest, ctx: { params: { path?: string[] } }
   const sp = new URLSearchParams(url.searchParams);
   sp.delete("target");
 
+  // NEW: timeout override (?t=ms), default 8000 ms
+  const t = Number(url.searchParams.get("t")) || 8000;
+  sp.delete("t");
+
   if (!base) {
     return new Response(
       JSON.stringify({ error: "Missing 'target'. Add ?target=http://<ip-or-host>" }),
@@ -40,9 +44,13 @@ export async function GET(req: NextRequest, ctx: { params: { path?: string[] } }
     : `${base}${picoPath}`;
 
   try {
-    const r = await fetchWithTimeout(forwardUrl, 3500);
+    const r = await fetchWithTimeout(forwardUrl, t);
     const body = await r.arrayBuffer();
     const headers = new Headers(r.headers);
+    // be explicit: JSON responses are common
+    if (!headers.get("content-type")) headers.set("content-type", "application/json");
+    // add no-store to avoid caches during rapid toggles
+    headers.set("cache-control", "no-store");
     return new Response(body, { status: r.status, headers });
   } catch (e: any) {
     return new Response(

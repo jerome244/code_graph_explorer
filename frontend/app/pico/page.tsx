@@ -69,6 +69,15 @@ export default function PicoDashboard() {
           </div>
         </Link>
 
+        {/* LCD1602 */}
+        <Link href="/pico/lcd1602" style={{ textDecoration: "none" }}>
+          <div style={cardStyle}>
+            <div style={{ fontSize: 32 }}>🔤</div>
+            <div style={cardTitle}>LCD1602</div>
+            <div style={cardDesc}>I²C 16×2 text display controls.</div>
+          </div>
+        </Link>
+
       </div>
     </main>
   );

@@ -15,8 +15,13 @@ async function fetchWithTimeout(url: string, ms: number) {
   }
 }
 
-export async function GET(req: NextRequest, ctx: { params: { path?: string[] } }) {
+export async function GET(
+  req: NextRequest,
+  ctx: { params: { path?: string[] } }
+) {
   const url = new URL(req.url);
+
+  // Target Pico base comes from header or ?target=...
   const targetFromQuery = url.searchParams.get("target") || "";
   const targetFromHeader = req.headers.get("x-pico-base") || "";
   let base = (targetFromQuery || targetFromHeader || "").trim();
@@ -24,10 +29,11 @@ export async function GET(req: NextRequest, ctx: { params: { path?: string[] } }
   if (base && !/^https?:\/\//i.test(base)) base = "http://" + base;
   if (base) base = base.replace(/\/+$/, "");
 
+  // Forward all original query params except our control ones
   const sp = new URLSearchParams(url.searchParams);
   sp.delete("target");
 
-  // NEW: timeout override (?t=ms), default 8000 ms
+  // Timeout override (?t=ms), default 8000 ms
   const t = Number(url.searchParams.get("t")) || 8000;
   sp.delete("t");
 
@@ -47,14 +53,17 @@ export async function GET(req: NextRequest, ctx: { params: { path?: string[] } }
     const r = await fetchWithTimeout(forwardUrl, t);
     const body = await r.arrayBuffer();
     const headers = new Headers(r.headers);
-    // be explicit: JSON responses are common
     if (!headers.get("content-type")) headers.set("content-type", "application/json");
-    // add no-store to avoid caches during rapid toggles
     headers.set("cache-control", "no-store");
+    headers.set("access-control-allow-origin", "*");
     return new Response(body, { status: r.status, headers });
   } catch (e: any) {
     return new Response(
-      JSON.stringify({ error: e?.message || "Failed to reach Pico", target: base, path: picoPath }),
+      JSON.stringify({
+        error: e?.message || "Failed to reach Pico",
+        target: base,
+        path: picoPath,
+      }),
       { status: 502, headers: { "Content-Type": "application/json" } }
     );
   }
@@ -67,6 +76,7 @@ export async function OPTIONS() {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET,OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, X-Pico-Base",
+      "Cache-Control": "no-store",
     },
   });
 }

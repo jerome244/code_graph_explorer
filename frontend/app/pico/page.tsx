@@ -1,7 +1,4 @@
-"use client";
-
 import Link from "next/link";
-import React from "react";
 
 export default function PicoDashboard() {
   return (
@@ -18,7 +15,7 @@ export default function PicoDashboard() {
           gap: 16,
         }}
       >
-        {/* LED card (existing) */}
+        {/* LED */}
         <Link href="/pico/led" style={{ textDecoration: "none" }}>
           <div style={cardStyle}>
             <div style={{ fontSize: 32 }}>💡</div>
@@ -27,7 +24,7 @@ export default function PicoDashboard() {
           </div>
         </Link>
 
-        {/* RFID card */}
+        {/* RFID */}
         <Link href="/pico/rfid" style={{ textDecoration: "none" }}>
           <div style={cardStyle}>
             <div style={{ fontSize: 32 }}>🪪</div>
@@ -36,14 +33,21 @@ export default function PicoDashboard() {
           </div>
         </Link>
 
-        {/* NEW: Motor (Relay) card */}
+        {/* Motor (Relay) */}
         <Link href="/pico/motor" style={{ textDecoration: "none" }}>
           <div style={cardStyle}>
             <div style={{ fontSize: 32 }}>🛞</div>
             <div style={cardTitle}>Motor (Relay)</div>
-            <div style={cardDesc}>
-              Control a 3.3V relay coil via NPN and pulse the motor.
-            </div>
+            <div style={cardDesc}>Control a 3.3V relay coil via NPN.</div>
+          </div>
+        </Link>
+
+        {/* NEW: Thermistor */}
+        <Link href="/pico/thermistor" style={{ textDecoration: "none" }}>
+          <div style={cardStyle}>
+            <div style={{ fontSize: 32 }}>🌡️</div>
+            <div style={cardTitle}>Thermistor</div>
+            <div style={cardDesc}>Read temperature via ADC (10k NTC).</div>
           </div>
         </Link>
       </div>
@@ -61,9 +65,5 @@ const cardStyle: React.CSSProperties = {
   boxShadow: "0 4px 12px rgba(0,0,0,0.06)",
   height: "100%",
 };
-const cardTitle: React.CSSProperties = {
-  fontSize: 18,
-  fontWeight: 700,
-  color: "#111827",
-};
+const cardTitle: React.CSSProperties = { fontSize: 18, fontWeight: 700, color: "#111827" };
 const cardDesc: React.CSSProperties = { color: "#6b7280" };

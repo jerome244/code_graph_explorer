@@ -1,4 +1,6 @@
+// frontend/app/pico/page.tsx
 import Link from "next/link";
+import LcdGreeter from "./thermo-motor/components/LcdGreeter";
 
 export default function PicoDashboard() {
   return (
@@ -7,6 +9,9 @@ export default function PicoDashboard() {
         Raspberry Pi Pico W
       </h1>
       <p style={{ color: "#6b7280", marginBottom: 24 }}>Choose a tool:</p>
+
+      {/* Ensures the LCD is initialized, backlight on, and shows a greeting */}
+      <LcdGreeter />
 
       <div
         style={{
@@ -51,7 +56,7 @@ export default function PicoDashboard() {
           </div>
         </Link>
 
-        {/* NEW: Buzzer */}
+        {/* Buzzer */}
         <Link href="/pico/buzzer" style={{ textDecoration: "none" }}>
           <div style={cardStyle}>
             <div style={{ fontSize: 32 }}>🔔</div>
@@ -77,33 +82,42 @@ export default function PicoDashboard() {
             <div style={cardDesc}>I²C 16×2 text display controls.</div>
           </div>
         </Link>
-        
+
         {/* Dual LEDs */}
-        <Link href="/pico/leds" style={{ textDecoration: 'none' }}>
+        <Link href="/pico/leds" style={{ textDecoration: "none" }}>
           <div style={cardStyle}>
             <div style={{ fontSize: 32 }}>🔴🟢</div>
             <div style={cardTitle}>Dual LEDs</div>
             <div style={cardDesc}>Control separate red & green LEDs.</div>
           </div>
         </Link>
-{/* Thermo + Motor (Auto) */}
-<Link href="/pico/thermo-motor" style={{ textDecoration: "none" }}>
-  <div style={cardStyle}>
-    <div style={{ fontSize: 32 }}>♨️🛞</div>
-    <div style={cardTitle}>Thermo ⇄ Motor</div>
-    <div style={cardDesc}>Set a temp; auto start/stop motor.</div>
-  </div>
-</Link>
 
-{/* Access Control (RFID) */}
-<Link href="/pico/access" style={{ textDecoration: "none" }}>
-  <div style={cardStyle}>
-    <div style={{ fontSize: 32 }}>🔒🪪</div>
-    <div style={cardTitle}>Access Control</div>
-    <div style={cardDesc}>Manage RFID allowlist & lock Thermo ⇄ Motor.</div>
-  </div>
-</Link>
+        {/* Thermo + Motor (Auto) */}
+        <Link href="/pico/thermo-motor" style={{ textDecoration: "none" }}>
+          <div style={cardStyle}>
+            <div style={{ fontSize: 32 }}>♨️🛞</div>
+            <div style={cardTitle}>Thermo ⇄ Motor</div>
+            <div style={cardDesc}>Set a temp; auto start/stop motor.</div>
+          </div>
+        </Link>
 
+        {/* Access Control (RFID) */}
+        <Link href="/pico/access" style={{ textDecoration: "none" }}>
+          <div style={cardStyle}>
+            <div style={{ fontSize: 32 }}>🔒🪪</div>
+            <div style={cardTitle}>Access Control</div>
+            <div style={cardDesc}>Manage RFID allowlist & lock Thermo ⇄ Motor.</div>
+          </div>
+        </Link>
+
+        {/* BMP180 */}
+        <Link href="/pico/bmp180" style={{ textDecoration: "none" }}>
+          <div style={cardStyle}>
+            <div style={{ fontSize: 32 }}>⛰️</div>
+            <div style={cardTitle}>BMP180</div>
+            <div style={cardDesc}>Read pressure/altitude (I²C 0x77).</div>
+          </div>
+        </Link>
       </div>
     </main>
   );

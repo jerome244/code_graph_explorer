@@ -2,7 +2,10 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { btnDark, btnLight, btnSafe, btnWarn, card, cardDesc, cardTitle, grid, hint, pill, row, errorBox } from "./ui";
+import {
+  btnDark, btnLight, btnSafe, btnWarn,
+  card, cardDesc, cardTitle, grid, hint, pill, row, errorBox
+} from "./ui";
 import MotorAnim from "./MotorAnim";
 import LedDot from "./LedDot";
 import { jgetPico } from "../lib/api";
@@ -41,9 +44,17 @@ export default function ThermoMotorProtected({
 
   const [busy, setBusy] = useState(false);
 
-  // ── LCD state (NEW) ─────────────────────────────────────────
+  // ── LCD state ───────────────────────────────────────────────
   const [lcdReady, setLcdReady] = useState<boolean>(false);
   const [lcdBacklight, setLcdBacklight] = useState<boolean | null>(null);
+  const [lcdSync, setLcdSync] = useState(true);
+  const [lcdAlerts, setLcdAlerts] = useState(true);
+
+  // LCD refs/control
+  const lcdLastInitTryRef = useRef(0);
+  const lcdCooldownUntilRef = useRef(0);
+  const lcdAlertUntilRef = useRef(0);
+  const lcdLastTextRef = useRef<{ l1: string; l2: string }>({ l1: "", l2: "" });
 
   // Refs/guards
   const autoRef   = useRef(auto);    useEffect(()=>{autoRef.current=auto;},[auto]);
@@ -82,7 +93,11 @@ export default function ThermoMotorProtected({
     finally { setBusy(false); }
   }
 
-  // ── LCD helpers (NEW) ───────────────────────────────────────
+  // ── LCD helpers ─────────────────────────────────────────────
+  function cut16(s: string) {
+    s = s.replace(/[^\x20-\x7E]/g, "?");
+    return s.length > 16 ? s.slice(0, 16) : s;
+  }
   const lcdStatus = async () => {
     const st = await jget<{ready:boolean; backlight:boolean}>(`/api/lcd/status`);
     setLcdReady(!!st.ready);
@@ -90,6 +105,11 @@ export default function ThermoMotorProtected({
     return st;
   };
   const lcdEnsure = async () => {
+    if (!lcdSync || !baseURL) return;
+    const now = Date.now();
+    if (lcdReady) return;
+    if (now - lcdLastInitTryRef.current < 1200) return;
+    lcdLastInitTryRef.current = now;
     try {
       const st = await lcdStatus();
       if (!st.ready) {
@@ -97,6 +117,35 @@ export default function ThermoMotorProtected({
         await lcdStatus();
       }
     } catch {/* ignore */}
+  };
+  const lcdSetRow = async (row: 0 | 1, text: string) => {
+    if (!lcdSync) return;
+    await lcdEnsure();
+    if (!lcdReady) return;
+    try { await jget(`/api/lcd/set`, { row, align: "left", text: cut16(text) }); } catch {}
+  };
+  const lcdShow = async (l1: string, l2: string) => {
+    if (!lcdSync) return;
+    if (Date.now() < lcdCooldownUntilRef.current) return;
+    await lcdEnsure();
+    if (!lcdReady) return;
+    const t1 = cut16(l1), t2 = cut16(l2);
+    const last = lcdLastTextRef.current;
+    if (last.l1 === t1 && last.l2 === t2) return;
+    try {
+      await lcdSetRow(0, t1);
+      await lcdSetRow(1, t2);
+      lcdLastTextRef.current = { l1: t1, l2: t2 };
+      lcdCooldownUntilRef.current = Date.now() + 250;
+    } catch {/* ignore */}
+  };
+  const lcdClear = async () => {
+    await lcdEnsure();
+    if (!lcdReady) return;
+    try { await jget(`/api/lcd/clear`); lcdLastTextRef.current = { l1: "", l2: "" }; } catch {}
+  };
+  const lcdScheduleAlert = (ms = 6000) => {
+    lcdAlertUntilRef.current = Date.now() + ms;
   };
   const lcdBacklightSet = async (state: "on" | "off") => {
     await jget(`/api/lcd/backlight`, { state });
@@ -161,6 +210,7 @@ export default function ThermoMotorProtected({
     buzzCooldownUntilRef.current = Date.now() + 300;
     logger.push("buzzer","warn","Alarm START", { on_ms: buzzOnRef.current, off_ms: buzzOffRef.current });
     await readBuzzerStatus();
+    lcdScheduleAlert(8000);
   };
   const stopAlarm = async (opts?: { fromSilence?: boolean }) => {
     if (Date.now() < buzzCooldownUntilRef.current) return;
@@ -183,7 +233,7 @@ export default function ThermoMotorProtected({
       await jget(`/api/leds/set`, { red, green });
       lastLEDRef.current = { red, green };
       ledCooldownUntilRef.current = Date.now() + 300;
-    } catch {}
+    } catch {/* ignore */}
   }
 
   // Initial
@@ -195,7 +245,8 @@ export default function ThermoMotorProtected({
         await readHumidity();
         await readMotorStatus();
         await readBuzzerStatus();
-        await lcdEnsure();           // NEW: get LCD state on connect
+        await lcdEnsure();
+        if (lcdSync && lcdReady) { await lcdShow("Initializing...", ""); }
       } catch (e:any) {
         setError(e?.message || "Request failed");
         logger.push("system","error","Initial connect failed",{error:String(e?.message||e)});
@@ -204,7 +255,7 @@ export default function ThermoMotorProtected({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseURL]);
 
-  // Poll loop
+  // Poll loop + LCD updates
   useEffect(() => {
     if (!baseURL) return;
     const tick = async () => {
@@ -238,7 +289,10 @@ export default function ThermoMotorProtected({
               if (silencedUntilSafeRef.current) {
                 const now = Date.now();
                 if (now - lastSilenceLogRef.current > 5000) {
-                  logger.push("buzzer","warn","Alarm silenced, waiting for safe temp", { temp_c: Number(temp.toFixed(2)), clear_at_c: Number(clr.toFixed(2)) });
+                  logger.push("buzzer","warn","Alarm silenced, waiting for safe temp", {
+                    temp_c: Number(temp.toFixed(2)),
+                    clear_at_c: Number(clr.toFixed(2))
+                  });
                   lastSilenceLogRef.current = now;
                 }
               } else if (!alarmActiveRef.current || !buzzer.alarm || buzzer.state !== "on") {
@@ -254,6 +308,21 @@ export default function ThermoMotorProtected({
             if (alarmActiveRef.current || buzzer.alarm || buzzer.state === "on") await stopAlarm();
             silencedUntilSafeRef.current = false;
           }
+
+          // LCD live (unless an alert is pinned)
+          if (lcdSync) {
+            if (lcdAlerts && Date.now() < lcdAlertUntilRef.current) {
+              // keep current alert on screen
+            } else {
+              const tStr = `T:${temp.toFixed(1)}C`;
+              const mStr = motorRef.current === "on" ? "M:ON" : motorRef.current === "off" ? "M:OFF" : "M:?";
+              const l1 = `${tStr} ${mStr}`;
+              const uW = logger.unread.warn;
+              const uE = logger.unread.err;
+              const l2 = (uW || uE) ? `W:${uW} E:${uE}` : "OK";
+              await lcdShow(l1, l2);
+            }
+          }
         }
       } catch (e:any) {
         setError(e?.message || "Request failed");
@@ -265,11 +334,25 @@ export default function ThermoMotorProtected({
     tick();
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseURL, auto, syncLEDs, buzzEnable, buzzLatch]);
+  }, [baseURL, auto, syncLEDs, buzzEnable, buzzLatch, lcdSync, lcdAlerts]);
+
+  // Mirror NEW warn/error log entries to LCD as alerts
+  const lastLogCountRef = useRef(0);
+  useEffect(() => {
+    const n = logger.logs.length;
+    if (!lcdSync || !lcdAlerts || n === 0 || n === lastLogCountRef.current) return;
+    const latest: any = logger.logs[n - 1];
+    lastLogCountRef.current = n;
+    if (latest.level === "warn" || latest.level === "error") {
+      const lvl = (latest.level || "").toUpperCase();
+      const kind = (latest.kind || "").toUpperCase();
+      const l1 = `${lvl}: ${kind}`;
+      const l2 = String(latest.msg || "");
+      (async () => { await lcdShow(l1, l2); lcdScheduleAlert(latest.level === "error" ? 9000 : 6000); })();
+    }
+  }, [logger.logs, lcdSync, lcdAlerts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const temp = thermo?.temp_c ?? null;
-  const ledRedOn   = temp !== null && temp >= targetC;
-  const ledGreenOn = temp !== null && temp <= (targetC - hyst);
 
   return (
     <>
@@ -281,20 +364,42 @@ export default function ThermoMotorProtected({
             onChange={(e) => setInput(e.target.value)}
             style={{ width: 320, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
           />
-          <button onClick={() => safe(async () => { await readThermistor(); await readHumidity(); await readMotorStatus(); await readBuzzerStatus(); await lcdEnsure(); })} style={btnDark}>
+          <button
+            onClick={() => safe(async () => {
+              await readThermistor();
+              await readHumidity();
+              await readMotorStatus();
+              await readBuzzerStatus();
+              await lcdEnsure();
+            })}
+            style={btnDark}
+          >
             Connect / Refresh
           </button>
+
           <span style={pill}>Motor: {motor === "unknown" ? "—" : motor.toUpperCase()}</span>
           <span style={pill}>Buzzer: {buzzer.alarm ? "ALARM" : buzzer.state.toUpperCase()}</span>
+
           <label style={{ ...row, color: "#374151", marginLeft: 8 }}>
             <input type="checkbox" checked={auto} onChange={(e)=>setAuto(e.target.checked)} /> Auto motor
           </label>
           <label style={{ ...row, color: "#374151" }}>
             <input type="checkbox" checked={syncLEDs} onChange={(e)=>setSyncLEDs(e.target.checked)} /> Sync LEDs
           </label>
-          <button onClick={onRelock} style={btnLight} title="Re-lock this page">Lock Now</button>
 
-          {/* NEW: LCD backlight toggle */}
+          {/* LCD controls */}
+          <label style={{ ...row, color: "#374151" }}>
+            <input type="checkbox" checked={lcdSync} onChange={(e)=>setLcdSync(e.target.checked)} />
+            LCD sync
+          </label>
+          <label style={{ ...row, color: "#374151" }}>
+            <input type="checkbox" checked={lcdAlerts} onChange={(e)=>setLcdAlerts(e.target.checked)} />
+            LCD alerts
+          </label>
+          <button onClick={() => safe(async () => { await lcdEnsure(); await lcdShow("LCD TEST","Hello!"); })} style={btnLight}>
+            Test LCD
+          </button>
+          <button onClick={() => safe(lcdClear)} style={btnLight}>Clear LCD</button>
           <button
             onClick={() => safe(lcdBacklightToggle)}
             style={btnLight}
@@ -303,6 +408,8 @@ export default function ThermoMotorProtected({
           >
             {lcdBacklight == null ? "LCD Light" : (lcdBacklight ? "LCD Light OFF" : "LCD Light ON")}
           </button>
+
+          <button onClick={onRelock} style={btnLight} title="Re-lock this page">Lock Now</button>
         </div>
       </div>
 

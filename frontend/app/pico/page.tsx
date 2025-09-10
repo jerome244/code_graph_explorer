@@ -86,6 +86,15 @@ export default function PicoDashboard() {
             <div style={cardDesc}>Control separate red & green LEDs.</div>
           </div>
         </Link>
+{/* Thermo + Motor (Auto) */}
+<Link href="/pico/thermo-motor" style={{ textDecoration: "none" }}>
+  <div style={cardStyle}>
+    <div style={{ fontSize: 32 }}>♨️🛞</div>
+    <div style={cardTitle}>Thermo ⇄ Motor</div>
+    <div style={cardDesc}>Set a temp; auto start/stop motor.</div>
+  </div>
+</Link>
+
 
       </div>
     </main>

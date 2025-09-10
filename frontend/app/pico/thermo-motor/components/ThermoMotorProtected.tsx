@@ -1,7 +1,7 @@
-// frontend/app/pico/thermo-motor/components/ThermoMotorProtected.tsx
+// app/pico/thermo-motor/components/ThermoMotorProtected.tsx
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { btnDark, btnLight, btnSafe, btnWarn, card, cardDesc, cardTitle, grid, hint, pill, row, errorBox } from "./ui";
 import MotorAnim from "./MotorAnim";
 import LedDot from "./LedDot";
@@ -39,13 +39,9 @@ export default function ThermoMotorProtected({
   const [buzzEnable, setBuzzEnable] = useState(true);
   const [buzzLatch, setBuzzLatch] = useState(false);
 
-  // LCD toggles (kept, but not shown here to save space)
-  const [lcdSync, setLcdSync] = useState(true);
-  const [lcdAlerts, setLcdAlerts] = useState(true);
-
   const [busy, setBusy] = useState(false);
 
-  // Refs/guards
+  // ── Refs / guards ───────────────────────────────────────────
   const autoRef   = useRef(auto);    useEffect(()=>{autoRef.current=auto;},[auto]);
   const motorRef  = useRef<MotorState>(motor); useEffect(()=>{motorRef.current=motor;},[motor]);
   const targetRef = useRef(targetC); useEffect(()=>{targetRef.current=targetC;},[targetC]);
@@ -62,13 +58,24 @@ export default function ThermoMotorProtected({
   const inflightRef = useRef(false);
   const cooldownUntilRef = useRef(0);
   const backoffUntilRef  = useRef(0);
-  const alarmActiveRef   = useRef(false);
-  const buzzCooldownUntilRef = useRef(0);
 
+  // latest measurements for logging
+  const latestTempRef = useRef<number | null>(null);
+  const humidityRef   = useRef<number | null>(null);
+
+  // buzzer state tracking + **mute until cool**
+  const alarmActiveRef = useRef(false);
+  const buzzCooldownUntilRef = useRef(0);
+  const buzzerRef = useRef<{ state: OnOff; alarm: boolean }>({ state: "off", alarm: false });
+  useEffect(()=>{buzzerRef.current = buzzer;}, [buzzer]);
+
+  const buzzMutedUntilClearRef = useRef(false); // <— NEW
+
+  // LED rate-limit
   const lastLEDRef = useRef<{ red: OnOff; green: OnOff }>({ red: "off", green: "off" });
   const ledCooldownUntilRef = useRef(0);
 
-  // Helpers
+  // ── Helpers ─────────────────────────────────────────────────
   async function jget<T=any>(p: string, qs?: Record<string,string|number>) { return jgetPico<T>(baseURL, p, qs); }
   async function safe<T>(fn: () => Promise<T>) {
     if (busy) return;
@@ -78,12 +85,14 @@ export default function ThermoMotorProtected({
     finally { setBusy(false); }
   }
 
-  // API
+  // ── API ─────────────────────────────────────────────────────
   const readThermistor = async () => {
     if (Date.now() < backoffUntilRef.current) return thermo;
     try {
       const js = await jget<Thermo>(`/api/thermistor/read`);
-      setThermo(js); setError(""); return js;
+      setThermo(js); setError("");
+      latestTempRef.current = js?.temp_c ?? null;
+      return js;
     } catch (e:any) {
       if (/^5\d\d/.test(String(e?.message||""))) backoffUntilRef.current = Date.now() + 2000;
       throw e;
@@ -92,7 +101,10 @@ export default function ThermoMotorProtected({
   const readHumidity = async () => {
     try {
       const js = await jget<DhtReading>(`/api/dht11/read`, { settle_ms: 0 });
-      if (js.valid && typeof js.humidity === "number") setHumidity(js.humidity);
+      if (js.valid && typeof js.humidity === "number") {
+        setHumidity(js.humidity);
+        humidityRef.current = js.humidity;
+      }
       return js;
     } catch { /* ignore */ }
   };
@@ -105,12 +117,24 @@ export default function ThermoMotorProtected({
     await jget(`/api/relay`, { state });
     setMotor(state); motorRef.current = state;
     cooldownUntilRef.current = Date.now() + 2500;
-    logger.push("motor","info",`Motor ${state.toUpperCase()}`);
+
+    // Include temp & humidity in log
+    logger.push("motor","info",`Motor ${state.toUpperCase()}`,{
+      mode: autoRef.current ? "auto" : "manual",
+      temp_c: latestTempRef.current,
+      humidity: humidityRef.current,
+      target: targetRef.current,
+      off_threshold: targetRef.current - hystRef.current
+    });
+
+    // sanity refresh
     setTimeout(() => { readMotorStatus().catch(()=>{}); }, 1000);
   };
   const readBuzzerStatus = async () => {
     const js = await jget<{state:OnOff; alarm:boolean}>(`/api/buzzer/status`);
-    setBuzzer(js); return js;
+    setBuzzer(js);
+    alarmActiveRef.current = js.alarm || js.state === "on";
+    return js;
   };
   const startAlarm = async () => {
     if (Date.now() < buzzCooldownUntilRef.current) return;
@@ -118,6 +142,7 @@ export default function ThermoMotorProtected({
     alarmActiveRef.current = true;
     buzzCooldownUntilRef.current = Date.now() + 300;
     logger.push("buzzer","warn","Alarm START", { on_ms: buzzOnRef.current, off_ms: buzzOffRef.current });
+    await readBuzzerStatus();
   };
   const stopAlarm = async () => {
     if (Date.now() < buzzCooldownUntilRef.current) return;
@@ -125,7 +150,23 @@ export default function ThermoMotorProtected({
     alarmActiveRef.current = false;
     buzzCooldownUntilRef.current = Date.now() + 300;
     logger.push("buzzer","info","Alarm STOP");
+    await readBuzzerStatus();
   };
+
+  // NEW: Silence = stop AND mute until cool (<= critical - hysteresis)
+  const silenceUntilCool = async () => {
+    await stopAlarm();
+    buzzMutedUntilClearRef.current = true;
+    logger.push("buzzer","info","Silenced until cool", {
+      critical: critRef.current,
+      clear_at: critRef.current - critHystRef.current
+    });
+  };
+  const unmute = () => {
+    buzzMutedUntilClearRef.current = false;
+    logger.push("buzzer","info","Manual unmute");
+  };
+
   async function setLEDs(red: OnOff, green: OnOff) {
     if (!syncLEDs || Date.now() < ledCooldownUntilRef.current) return;
     const last = lastLEDRef.current;
@@ -137,17 +178,21 @@ export default function ThermoMotorProtected({
     } catch {}
   }
 
-  // Initial
+  // ── Initial connect ─────────────────────────────────────────
   useEffect(() => {
     if (!baseURL) return;
     (async () => {
-      try { await readThermistor(); await readHumidity(); await readMotorStatus(); await readBuzzerStatus(); }
-      catch (e:any) { setError(e?.message || "Request failed"); logger.push("system","error","Initial connect failed",{error:String(e?.message||e)}); }
+      try {
+        await readThermistor(); await readHumidity(); await readMotorStatus(); await readBuzzerStatus();
+      } catch (e:any) {
+        setError(e?.message || "Request failed");
+        logger.push("system","error","Initial connect failed",{error:String(e?.message||e)});
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseURL]);
 
-  // Poll loop
+  // ── Poll loop ───────────────────────────────────────────────
   useEffect(() => {
     if (!baseURL) return;
     const tick = async () => {
@@ -155,13 +200,13 @@ export default function ThermoMotorProtected({
       inflightRef.current = true;
       try {
         const t = await readThermistor();
-        await readHumidity(); // humidity is light; grab alongside temp
+        await readHumidity();
         if (t) {
           const temp = t.temp_c;
           const onAt = targetRef.current;
           const offAt = targetRef.current - hystRef.current;
 
-          // LEDs
+          // LEDs follow thresholds
           if (temp >= onAt) await setLEDs("on", "off");
           else if (temp <= offAt) await setLEDs("off", "on");
           else await setLEDs("off", "off");
@@ -172,17 +217,37 @@ export default function ThermoMotorProtected({
             else if (motorRef.current !== "off" && temp <= offAt) await setMotorState("off");
           }
 
-          // Buzzer safety
+          // Buzzer safety w/ mute-until-cool logic
           if (buzzEnableRef.current) {
             const crit = critRef.current;
             const clr  = critRef.current - critHystRef.current;
-            if (temp >= crit) {
-              await startAlarm();
-            } else if (temp <= clr) {
-              if (!buzzLatchRef.current) await stopAlarm();
+
+            // if muted, keep it off until cooled to <= clr
+            if (buzzMutedUntilClearRef.current) {
+              if (temp <= clr) {
+                buzzMutedUntilClearRef.current = false;
+                logger.push("buzzer","info","Silence expired (cooled)", { temp_c: temp, clear_at: clr });
+              } else {
+                // ensure it remains off while muted
+                if (alarmActiveRef.current || buzzerRef.current.alarm || buzzerRef.current.state === "on") {
+                  await stopAlarm();
+                }
+              }
+            }
+
+            // only (re)start when not muted
+            if (!buzzMutedUntilClearRef.current) {
+              if (temp >= crit) {
+                await startAlarm();
+              } else if (temp <= clr) {
+                if (!buzzLatchRef.current) await stopAlarm();
+              }
             }
           } else {
-            await stopAlarm();
+            // Safety disabled → no alarm
+            if (alarmActiveRef.current || buzzerRef.current.alarm || buzzerRef.current.state === "on") {
+              await stopAlarm();
+            }
           }
         }
       } catch (e:any) {
@@ -197,10 +262,12 @@ export default function ThermoMotorProtected({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseURL, auto, syncLEDs, buzzEnable, buzzLatch]);
 
+  // ── Derived LED state for UI ────────────────────────────────
   const temp = thermo?.temp_c ?? null;
   const ledRedOn   = temp !== null && temp >= targetC;
   const ledGreenOn = temp !== null && temp <= (targetC - hyst);
 
+  // ── UI ──────────────────────────────────────────────────────
   return (
     <>
       <div style={{ ...card, marginBottom: 16 }}>
@@ -216,6 +283,7 @@ export default function ThermoMotorProtected({
           </button>
           <span style={pill}>Motor: {motor === "unknown" ? "—" : motor.toUpperCase()}</span>
           <span style={pill}>Buzzer: {buzzer.alarm ? "ALARM" : buzzer.state.toUpperCase()}</span>
+          {buzzMutedUntilClearRef.current && <span style={pill}>Muted until cool</span>}
           <label style={{ ...row, color: "#374151", marginLeft: 8 }}>
             <input type="checkbox" checked={auto} onChange={(e)=>setAuto(e.target.checked)} /> Auto motor
           </label>
@@ -254,7 +322,7 @@ export default function ThermoMotorProtected({
           </div>
         </div>
 
-        {/* NEW: Humidity (DHT11) — humidity only */}
+        {/* Humidity (DHT11) — humidity only */}
         <div style={card}>
           <div style={{ fontSize: 32 }}>💧</div>
           <div style={cardTitle}>Humidity (DHT11)</div>
@@ -274,7 +342,7 @@ export default function ThermoMotorProtected({
           <div style={{ fontSize: 32 }}>🔔</div>
           <div style={cardTitle}>Safety Buzzer (Critical)</div>
           <div style={{ ...cardDesc, marginBottom: 8 }}>
-            Starts at ≥ critical. Auto-stops at ≤ (critical − hysteresis). Latch keeps alarm until “Silence”.
+            Starts at ≥ critical. Auto-stops at ≤ (critical − hysteresis). “Silence” mutes until cool.
           </div>
 
           <div style={{ display: "grid", gap: 10 }}>
@@ -310,11 +378,15 @@ export default function ThermoMotorProtected({
                 <input type="checkbox" checked={buzzLatch} onChange={(e)=>setBuzzLatch(e.target.checked)} />
                 Latch until Silence
               </label>
-              <button onClick={() => safe(stopAlarm)} style={btnWarn}>Silence</button>
+              <button onClick={() => safe(silenceUntilCool)} style={btnWarn}>Silence</button>
               <button onClick={() => safe(startAlarm)} style={btnSafe}>Test</button>
+              {buzzMutedUntilClearRef.current && (
+                <button onClick={() => safe(async()=>{unmute();})} style={btnLight}>Unmute</button>
+              )}
             </div>
             <div style={hint}>
-              Alarm ≥ {critC.toFixed(1)}°C, auto-clear ≤ {(critC - critHyst).toFixed(1)}°C{buzzLatch ? " (latched)" : ""}.
+              Alarm ≥ {critC.toFixed(1)}°C, auto-clear ≤ {(critC - critHyst).toFixed(1)}°C.
+              “Silence” keeps it off until ≤ that clear temperature.
             </div>
           </div>
         </div>

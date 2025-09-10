@@ -4,172 +4,111 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Shared localStorage key so pages share the Pico base URL (same as your pages)
+// Shared localStorage key so pages share the Pico base URL
 const LS_KEY = "pico_baseURL";
 
 function useBaseURL() {
   const [raw, setRaw] = useState("");
-
-  useEffect(() => {
-    const saved = localStorage.getItem(LS_KEY);
-    if (saved) setRaw(saved);
-  }, []);
-
+  useEffect(() => { const saved = localStorage.getItem(LS_KEY); if (saved) setRaw(saved); }, []);
   const baseURL = useMemo(() => {
-    const s = raw.trim();
-    if (!s) return "";
-    if (/^https?:\/\//i.test(s)) return s.replace(/\/$/, "");
-    return `http://${s}`;
+    const s = raw.trim(); if (!s) return "";
+    return /^https?:\/\//i.test(s) ? s.replace(/\/$/, "") : `http://${s}`;
   }, [raw]);
-
-  const save = (v: string) => {
-    setRaw(v);
-    localStorage.setItem(LS_KEY, v);
-  };
-
+  const save = (v: string) => { setRaw(v); localStorage.setItem(LS_KEY, v); };
   return { input: raw, setInput: save, baseURL } as const;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
-type Thermo = {
-  raw: number;
-  raw_bits: number;
-  voltage: number;
-  resistance_ohm: number;
-  temp_c: number;
-};
-
+type Thermo = { raw:number; raw_bits:number; voltage:number; resistance_ohm:number; temp_c:number; };
 type MotorState = "on" | "off" | "unknown";
 type OnOff = "on" | "off";
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Small style system
+// Styles
 const pageWrap: React.CSSProperties = { maxWidth: 980, margin: "32px auto", padding: 24 };
-const headerBar: React.CSSProperties = {
-  display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 16,
-};
-const grid: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-  gap: 16,
-  alignItems: "start",
-};
-const card: React.CSSProperties = {
-  display: "grid",
-  gap: 10,
-  padding: 16,
-  border: "1px solid #e5e7eb",
-  borderRadius: 12,
-  background: "#fff",
-  boxShadow: "0 6px 16px rgba(0,0,0,0.06)",
-};
+const headerBar: React.CSSProperties = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 16 };
+const grid: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16, alignItems: "start" };
+const card: React.CSSProperties = { display: "grid", gap: 10, padding: 16, border: "1px solid #e5e7eb", borderRadius: 12, background: "#fff", boxShadow: "0 6px 16px rgba(0,0,0,0.06)" };
 const cardTitle: React.CSSProperties = { fontSize: 18, fontWeight: 700, color: "#111827" };
 const cardDesc: React.CSSProperties = { color: "#6b7280", fontSize: 14 };
-const row: React.CSSProperties = { display: "flex", gap: 8, alignItems: "center" };
+const row: React.CSSProperties = { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" };
 const hint: React.CSSProperties = { color: "#6b7280", fontSize: 12 };
-const pill: React.CSSProperties = {
-  padding: "6px 10px",
-  borderRadius: 999,
-  border: "1px solid #e5e7eb",
-  background: "#f9fafb",
-  fontSize: 12,
-  color: "#374151",
-  fontWeight: 600,
-};
+const pill: React.CSSProperties = { padding: "6px 10px", borderRadius: 999, border: "1px solid #e5e7eb", background: "#f9fafb", fontSize: 12, color: "#374151", fontWeight: 600 };
 
-const btnBase: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 10,
-  fontSize: 14,
-  fontWeight: 600,
-  border: "1px solid transparent",
-  cursor: "pointer",
-};
+const btnBase: React.CSSProperties = { padding: "10px 12px", borderRadius: 10, fontSize: 14, fontWeight: 600, border: "1px solid transparent", cursor: "pointer" };
 const btnDark: React.CSSProperties = { ...btnBase, color: "#fff", background: "#111827" };
-const btnGreen: React.CSSProperties = { ...btnBase, color: "#fff", background: "#059669" };
-const btnRed: React.CSSProperties = { ...btnBase, color: "#fff", background: "#dc2626" };
-const btnLight: React.CSSProperties = {
-  ...btnBase, color: "#111827", background: "#fff", border: "1px solid #e5e7eb",
-};
+const btnLight: React.CSSProperties = { ...btnBase, color: "#111827", background: "#fff", border: "1px solid #e5e7eb" };
+const btnWarn: React.CSSProperties = { ...btnBase, color: "#fff", background: "#dc2626" };
+const btnSafe: React.CSSProperties = { ...btnBase, color: "#fff", background: "#059669" };
 
-const errorBox: React.CSSProperties = {
-  background: "#fef2f2",
-  border: "1px solid #fecaca",
-  color: "#991b1b",
-  padding: 12,
-  borderRadius: 10,
-  marginTop: 12,
-  fontSize: 14,
-};
+const errorBox: React.CSSProperties = { background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", padding: 12, borderRadius: 10, marginTop: 12, fontSize: 14 };
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Page
 export default function ThermoMotorPage() {
   const { input, setInput, baseURL } = useBaseURL();
 
   const [thermo, setThermo] = useState<Thermo | null>(null);
   const [motor, setMotor] = useState<MotorState>("unknown");
-  const [error, setError] = useState<string>("");
+  const [buzzer, setBuzzer] = useState<{ state: OnOff; alarm: boolean }>({ state: "off", alarm: false });
+  const [error, setError] = useState("");
 
-  const [auto, setAuto] = useState(true);
-  const [targetC, setTargetC] = useState(30);
-  const [hyst, setHyst] = useState(1.0);
-
-  // NEW: LED sync toggle
-  const [syncLEDs, setSyncLEDs] = useState(true);
+  // Controls
+  const [auto, setAuto] = useState(true);             // auto motor logic
+  const [targetC, setTargetC] = useState(30);         // motor threshold
+  const [hyst, setHyst] = useState(1.0);              // motor hysteresis
+  const [syncLEDs, setSyncLEDs] = useState(true);     // physical LEDs
+  // NEW: buzzer safety
+  const [critC, setCritC] = useState(40);             // critical temperature
+  const [critHyst, setCritHyst] = useState(0.5);      // hysteresis for alarm clear
+  const [buzzOnMs, setBuzzOnMs] = useState(400);
+  const [buzzOffMs, setBuzzOffMs] = useState(400);
+  const [buzzEnable, setBuzzEnable] = useState(true);
+  const [buzzLatch, setBuzzLatch] = useState(true);   // require manual silence
 
   const [busy, setBusy] = useState(false);
 
-  // Refs to avoid stale closures and add guards
-  const targetRef = useRef(targetC);
-  const hystRef = useRef(hyst);
-  const autoRef = useRef(auto);
-  const motorRef = useRef<MotorState>(motor);
-  const inflightRef = useRef(false);           // prevents overlapping polls
-  const cooldownUntilRef = useRef(0);          // lockout after switching relay
-  const backoffUntilRef = useRef(0);           // quiet time after 5xx
-
-  // NEW: track last commanded LED state and throttle updates
+  // Refs (avoid stale closures + throttles)
+  const targetRef = useRef(targetC); useEffect(()=>{targetRef.current=targetC;},[targetC]);
+  const hystRef = useRef(hyst); useEffect(()=>{hystRef.current=hyst;},[hyst]);
+  const autoRef = useRef(auto); useEffect(()=>{autoRef.current=auto;},[auto]);
+  const motorRef = useRef<MotorState>(motor); useEffect(()=>{motorRef.current=motor;},[motor]);
+  const inflightRef = useRef(false);
+  const cooldownUntilRef = useRef(0);        // relay cooldown
+  const backoffUntilRef = useRef(0);         // after 5xx
   const lastLEDRef = useRef<{ red: OnOff; green: OnOff }>({ red: "off", green: "off" });
   const ledCooldownUntilRef = useRef(0);
 
-  useEffect(() => { targetRef.current = targetC; }, [targetC]);
-  useEffect(() => { hystRef.current = hyst; }, [hyst]);
-  useEffect(() => { autoRef.current = auto; }, [auto]);
-  useEffect(() => { motorRef.current = motor; }, [motor]);
+  // NEW: buzzer control refs
+  const critRef = useRef(critC); useEffect(()=>{critRef.current=critC;},[critC]);
+  const critHystRef = useRef(critHyst); useEffect(()=>{critHystRef.current=critHyst;},[critHyst]);
+  const buzzEnableRef = useRef(buzzEnable); useEffect(()=>{buzzEnableRef.current=buzzEnable;},[buzzEnable]);
+  const buzzLatchRef = useRef(buzzLatch); useEffect(()=>{buzzLatchRef.current=buzzLatch;},[buzzLatch]);
+  const buzzOnRef = useRef(buzzOnMs); useEffect(()=>{buzzOnRef.current=buzzOnMs;},[buzzOnMs]);
+  const buzzOffRef = useRef(buzzOffMs); useEffect(()=>{buzzOffRef.current=buzzOffMs;},[buzzOffMs]);
+  const alarmActiveRef = useRef(false);   // last commanded alarm state
+  const buzzCooldownUntilRef = useRef(0);
 
-  // ─────────────────────── proxy helper (header + query target) ──────────────
-  async function jgetPico<T = any>(
-    picoPath: string,
-    qs?: Record<string, string | number>
-  ): Promise<T> {
+  // ─────────────────────── proxy helper ───────────────────────
+  async function jgetPico<T = any>(picoPath: string, qs?: Record<string,string|number>): Promise<T> {
     if (!baseURL) throw new Error("Missing Pico base URL");
     const usp = new URLSearchParams();
-    if (qs) for (const [k, v] of Object.entries(qs)) usp.set(k, String(v));
-    if (!usp.has("t")) usp.set("t", "12000");   // longer timeout
-    usp.set("target", baseURL);                 // always include target
-
+    if (qs) for (const [k,v] of Object.entries(qs)) usp.set(k, String(v));
+    if (!usp.has("t")) usp.set("t", "12000");
+    usp.set("target", baseURL); // always pass target for your proxy
     const url = `/api/pico${picoPath}${usp.toString() ? `?${usp.toString()}` : ""}`;
-    const r = await fetch(url, {
-      method: "GET",
-      headers: { "X-Pico-Base": baseURL },
-      cache: "no-store",
-      keepalive: false,
-    });
+    const r = await fetch(url, { method: "GET", headers: { "X-Pico-Base": baseURL }, cache: "no-store", keepalive: false });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
     return (await r.json()) as T;
   }
 
-  // ───────────────────────────────── API calls ───────────────────────────────
+  // ─────────────────────── API wrappers ───────────────────────
   const readThermistor = async () => {
     if (Date.now() < backoffUntilRef.current) return thermo;
     try {
       const js = await jgetPico<Thermo>(`/api/thermistor/read`);
-      setThermo(js);
-      setError("");
-      return js;
-    } catch (e: any) {
+      setThermo(js); setError(""); return js;
+    } catch (e:any) {
       const msg = e?.message || "";
       if (/^5\d\d/.test(msg)) backoffUntilRef.current = Date.now() + 2000;
       throw e;
@@ -177,23 +116,38 @@ export default function ThermoMotorPage() {
   };
 
   const readMotorStatus = async () => {
-    const js = await jgetPico<{ state: "on" | "off" }>(`/api/relay/status`);
-    setMotor(js.state);
-    setError("");
-    return js.state as MotorState;
+    const js = await jgetPico<{state:"on"|"off"}>(`/api/relay/status`);
+    setMotor(js.state); setError(""); return js.state as MotorState;
   };
 
-  const setMotorState = async (state: "on" | "off") => {
+  const setMotorState = async (state:"on"|"off") => {
     if (Date.now() < cooldownUntilRef.current) return;
     await jgetPico(`/api/relay`, { state });
-    setMotor(state);
-    motorRef.current = state;
-    cooldownUntilRef.current = Date.now() + 2500; // 2.5s lockout
-    // let EMI settle before next status read
-    setTimeout(() => { readMotorStatus().catch(() => {}); }, 1200);
+    setMotor(state); motorRef.current = state;
+    cooldownUntilRef.current = Date.now() + 2500;
   };
 
-  // NEW: batch LED set with change detection + cooldown
+  const readBuzzerStatus = async () => {
+    const js = await jgetPico<{state:OnOff; alarm:boolean}>(`/api/buzzer/status`);
+    setBuzzer(js); return js;
+  };
+
+  const startAlarm = async () => {
+    if (Date.now() < buzzCooldownUntilRef.current) return;
+    await jgetPico(`/api/buzzer/alarm`, { cmd: "start", on_ms: buzzOnRef.current, off_ms: buzzOffRef.current });
+    alarmActiveRef.current = true;
+    buzzCooldownUntilRef.current = Date.now() + 300;
+    setBuzzer({ state: "on", alarm: true });
+  };
+
+  const stopAlarm = async () => {
+    if (Date.now() < buzzCooldownUntilRef.current) return;
+    await jgetPico(`/api/buzzer/alarm`, { cmd: "stop" });
+    alarmActiveRef.current = false;
+    buzzCooldownUntilRef.current = Date.now() + 300;
+    setBuzzer({ state: "off", alarm: false });
+  };
+
   async function setLEDs(red: OnOff, green: OnOff) {
     if (!syncLEDs || Date.now() < ledCooldownUntilRef.current) return;
     const last = lastLEDRef.current;
@@ -201,38 +155,23 @@ export default function ThermoMotorPage() {
     try {
       await jgetPico(`/api/leds/set`, { red, green });
       lastLEDRef.current = { red, green };
-      ledCooldownUntilRef.current = Date.now() + 300; // throttle a bit
-    } catch (e: any) {
-      // don't surface minor LED errors; avoid spamming the error box
-      console.warn("LED set failed:", e?.message || e);
-    }
+      ledCooldownUntilRef.current = Date.now() + 300;
+    } catch {}
   }
 
-  // ───────────────────────────── lifecycle ───────────────────────────────────
-  // Refresh status when base changes
+  // ─────────────────────── lifecycle ──────────────────────────
   useEffect(() => {
     if (!baseURL) return;
     (async () => {
       try {
         await readThermistor();
         await readMotorStatus();
-        // on connect, reflect current temp to LEDs
-        const t = thermo?.temp_c;
-        if (typeof t === "number") {
-          const onAt = targetRef.current;
-          const offAt = targetRef.current - hystRef.current;
-          if (t >= onAt) await setLEDs("on", "off");
-          else if (t <= offAt) await setLEDs("off", "on");
-          else await setLEDs("off", "off");
-        }
-      } catch (e: any) {
-        setError(e?.message || "Request failed");
-      }
+        await readBuzzerStatus();
+      } catch (e:any) { setError(e?.message || "Request failed"); }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseURL]);
 
-  // Auto loop: poll every 1.5s and apply control + LED logic; no overlaps
   useEffect(() => {
     if (!baseURL) return;
     const tick = async () => {
@@ -245,21 +184,29 @@ export default function ThermoMotorPage() {
           const onAt = targetRef.current;
           const offAt = targetRef.current - hystRef.current;
 
-          // LED logic: red ≥ target, green ≤ (target - hysteresis), off in between
+          // LEDs: red ≥ target, green ≤ (target - hyst), off in between
           if (temp >= onAt) await setLEDs("on", "off");
           else if (temp <= offAt) await setLEDs("off", "on");
           else await setLEDs("off", "off");
 
-          // Motor auto control
+          // Auto motor relay (no manual card)
           if (autoRef.current && Date.now() >= cooldownUntilRef.current) {
-            if (motorRef.current !== "on" && temp >= onAt) {
-              await setMotorState("on");
-            } else if (motorRef.current !== "off" && temp <= offAt) {
-              await setMotorState("off");
+            if (motorRef.current !== "on" && temp >= onAt) await setMotorState("on");
+            else if (motorRef.current !== "off" && temp <= offAt) await setMotorState("off");
+          }
+
+          // Buzzer safety
+          if (buzzEnableRef.current) {
+            const crit = critRef.current;
+            const clr = critRef.current - critHystRef.current;
+            if (temp >= crit) {
+              if (!alarmActiveRef.current) await startAlarm();
+            } else if (temp <= clr) {
+              if (alarmActiveRef.current && !buzzLatchRef.current) await stopAlarm();
             }
           }
         }
-      } catch (e: any) {
+      } catch (e:any) {
         setError(e?.message || "Request failed");
       } finally {
         inflightRef.current = false;
@@ -267,199 +214,161 @@ export default function ThermoMotorPage() {
     };
 
     const id = setInterval(tick, 1500);
-    tick(); // kick once
+    tick();
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseURL, auto, syncLEDs]);
+  }, [baseURL, auto, syncLEDs, buzzEnable, buzzLatch]);
 
-  // Helper to wrap buttons with busy flag
   async function safe<T>(fn: () => Promise<T>) {
     if (busy) return;
     setBusy(true);
     try { return await fn(); }
-    catch (e: any) { setError(e?.message || "Request failed"); }
+    catch (e:any) { setError(e?.message || "Request failed"); }
     finally { setBusy(false); }
   }
 
-  // ─────────────────────────────────── UI ────────────────────────────────────
+  // ─────────────────────── UI ──────────────────────────
   return (
     <main style={pageWrap}>
       {/* Header */}
       <div style={headerBar}>
         <div>
-          <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 4 }}>
-            Thermo ⇄ Motor (Auto)
-          </h1>
+          <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 4 }}>Thermo ⇄ Motor + Safety</h1>
           <p style={{ color: "#6b7280" }}>
-            Green LED when cool (≤ target − hysteresis). Red LED when hot (≥ target).
+            Motor auto ON/OFF around target; LEDs show zone; buzzer alarms at critical temp.
           </p>
         </div>
-        <Link href="/pico" style={{ color: "#374151", textDecoration: "none" }}>
-          ← Back
-        </Link>
+        <Link href="/pico" style={{ color: "#374151", textDecoration: "none" }}>← Back</Link>
       </div>
 
-      {/* Connection + Controls */}
+      {/* Connection / toggles */}
       <div style={{ ...card, marginBottom: 16 }}>
-        <div style={{ ...row, justifyContent: "space-between", flexWrap: "wrap" }}>
-          <div style={{ ...row, flexWrap: "wrap" }}>
-            <input
-              placeholder="http://pico-w.local or 192.168.1.42"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              style={{ width: 320, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
-            />
-            <button
-              onClick={() => safe(async () => {
-                await readThermistor();
-                await readMotorStatus();
-              })}
-              style={btnDark}
-            >
-              Connect / Refresh
-            </button>
-            <span style={pill}>
-              Motor: {motor === "unknown" ? "—" : motor.toUpperCase()}
-            </span>
-            <label style={{ ...row, color: "#374151", marginLeft: 8 }}>
-              <input
-                type="checkbox"
-                checked={auto}
-                onChange={(e) => setAuto(e.target.checked)}
-              />
-              Auto (1.5s)
-            </label>
-            {/* NEW: LED sync toggle */}
-            <label style={{ ...row, color: "#374151", marginLeft: 8 }}>
-              <input
-                type="checkbox"
-                checked={syncLEDs}
-                onChange={(e) => setSyncLEDs(e.target.checked)}
-              />
-              Sync physical LEDs
-            </label>
-          </div>
+        <div style={row}>
+          <input
+            placeholder="http://pico-w.local or 192.168.1.42"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            style={{ width: 320, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
+          />
+          <button onClick={() => safe(async () => { await readThermistor(); await readMotorStatus(); await readBuzzerStatus(); })} style={btnDark}>
+            Connect / Refresh
+          </button>
+          <span style={pill}>Motor: {motor === "unknown" ? "—" : motor.toUpperCase()}</span>
+          <span style={pill}>Buzzer: {buzzer.alarm ? "ALARM" : buzzer.state.toUpperCase()}</span>
+          <label style={{ ...row, color: "#374151", marginLeft: 8 }}>
+            <input type="checkbox" checked={auto} onChange={(e)=>setAuto(e.target.checked)} />
+            Auto motor (1.5s)
+          </label>
+          <label style={{ ...row, color: "#374151" }}>
+            <input type="checkbox" checked={syncLEDs} onChange={(e)=>setSyncLEDs(e.target.checked)} />
+            Sync LEDs
+          </label>
         </div>
-
-        {!baseURL && (
-          <div style={{ ...hint, marginTop: 8 }}>
-            Enter your Pico’s URL/IP to avoid proxy errors like <code>Missing 'target'</code>.
-          </div>
-        )}
+        {!baseURL && <div style={{ ...hint, marginTop: 8 }}>Enter the Pico URL/IP to avoid proxy errors like <code>Missing 'target'</code>.</div>}
       </div>
 
-      {/* Content grid */}
+      {/* Content */}
       <div style={grid}>
-        {/* Thermistor card */}
+        {/* Thermistor / thresholds */}
         <div style={card}>
           <div style={{ fontSize: 32 }}>🌡️</div>
-          <div style={cardTitle}>Thermistor</div>
+          <div style={cardTitle}>Temperature</div>
           <div style={{ display: "grid", gap: 6, fontSize: 14, color: "#374151" }}>
-            <div>
-              <span style={{ color: "#6b7280" }}>Temperature:</span>{" "}
-              <b>{thermo ? thermo.temp_c.toFixed(2) : "—"} °C</b>
-            </div>
-            <div><span style={{ color: "#6b7280" }}>ADC:</span> {thermo?.raw ?? "—"} / {thermo?.raw_bits ?? "—"}</div>
+            <div><span style={{ color: "#6b7280" }}>Temperature:</span> <b>{thermo ? thermo.temp_c.toFixed(2) : "—"} °C</b></div>
             <div><span style={{ color: "#6b7280" }}>Voltage:</span> {thermo ? thermo.voltage.toFixed(4) : "—"} V</div>
             <div><span style={{ color: "#6b7280" }}>Resistance:</span> {thermo ? Math.round(thermo.resistance_ohm) : "—"} Ω</div>
           </div>
 
-          <div style={{ marginTop: 10, color: "#6b7280", fontSize: 13 }}>
-            Divider: 3V3 → <b>NTC</b> → node → <b>10k</b> → GND (node → ADC GP26).
-          </div>
-
           <div style={{ marginTop: 12 }}>
             <div style={{ ...row, justifyContent: "space-between" }}>
-              <div style={cardDesc}>Target (°C):</div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  step={0.5}
-                  min={-40}
-                  max={150}
-                  value={targetC}
-                  onChange={(e) => setTargetC(Number(e.target.value))}
-                  style={{ width: 100, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
-                />
-              </div>
+              <div style={cardDesc}>Target (°C)</div>
+              <input type="number" inputMode="decimal" step={0.5} min={-40} max={150}
+                value={targetC} onChange={(e)=>setTargetC(Number(e.target.value))}
+                style={{ width: 110, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }} />
             </div>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={0.5}
-              value={targetC}
-              onChange={(e) => setTargetC(Number(e.target.value))}
-              style={{ width: "100%" }}
-            />
+            <input type="range" min={0} max={100} step={0.5} value={targetC} onChange={(e)=>setTargetC(Number(e.target.value))} style={{ width: "100%" }} />
             <div style={{ ...row, justifyContent: "space-between", marginTop: 8 }}>
-              <div style={cardDesc}>Hysteresis (°C):</div>
-              <input
-                type="number"
-                inputMode="decimal"
-                step={0.1}
-                min={0}
-                max={10}
-                value={hyst}
-                onChange={(e) => setHyst(Number(e.target.value))}
-                style={{ width: 100, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
-              />
+              <div style={cardDesc}>Hysteresis (°C)</div>
+              <input type="number" inputMode="decimal" step={0.1} min={0} max={10}
+                value={hyst} onChange={(e)=>setHyst(Number(e.target.value))}
+                style={{ width: 110, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }} />
             </div>
             <div style={{ ...hint, marginTop: 6 }}>
-              Motor turns <b>ON</b> at ≥ {targetC.toFixed(1)}°C and <b>OFF</b> at ≤ {(targetC - hyst).toFixed(1)}°C.
-              LEDs follow the same thresholds.
+              Motor ON at ≥ {targetC.toFixed(1)} °C, OFF at ≤ {(targetC - hyst).toFixed(1)} °C. LEDs follow the same thresholds.
             </div>
           </div>
 
           <div style={{ marginTop: 8 }}>
-            <button onClick={() => safe(readThermistor)} style={btnLight} disabled={!baseURL || busy}>
-              Manual Read
-            </button>
+            <button onClick={() => safe(readThermistor)} style={btnLight} disabled={!baseURL || busy}>Manual Read</button>
           </div>
         </div>
 
-        {/* Motor card */}
+        {/* NEW: Safety buzzer */}
         <div style={card}>
-          <div style={{ fontSize: 32 }}>🛞</div>
-          <div style={cardTitle}>Motor (Relay)</div>
+          <div style={{ fontSize: 32 }}>🔔</div>
+          <div style={cardTitle}>Safety Buzzer (Critical)</div>
           <div style={{ ...cardDesc, marginBottom: 8 }}>
-            Endpoints: <code>/api/relay/status</code>, <code>/api/relay?state=on|off</code>, <code>/api/leds/set</code>
+            Starts <code>/api/buzzer/alarm</code> when temp ≥ critical. Stops when ≤ (critical − hysteresis), unless latched.
           </div>
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button
-              disabled={!baseURL || busy || auto}
-              onClick={() => safe(async () => { await setMotorState("on"); })}
-              style={btnGreen}
-              title={auto ? "Disable Auto to use manual controls" : ""}
-            >
-              Start
-            </button>
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ ...row, justifyContent: "space-between" }}>
+              <div style={cardDesc}>Critical (°C)</div>
+              <input type="number" inputMode="decimal" step={0.5} min={-40} max={150}
+                value={critC} onChange={(e)=>setCritC(Number(e.target.value))}
+                style={{ width: 110, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }} />
+            </div>
 
-            <button
-              disabled={!baseURL || busy || auto}
-              onClick={() => safe(async () => { await setMotorState("off"); })}
-              style={btnRed}
-              title={auto ? "Disable Auto to use manual controls" : ""}
-            >
-              Stop
-            </button>
+            <div style={{ ...row, justifyContent: "space-between" }}>
+              <div style={cardDesc}>Critical hysteresis (°C)</div>
+              <input type="number" inputMode="decimal" step={0.1} min={0} max={10}
+                value={critHyst} onChange={(e)=>setCritHyst(Number(e.target.value))}
+                style={{ width: 110, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }} />
+            </div>
 
-            <button
-              disabled={!baseURL || busy}
-              onClick={() => safe(readMotorStatus)}
-              style={btnLight}
-            >
-              Refresh Status
-            </button>
-          </div>
+            <div style={{ ...row, justifyContent: "space-between" }}>
+              <div style={cardDesc}>Pattern (on/off ms)</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input type="number" min={10} max={5000} step={10}
+                  value={buzzOnMs} onChange={(e)=>setBuzzOnMs(Number(e.target.value))}
+                  style={{ width: 110, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }} />
+                <input type="number" min={10} max={5000} step={10}
+                  value={buzzOffMs} onChange={(e)=>setBuzzOffMs(Number(e.target.value))}
+                  style={{ width: 110, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }} />
+              </div>
+            </div>
 
-          <div style={{ marginTop: 12, fontSize: 13, color: "#6b7280" }}>
-            <ul style={{ paddingLeft: 18, margin: 0 }}>
-              <li>LEDs: red when hot (≥ target), green when cool (≤ target − hysteresis), off in between.</li>
-              <li>Hysteresis + short cooldown prevent relay chatter and reduce EMI.</li>
-            </ul>
+            <div style={row}>
+              <label style={{ ...row, color: "#374151" }}>
+                <input type="checkbox" checked={buzzEnable} onChange={(e)=>setBuzzEnable(e.target.checked)} />
+                Enable buzzer safety
+              </label>
+              <label style={{ ...row, color: "#374151" }}>
+                <input type="checkbox" checked={buzzLatch} onChange={(e)=>setBuzzLatch(e.target.checked)} />
+                Latch until Silence
+              </label>
+              <button
+                onClick={() => safe(async () => { await stopAlarm(); })}
+                style={btnWarn}
+                disabled={!baseURL || busy}
+                title="Stop alarm now"
+              >
+                Silence
+              </button>
+              <button
+                onClick={() => safe(async () => { await startAlarm(); })}
+                style={btnSafe}
+                disabled={!baseURL || busy}
+                title="Test alarm now"
+              >
+                Test
+              </button>
+            </div>
+
+            <div style={{ ...hint }}>
+              Alarm starts at ≥ {critC.toFixed(1)} °C. Auto-stops at ≤ {(critC - critHyst).toFixed(1)} °C
+              {buzzLatch ? " (latch is ON: requires Silence)" : ""}.
+            </div>
           </div>
         </div>
       </div>

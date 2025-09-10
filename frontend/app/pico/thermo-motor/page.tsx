@@ -41,9 +41,10 @@ type Thermo = {
 };
 
 type MotorState = "on" | "off" | "unknown";
+type OnOff = "on" | "off";
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Small style system (matches your look, a touch more polished)
+// Small style system
 const pageWrap: React.CSSProperties = { maxWidth: 980, margin: "32px auto", padding: 24 };
 const headerBar: React.CSSProperties = {
   display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 16,
@@ -115,6 +116,9 @@ export default function ThermoMotorPage() {
   const [targetC, setTargetC] = useState(30);
   const [hyst, setHyst] = useState(1.0);
 
+  // NEW: LED sync toggle
+  const [syncLEDs, setSyncLEDs] = useState(true);
+
   const [busy, setBusy] = useState(false);
 
   // Refs to avoid stale closures and add guards
@@ -123,8 +127,12 @@ export default function ThermoMotorPage() {
   const autoRef = useRef(auto);
   const motorRef = useRef<MotorState>(motor);
   const inflightRef = useRef(false);           // prevents overlapping polls
-  const cooldownUntilRef = useRef(0);          // lockout after switching
+  const cooldownUntilRef = useRef(0);          // lockout after switching relay
   const backoffUntilRef = useRef(0);           // quiet time after 5xx
+
+  // NEW: track last commanded LED state and throttle updates
+  const lastLEDRef = useRef<{ red: OnOff; green: OnOff }>({ red: "off", green: "off" });
+  const ledCooldownUntilRef = useRef(0);
 
   useEffect(() => { targetRef.current = targetC; }, [targetC]);
   useEffect(() => { hystRef.current = hyst; }, [hyst]);
@@ -136,11 +144,11 @@ export default function ThermoMotorPage() {
     picoPath: string,
     qs?: Record<string, string | number>
   ): Promise<T> {
-    if (!baseURL) throw new Error("Missing Pico base URL"); // avoids 'Missing target'
+    if (!baseURL) throw new Error("Missing Pico base URL");
     const usp = new URLSearchParams();
     if (qs) for (const [k, v] of Object.entries(qs)) usp.set(k, String(v));
-    if (!usp.has("t")) usp.set("t", "12000");         // longer timeout
-    usp.set("target", baseURL);                       // <— ensure proxy always gets target
+    if (!usp.has("t")) usp.set("t", "12000");   // longer timeout
+    usp.set("target", baseURL);                 // always include target
 
     const url = `/api/pico${picoPath}${usp.toString() ? `?${usp.toString()}` : ""}`;
     const r = await fetch(url, {
@@ -155,7 +163,6 @@ export default function ThermoMotorPage() {
 
   // ───────────────────────────────── API calls ───────────────────────────────
   const readThermistor = async () => {
-    // Gentle backoff after a recent 5xx to avoid cascades
     if (Date.now() < backoffUntilRef.current) return thermo;
     try {
       const js = await jgetPico<Thermo>(`/api/thermistor/read`);
@@ -177,24 +184,47 @@ export default function ThermoMotorPage() {
   };
 
   const setMotorState = async (state: "on" | "off") => {
-    // Cooldown to prevent immediate flip-flop and allow EMI to settle
     if (Date.now() < cooldownUntilRef.current) return;
     await jgetPico(`/api/relay`, { state });
     setMotor(state);
     motorRef.current = state;
-    cooldownUntilRef.current = Date.now() + 2500; // 2.5s lockout after switching
-    // Delay the *next* status read so we don't hammer right after the coil kicks
+    cooldownUntilRef.current = Date.now() + 2500; // 2.5s lockout
+    // let EMI settle before next status read
     setTimeout(() => { readMotorStatus().catch(() => {}); }, 1200);
   };
 
+  // NEW: batch LED set with change detection + cooldown
+  async function setLEDs(red: OnOff, green: OnOff) {
+    if (!syncLEDs || Date.now() < ledCooldownUntilRef.current) return;
+    const last = lastLEDRef.current;
+    if (last.red === red && last.green === green) return;
+    try {
+      await jgetPico(`/api/leds/set`, { red, green });
+      lastLEDRef.current = { red, green };
+      ledCooldownUntilRef.current = Date.now() + 300; // throttle a bit
+    } catch (e: any) {
+      // don't surface minor LED errors; avoid spamming the error box
+      console.warn("LED set failed:", e?.message || e);
+    }
+  }
+
   // ───────────────────────────── lifecycle ───────────────────────────────────
-  // Refresh status when base changes (sequential, not parallel)
+  // Refresh status when base changes
   useEffect(() => {
     if (!baseURL) return;
     (async () => {
       try {
         await readThermistor();
         await readMotorStatus();
+        // on connect, reflect current temp to LEDs
+        const t = thermo?.temp_c;
+        if (typeof t === "number") {
+          const onAt = targetRef.current;
+          const offAt = targetRef.current - hystRef.current;
+          if (t >= onAt) await setLEDs("on", "off");
+          else if (t <= offAt) await setLEDs("off", "on");
+          else await setLEDs("off", "off");
+        }
       } catch (e: any) {
         setError(e?.message || "Request failed");
       }
@@ -202,7 +232,7 @@ export default function ThermoMotorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseURL]);
 
-  // Auto loop: poll every 1.5s and apply control logic; no overlaps
+  // Auto loop: poll every 1.5s and apply control + LED logic; no overlaps
   useEffect(() => {
     if (!baseURL) return;
     const tick = async () => {
@@ -210,12 +240,18 @@ export default function ThermoMotorPage() {
       inflightRef.current = true;
       try {
         const t = await readThermistor();
-        if (t && autoRef.current) {
+        if (t) {
           const temp = t.temp_c;
           const onAt = targetRef.current;
           const offAt = targetRef.current - hystRef.current;
 
-          if (Date.now() >= cooldownUntilRef.current) {
+          // LED logic: red ≥ target, green ≤ (target - hysteresis), off in between
+          if (temp >= onAt) await setLEDs("on", "off");
+          else if (temp <= offAt) await setLEDs("off", "on");
+          else await setLEDs("off", "off");
+
+          // Motor auto control
+          if (autoRef.current && Date.now() >= cooldownUntilRef.current) {
             if (motorRef.current !== "on" && temp >= onAt) {
               await setMotorState("on");
             } else if (motorRef.current !== "off" && temp <= offAt) {
@@ -231,10 +267,10 @@ export default function ThermoMotorPage() {
     };
 
     const id = setInterval(tick, 1500);
-    tick(); // kick once immediately
+    tick(); // kick once
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseURL, auto]);
+  }, [baseURL, auto, syncLEDs]);
 
   // Helper to wrap buttons with busy flag
   async function safe<T>(fn: () => Promise<T>) {
@@ -255,7 +291,7 @@ export default function ThermoMotorPage() {
             Thermo ⇄ Motor (Auto)
           </h1>
           <p style={{ color: "#6b7280" }}>
-            Set a temperature; motor turns <b>ON</b> at ≥ target and <b>OFF</b> below (target − hysteresis).
+            Green LED when cool (≤ target − hysteresis). Red LED when hot (≥ target).
           </p>
         </div>
         <Link href="/pico" style={{ color: "#374151", textDecoration: "none" }}>
@@ -293,12 +329,21 @@ export default function ThermoMotorPage() {
               />
               Auto (1.5s)
             </label>
+            {/* NEW: LED sync toggle */}
+            <label style={{ ...row, color: "#374151", marginLeft: 8 }}>
+              <input
+                type="checkbox"
+                checked={syncLEDs}
+                onChange={(e) => setSyncLEDs(e.target.checked)}
+              />
+              Sync physical LEDs
+            </label>
           </div>
         </div>
 
         {!baseURL && (
           <div style={{ ...hint, marginTop: 8 }}>
-            Enter your Pico’s URL/IP above to avoid proxy errors like <code>Missing 'target'</code>.
+            Enter your Pico’s URL/IP to avoid proxy errors like <code>Missing 'target'</code>.
           </div>
         )}
       </div>
@@ -363,6 +408,7 @@ export default function ThermoMotorPage() {
             </div>
             <div style={{ ...hint, marginTop: 6 }}>
               Motor turns <b>ON</b> at ≥ {targetC.toFixed(1)}°C and <b>OFF</b> at ≤ {(targetC - hyst).toFixed(1)}°C.
+              LEDs follow the same thresholds.
             </div>
           </div>
 
@@ -378,7 +424,7 @@ export default function ThermoMotorPage() {
           <div style={{ fontSize: 32 }}>🛞</div>
           <div style={cardTitle}>Motor (Relay)</div>
           <div style={{ ...cardDesc, marginBottom: 8 }}>
-            Endpoints: <code>/api/relay/status</code>, <code>/api/relay?state=on|off</code>
+            Endpoints: <code>/api/relay/status</code>, <code>/api/relay?state=on|off</code>, <code>/api/leds/set</code>
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -411,8 +457,8 @@ export default function ThermoMotorPage() {
 
           <div style={{ marginTop: 12, fontSize: 13, color: "#6b7280" }}>
             <ul style={{ paddingLeft: 18, margin: 0 }}>
-              <li>Hysteresis and a short cooldown prevent rapid on/off cycling.</li>
-              <li>For stability with motors: separate supplies, flyback diodes, and bulk caps.</li>
+              <li>LEDs: red when hot (≥ target), green when cool (≤ target − hysteresis), off in between.</li>
+              <li>Hysteresis + short cooldown prevent relay chatter and reduce EMI.</li>
             </ul>
           </div>
         </div>

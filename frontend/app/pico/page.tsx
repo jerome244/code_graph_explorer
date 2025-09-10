@@ -95,6 +95,14 @@ export default function PicoDashboard() {
   </div>
 </Link>
 
+{/* Access Control (RFID) */}
+<Link href="/pico/access" style={{ textDecoration: "none" }}>
+  <div style={cardStyle}>
+    <div style={{ fontSize: 32 }}>🔒🪪</div>
+    <div style={cardTitle}>Access Control</div>
+    <div style={cardDesc}>Manage RFID allowlist & lock Thermo ⇄ Motor.</div>
+  </div>
+</Link>
 
       </div>
     </main>

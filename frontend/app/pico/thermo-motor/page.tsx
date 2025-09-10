@@ -31,7 +31,7 @@ const LS_LOCK  = "pico_secure_lock";
 const LS_TTL   = "pico_secure_ttl";
 const LS_SESS  = "pico_secure_session";
 const LS_LOG   = "pico_event_log";
-const LS_LOG_SEEN = "pico_event_seen"; // last-seen timestamp for unread counts
+const LS_LOG_SEEN = "pico_event_seen";
 
 /** ─────────────────────────────────────────────────────────────
  *  Types
@@ -291,7 +291,7 @@ function LogPanel({
 }
 
 /** ─────────────────────────────────────────────────────────────
- *  OUTER WRAPPER: RFID gate + logger + passes down
+ *  PAGE (RFID gate + app + log)
  *  ────────────────────────────────────────────────────────────*/
 export default function ThermoMotorPage() {
   const { input, setInput, baseURL } = useBaseURL();
@@ -338,10 +338,6 @@ export default function ThermoMotorPage() {
       <div style={headerBar}>
         <div>
           <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 4 }}>Thermo ⇄ Motor + Safety</h1>
-          <p style={{ color: "#6b7280" }}>
-            {locked ? "This page is protected by RFID. " : ""}
-            Motor auto ON/OFF around target; LEDs show zone; buzzer alarms at critical temp.
-          </p>
         </div>
         <Link href="/pico" style={{ color: "#374151", textDecoration: "none" }}>← Back</Link>
       </div>
@@ -397,7 +393,51 @@ export default function ThermoMotorPage() {
 }
 
 /** ─────────────────────────────────────────────────────────────
- *  CHILD APP: controls + LCD mirroring
+ *  Tiny UI components (animations)
+ *  ────────────────────────────────────────────────────────────*/
+function MotorAnim({ running }: { running: boolean }) {
+  return (
+    <div className="motor-wrap" title={running ? "Motor: ON" : "Motor: OFF"}>
+      <svg viewBox="0 0 100 100" className={`motor ${running ? "spin" : ""}`} aria-hidden>
+        <circle cx="50" cy="50" r="28" fill="currentColor" opacity="0.1" />
+        <g fill="currentColor">
+          <path d="M50 18 l6 8 10-2 3 10 9 4-4 9 7 7-7 7 4 9-9 4-3 10-10-2-6 8-6-8-10 2-3-10-9-4 4-9-7-7 7-7-4-9 9-4 3-10 10 2z" />
+          <circle cx="50" cy="50" r="8" />
+        </g>
+      </svg>
+      <div className="motor-label">{running ? "Running" : "Stopped"}</div>
+      <style jsx>{`
+        .motor-wrap { display:flex; flex-direction:column; align-items:center; gap:6px; color:#111827; }
+        .motor { width: 70px; height: 70px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spin { animation: spin 1.1s linear infinite; transform-origin: 50% 50%; }
+        .motor-label { font-size: 12px; color: #6b7280; font-weight: 600; }
+      `}</style>
+    </div>
+  );
+}
+
+function LedDot({ color, on, label }: { color: "red" | "green"; on: boolean; label: string }) {
+  return (
+    <div className="led-wrap" title={`${label}: ${on ? "ON" : "OFF"}`}>
+      <div className={`led ${color} ${on ? "on" : "off"}`} />
+      <div className="led-label">{label}</div>
+      <style jsx>{`
+        .led-wrap { display:flex; flex-direction:column; align-items:center; gap:6px; min-width:54px; }
+        .led { width: 26px; height: 26px; border-radius: 999px; border: 1px solid #e5e7eb; }
+        .led.red.off { background: #fee2e2; border-color:#fecaca; }
+        .led.red.on  { background: #dc2626; border-color:#dc2626; box-shadow: 0 0 10px rgba(220,38,38,.9), 0 0 20px rgba(220,38,38,.5); animation: glow 1.2s ease-in-out infinite; }
+        .led.green.off { background: #dcfce7; border-color:#bbf7d0; }
+        .led.green.on  { background: #059669; border-color:#059669; box-shadow: 0 0 10px rgba(5,150,105,.9), 0 0 20px rgba(5,150,105,.5); animation: glow 1.2s ease-in-out infinite; }
+        .led-label { font-size: 12px; color: #6b7280; font-weight: 600; }
+        @keyframes glow { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.35); } }
+      `}</style>
+    </div>
+  );
+}
+
+/** ─────────────────────────────────────────────────────────────
+ *  CHILD APP: controls + LCD mirroring + animations
  *  ────────────────────────────────────────────────────────────*/
 function ThermoMotorProtected({
   baseURL,
@@ -474,15 +514,13 @@ function ThermoMotorProtected({
   }
 
   // LCD helpers
-  function cut16(s: string) { // safe ASCII only
-    // Avoid '°' on HD44780 (not portable); keep A-Z0-9 symbols.
+  function cut16(s: string) {
     s = s.replace(/[^\x20-\x7E]/g, "?");
-    return s.length > 16 ? s.slice(0, 16) : s.padEnd(0);
+    return s.length > 16 ? s.slice(0, 16) : s;
   }
   async function lcdEnsure() {
     if (!lcdSync || !baseURL) return false;
     if (lcdReadyRef.current) return true;
-    // throttle re-init tries
     if (Date.now() - lcdLastInitTryRef.current < 1500) return false;
     lcdLastInitTryRef.current = Date.now();
     try {
@@ -507,15 +545,14 @@ function ThermoMotorProtected({
     if (Date.now() < lcdCooldownUntilRef.current) return;
     if (!(await lcdEnsure())) return;
     const t1 = cut16(l1), t2 = cut16(l2);
-    // avoid redundant writes
     const last = lcdLastTextRef.current;
     if (last.l1 === t1 && last.l2 === t2) return;
     try {
       await lcdSetRow(0, t1);
       await lcdSetRow(1, t2);
       lcdLastTextRef.current = { l1: t1, l2: t2 };
-      lcdCooldownUntilRef.current = Date.now() + 250; // small cooldown
-    } catch {/* ignore */}
+      lcdCooldownUntilRef.current = Date.now() + 250;
+    } catch {}
   }
   async function lcdClear() {
     if (!(await lcdEnsure())) return;
@@ -586,7 +623,6 @@ function ThermoMotorProtected({
     (async () => {
       try { 
         await readThermistor(); await readMotorStatus(); await readBuzzerStatus();
-        // warm up LCD (async; ignore errors)
         if (lcdSync) { await lcdEnsure(); await lcdShow("Initializing...", ""); }
       } 
       catch (e:any) { setError(e?.message || "Request failed"); logger.push("system","error","Initial connect failed", { error: String(e?.message || e) }); }
@@ -634,16 +670,14 @@ function ThermoMotorProtected({
             if (alarmActiveRef.current || bz.alarm || bz.state === "on") await stopAlarm();
           }
 
-          // LCD: show alert if active, else normal status
+          // LCD
           if (lcdSync) {
             if (lcdAlerts && Date.now() < lcdAlertUntilRef.current) {
-              // Keep last alert message visible (the effect below sets text on push)
-              // Nothing to do here.
+              // keep alert
             } else {
               const tStr = `T:${temp.toFixed(1)}C`;
               const mStr = motorRef.current === "on" ? "M:ON" : motorRef.current === "off" ? "M:OFF" : "M:?";
               const l1 = `${tStr} ${mStr}`.slice(0, 16);
-
               const uW = logger.unread.warn;
               const uE = logger.unread.err;
               const l2 = (uW || uE) ? `W:${uW} E:${uE}` : "OK";
@@ -669,7 +703,7 @@ function ThermoMotorProtected({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseURL, auto, syncLEDs, buzzEnable, buzzLatch, lcdSync, lcdAlerts]);
 
-  // Mirror NEW warn/error log entries to LCD for a few seconds
+  // Mirror NEW warn/error log entries to LCD
   const lastLogCountRef = useRef(0);
   useEffect(() => {
     const n = logger.logs.length;
@@ -692,6 +726,11 @@ function ThermoMotorProtected({
     catch (e:any) { setError(e?.message || "Request failed"); logger.push("system","error","Action failed", { error: String(e?.message || e) }); }
     finally { setBusy(false); }
   }
+
+  // Derive visual LED states for animations (matches thresholds)
+  const temp = thermo?.temp_c ?? null;
+  const ledRedOn   = temp !== null && temp >= targetC;
+  const ledGreenOn = temp !== null && temp <= (targetC - hyst);
 
   return (
     <>
@@ -824,6 +863,34 @@ function ThermoMotorProtected({
             <div style={{ ...hint }}>
               Alarm starts at ≥ {critC.toFixed(1)} °C. Auto-stops at ≤ {(critC - critHyst).toFixed(1)} °C
               {buzzLatch ? " (latch is ON: requires Silence)" : ""}.
+            </div>
+          </div>
+        </div>
+
+        {/* Live Indicators */}
+        <div style={card}>
+          <div style={{ fontSize: 32 }}>🎛️</div>
+          <div style={cardTitle}>Live Indicators</div>
+
+          <div style={{ display: "grid", gap: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <MotorAnim running={motor === "on"} />
+              <div style={{ color:"#6b7280", fontSize: 13, lineHeight: 1.4 }}>
+                Motor mirrors relay state.<br/>
+                Auto: ON ≥ {targetC.toFixed(1)}°C, OFF ≤ {(targetC - hyst).toFixed(1)}°C.
+              </div>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap:"wrap" }}>
+              <LedDot color="red"   on={!!ledRedOn}   label="RED" />
+              <LedDot color="green" on={!!ledGreenOn} label="GREEN" />
+              <div style={{ color:"#6b7280", fontSize: 13 }}>
+                {temp === null ? "Awaiting reading…" :
+                  ledRedOn ? "Above target (RED on)" :
+                  ledGreenOn ? "Below off-threshold (GREEN on)" :
+                  "Deadband (both off)"}
+                { !syncLEDs && <span> — (LED sync is OFF)</span> }
+              </div>
             </div>
           </div>
         </div>

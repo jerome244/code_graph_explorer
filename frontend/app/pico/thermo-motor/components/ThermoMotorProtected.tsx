@@ -11,6 +11,10 @@ import LedDot from "./LedDot";
 import { jgetPico } from "../lib/api";
 import type { OnOff, MotorState, Thermo, DhtReading } from "../lib/types";
 
+// BMP180 types (pressure/altitude only)
+type BmpStatus = { ready: boolean; addr: string; oss: number };
+type BmpRead   = { ok: boolean; pressure_pa?: number; pressure_hpa?: number; altitude_m?: number; oss?: number; };
+
 export default function ThermoMotorProtected({
   baseURL,
   input,
@@ -56,6 +60,12 @@ export default function ThermoMotorProtected({
   const lcdAlertUntilRef = useRef(0);
   const lcdLastTextRef = useRef<{ l1: string; l2: string }>({ l1: "", l2: "" });
 
+  // ── BMP180 state (pressure/altitude only) ───────────────────
+  const [bmpReady, setBmpReady] = useState<boolean | null>(null);
+  const [bmpOSS, setBmpOSS] = useState<number>(3);           // 0..3
+  const [bmpSLP, setBmpSLP] = useState<number>(1013.25);     // sea-level pressure hPa
+  const [bmp, setBmp] = useState<BmpRead | null>(null);
+
   // Refs/guards
   const autoRef   = useRef(auto);    useEffect(()=>{autoRef.current=auto;},[auto]);
   const motorRef  = useRef<MotorState>(motor); useEffect(()=>{motorRef.current=motor;},[motor]);
@@ -70,7 +80,7 @@ export default function ThermoMotorProtected({
   const buzzOnRef = useRef(buzzOnMs);    useEffect(()=>{buzzOnRef.current=buzzOnMs;},[buzzOnMs]);
   const buzzOffRef = useRef(buzzOffMs);  useEffect(()=>{buzzOffRef.current=buzzOffMs;},[buzzOffMs]);
 
-  const inflightRef = useRef(false);
+  const inflightRef = useRef(0); // use a counter to avoid lost resets
   const cooldownUntilRef = useRef(0);
   const backoffUntilRef  = useRef(0);
   const alarmActiveRef   = useRef(false);
@@ -158,7 +168,27 @@ export default function ThermoMotorProtected({
     await lcdBacklightSet(wantOn ? "on" : "off");
   };
 
-  // API
+  // ── BMP180 helpers (pressure/altitude only) ──────────
+  const readBmpStatus = async () => {
+    try {
+      const st = await jget<BmpStatus>(`/api/bmp180/status`);
+      setBmpReady(!!st.ready);
+      if (typeof st.oss === "number") setBmpOSS(st.oss);
+      return st;
+    } catch {
+      setBmpReady(false);
+      return null;
+    }
+  };
+  const readBmp = async () => {
+    try {
+      const js = await jget<BmpRead>(`/api/bmp180/read`, { oss: bmpOSS, slp: bmpSLP });
+      if (js && js.ok) setBmp(js);
+      return js;
+    } catch {/* ignore */}
+  };
+
+  // API (thermistor/DHT/relay/buzzer)
   const readThermistor = async () => {
     if (Date.now() < backoffUntilRef.current) return thermo;
     try {
@@ -247,6 +277,10 @@ export default function ThermoMotorProtected({
         await readBuzzerStatus();
         await lcdEnsure();
         if (lcdSync && lcdReady) { await lcdShow("Initializing...", ""); }
+
+        // BMP180
+        const st = await readBmpStatus();
+        if (st?.ready) await readBmp();
       } catch (e:any) {
         setError(e?.message || "Request failed");
         logger.push("system","error","Initial connect failed",{error:String(e?.message||e)});
@@ -260,7 +294,7 @@ export default function ThermoMotorProtected({
     if (!baseURL) return;
     const tick = async () => {
       if (inflightRef.current) return;
-      inflightRef.current = true;
+      inflightRef.current = 1;
       try {
         const t = await readThermistor();
         await readHumidity();
@@ -327,7 +361,7 @@ export default function ThermoMotorProtected({
       } catch (e:any) {
         setError(e?.message || "Request failed");
       } finally {
-        inflightRef.current = false;
+        inflightRef.current = 0;
       }
     };
     const id = setInterval(tick, 1500);
@@ -371,6 +405,9 @@ export default function ThermoMotorProtected({
               await readMotorStatus();
               await readBuzzerStatus();
               await lcdEnsure();
+              // BMP
+              const st = await readBmpStatus();
+              if (st?.ready) await readBmp();
             })}
             style={btnDark}
           >
@@ -453,6 +490,53 @@ export default function ThermoMotorProtected({
           </div>
           <div style={{ ...row, marginTop: 10 }}>
             <button onClick={() => safe(readHumidity)} style={btnLight} disabled={!baseURL || busy}>Read humidity</button>
+          </div>
+        </div>
+
+        {/* NEW: BMP180 — pressure & altitude ONLY (no temperature) */}
+        <div style={card}>
+          <div style={{ fontSize: 32 }}>⛰️</div>
+          <div style={cardTitle}>BMP180 (Pressure/Altitude)</div>
+          <div style={{ ...cardDesc, marginBottom: 8 }}>
+            <b>No temperature from BMP180 is used here.</b> Readings come from <code>/api/bmp180/*</code>.
+          </div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ ...row, justifyContent: "space-between" }}>
+              <div style={cardDesc}>OSS (0..3)</div>
+              <input
+                type="number" min={0} max={3} step={1}
+                value={bmpOSS}
+                onChange={(e)=>setBmpOSS(Math.max(0, Math.min(3, Number(e.target.value))))}
+                style={{ width: 110, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
+              />
+            </div>
+
+            <div style={{ ...row, justifyContent: "space-between" }}>
+              <div style={cardDesc}>Sea level pressure (hPa)</div>
+              <input
+                type="number" step={0.01} min={300} max={1100}
+                value={bmpSLP}
+                onChange={(e)=>setBmpSLP(Number(e.target.value))}
+                style={{ width: 140, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
+              />
+            </div>
+
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button onClick={() => safe(readBmpStatus)} style={btnLight} disabled={!baseURL || busy}>Status</button>
+              <button onClick={() => safe(readBmp)} style={btnLight} disabled={!baseURL || busy}>Read</button>
+              <span style={pill}>
+                {bmpReady == null ? "—" : bmpReady ? "Ready" : "Not ready"}
+              </span>
+            </div>
+
+            <div style={{ fontSize: 28, fontWeight: 800, color: "#111827" }}>
+              {bmp?.pressure_hpa != null ? `${bmp.pressure_hpa.toFixed(2)} hPa` : "— hPa"}
+            </div>
+            <div style={{ color: "#374151" }}>
+              Altitude: {bmp?.altitude_m != null ? `${bmp.altitude_m.toFixed(1)} m` : "—"}
+              {bmp?.oss != null ? <span style={{ marginLeft: 10, color: "#6b7280" }}>OSS: {bmp.oss}</span> : null}
+            </div>
           </div>
         </div>
 

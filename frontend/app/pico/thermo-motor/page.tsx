@@ -31,6 +31,7 @@ const LS_LOCK  = "pico_secure_lock";
 const LS_TTL   = "pico_secure_ttl";
 const LS_SESS  = "pico_secure_session";
 const LS_LOG   = "pico_event_log";
+const LS_LOG_SEEN = "pico_event_seen"; // last-seen timestamp for unread counts
 
 /** ─────────────────────────────────────────────────────────────
  *  Types
@@ -99,7 +100,7 @@ async function jgetPico<T=any>(baseURL: string, picoPath: string, qs?: Record<st
 }
 
 /** ─────────────────────────────────────────────────────────────
- *  LOGGING: hook + panel
+ *  LOGGING with unread support
  *  ────────────────────────────────────────────────────────────*/
 function useLogger() {
   const [logs, setLogs] = useState<LogItem[]>([]);
@@ -109,8 +110,10 @@ function useLogger() {
     q: "",
     time: "1h",
   });
+  const [seenTs, setSeenTs] = useState<number>(() => {
+    const n = Number(localStorage.getItem(LS_LOG_SEEN)); return Number.isFinite(n) ? n : 0;
+  });
 
-  // load once
   useEffect(() => {
     try {
       const js = JSON.parse(localStorage.getItem(LS_LOG) || "[]");
@@ -130,15 +133,13 @@ function useLogger() {
     };
     setLogs(prev => {
       const arr = [...prev, item];
-      // keep last 500
       if (arr.length > 500) arr.splice(0, arr.length - 500);
       persist(arr);
       return arr;
     });
   }
 
-  function clear() { setLogs([]); persist([]); }
-
+  function clear() { setLogs([]); persist([]); markAllRead(); }
   function exportJSON() {
     const blob = new Blob([JSON.stringify(logs, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -146,6 +147,22 @@ function useLogger() {
     a.href = url; a.download = "pico-log.json"; a.click();
     URL.revokeObjectURL(url);
   }
+
+  function markAllRead() {
+    const ts = Date.now();
+    setSeenTs(ts);
+    localStorage.setItem(LS_LOG_SEEN, String(ts));
+  }
+
+  const unread = useMemo(() => {
+    let warn = 0, err = 0;
+    for (const it of logs) {
+      if (it.ts <= seenTs) continue;
+      if (it.level === "warn") warn++;
+      if (it.level === "error") err++;
+    }
+    return { warn, err, total: warn + err };
+  }, [logs, seenTs]);
 
   const filtered = useMemo(() => {
     const now = Date.now();
@@ -159,7 +176,6 @@ function useLogger() {
       }
     })();
     const q = filters.q.trim().toLowerCase();
-
     return [...logs].filter(it => {
       if (!filters.kinds[it.kind]) return false;
       if (filters.level !== "all" && it.level !== filters.level) return false;
@@ -169,7 +185,7 @@ function useLogger() {
     }).sort((a,b) => b.ts - a.ts);
   }, [logs, filters]);
 
-  return { logs, filtered, filters, setFilters, push, clear, exportJSON };
+  return { logs, filtered, filters, setFilters, push, clear, exportJSON, unread, markAllRead };
 }
 
 function badge(kind: LogKind) {
@@ -182,7 +198,6 @@ function badge(kind: LogKind) {
   };
   return map[kind];
 }
-
 function levelColor(level: LogLevel) {
   const base: React.CSSProperties = { fontWeight: 800 };
   if (level === "error") return { ...base, color: "#b91c1c" };
@@ -191,66 +206,53 @@ function levelColor(level: LogLevel) {
 }
 
 function LogPanel({
-  filtered, filters, setFilters, clear, exportJSON,
+  filtered, filters, setFilters, clear, exportJSON, unread, markAllRead,
 }: {
   filtered: LogItem[];
   filters: LogFilters;
   setFilters: React.Dispatch<React.SetStateAction<LogFilters>>;
   clear: () => void;
   exportJSON: () => void;
+  unread: { warn: number; err: number; total: number };
+  markAllRead: () => void;
 }) {
   return (
     <div style={{ ...card, gridColumn: "1 / -1" }}>
-      <div style={{ fontSize: 18, fontWeight: 800, color: "#111827" }}>Log</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: "#111827" }}>
+          Log {unread.total ? <span style={{ marginLeft: 8, fontSize: 12, color: "#b45309" }}>(Unread W:{unread.warn} E:{unread.err})</span> : null}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={markAllRead} style={btnLight}>Mark all read</button>
+          <button onClick={exportJSON} style={btnLight}>Export JSON</button>
+          <button onClick={clear} style={btnWarn}>Clear</button>
+        </div>
+      </div>
 
       {/* Filters */}
       <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr auto", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <label style={{ ...row, color: "#374151" }}>
-            <input
-              type="checkbox"
-              checked={filters.kinds.access}
-              onChange={(e)=>setFilters(s => ({ ...s, kinds: { ...s.kinds, access: e.target.checked } }))}
-            /> Access
+            <input type="checkbox" checked={filters.kinds.access} onChange={(e)=>setFilters(s => ({ ...s, kinds: { ...s.kinds, access: e.target.checked } }))} /> Access
           </label>
           <label style={{ ...row, color: "#374151" }}>
-            <input
-              type="checkbox"
-              checked={filters.kinds.motor}
-              onChange={(e)=>setFilters(s => ({ ...s, kinds: { ...s.kinds, motor: e.target.checked } }))}
-            /> Motor
+            <input type="checkbox" checked={filters.kinds.motor} onChange={(e)=>setFilters(s => ({ ...s, kinds: { ...s.kinds, motor: e.target.checked } }))} /> Motor
           </label>
           <label style={{ ...row, color: "#374151" }}>
-            <input
-              type="checkbox"
-              checked={filters.kinds.buzzer}
-              onChange={(e)=>setFilters(s => ({ ...s, kinds: { ...s.kinds, buzzer: e.target.checked } }))}
-            /> Buzzer
+            <input type="checkbox" checked={filters.kinds.buzzer} onChange={(e)=>setFilters(s => ({ ...s, kinds: { ...s.kinds, buzzer: e.target.checked } }))} /> Buzzer
           </label>
           <label style={{ ...row, color: "#374151" }}>
-            <input
-              type="checkbox"
-              checked={filters.kinds.system}
-              onChange={(e)=>setFilters(s => ({ ...s, kinds: { ...s.kinds, system: e.target.checked } }))}
-            /> System
+            <input type="checkbox" checked={filters.kinds.system} onChange={(e)=>setFilters(s => ({ ...s, kinds: { ...s.kinds, system: e.target.checked } }))} /> System
           </label>
 
-          <select
-            value={filters.level}
-            onChange={(e)=>setFilters(s => ({ ...s, level: e.target.value as any }))}
-            style={{ padding: 8, borderRadius: 10, border: "1px solid #e5e7eb" }}
-          >
+          <select value={filters.level} onChange={(e)=>setFilters(s => ({ ...s, level: e.target.value as any }))} style={{ padding: 8, borderRadius: 10, border: "1px solid #e5e7eb" }}>
             <option value="all">Level: all</option>
             <option value="info">info</option>
             <option value="warn">warn</option>
             <option value="error">error</option>
           </select>
 
-          <select
-            value={filters.time}
-            onChange={(e)=>setFilters(s => ({ ...s, time: e.target.value as TimePreset }))}
-            style={{ padding: 8, borderRadius: 10, border: "1px solid #e5e7eb" }}
-          >
+          <select value={filters.time} onChange={(e)=>setFilters(s => ({ ...s, time: e.target.value as TimePreset }))} style={{ padding: 8, borderRadius: 10, border: "1px solid #e5e7eb" }}>
             <option value="5m">Last 5m</option>
             <option value="15m">Last 15m</option>
             <option value="1h">Last 1h</option>
@@ -258,17 +260,7 @@ function LogPanel({
             <option value="all">All</option>
           </select>
 
-          <input
-            placeholder="Search…"
-            value={filters.q}
-            onChange={(e)=>setFilters(s => ({ ...s, q: e.target.value }))}
-            style={{ minWidth: 200, padding: 8, borderRadius: 10, border: "1px solid #e5e7eb" }}
-          />
-        </div>
-
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button onClick={exportJSON} style={btnLight}>Export JSON</button>
-          <button onClick={clear} style={btnWarn}>Clear</button>
+          <input placeholder="Search…" value={filters.q} onChange={(e)=>setFilters(s => ({ ...s, q: e.target.value }))} style={{ minWidth: 200, padding: 8, borderRadius: 10, border: "1px solid #e5e7eb" }} />
         </div>
       </div>
 
@@ -299,13 +291,13 @@ function LogPanel({
 }
 
 /** ─────────────────────────────────────────────────────────────
- *  OUTER WRAPPER: handles RFID gate, logger, renders child
+ *  OUTER WRAPPER: RFID gate + logger + passes down
  *  ────────────────────────────────────────────────────────────*/
 export default function ThermoMotorPage() {
   const { input, setInput, baseURL } = useBaseURL();
   const logger = useLogger();
 
-  // Gate state (always mounted)
+  // Gate state
   const [locked, setLocked] = useState(false);
   const [authorized, setAuthorized] = useState(false);
   const [allow, setAllow] = useState<AllowItem[]>([]);
@@ -390,20 +382,22 @@ export default function ThermoMotorPage() {
         />
       )}
 
-      {/* Log always visible (shows gate & app events) */}
+      {/* Log panel shows both gate & app events */}
       <LogPanel
         filtered={logger.filtered}
         filters={logger.filters}
         setFilters={logger.setFilters}
         clear={logger.clear}
         exportJSON={logger.exportJSON}
+        unread={logger.unread}
+        markAllRead={logger.markAllRead}
       />
     </main>
   );
 }
 
 /** ─────────────────────────────────────────────────────────────
- *  CHILD: the full thermo/motor/buzzer app (adds log hooks)
+ *  CHILD APP: controls + LCD mirroring
  *  ────────────────────────────────────────────────────────────*/
 function ThermoMotorProtected({
   baseURL,
@@ -433,11 +427,15 @@ function ThermoMotorProtected({
   const [buzzOnMs, setBuzzOnMs] = useState(400);
   const [buzzOffMs, setBuzzOffMs] = useState(400);
   const [buzzEnable, setBuzzEnable] = useState(true);
-  const [buzzLatch, setBuzzLatch] = useState(false); // auto-stop by default
+  const [buzzLatch, setBuzzLatch] = useState(false);
+
+  // LCD toggles
+  const [lcdSync, setLcdSync] = useState(true);
+  const [lcdAlerts, setLcdAlerts] = useState(true);
 
   const [busy, setBusy] = useState(false);
 
-  // Refs
+  // Refs / guards
   const targetRef = useRef(targetC); useEffect(()=>{targetRef.current=targetC;},[targetC]);
   const hystRef   = useRef(hyst);    useEffect(()=>{hystRef.current=hyst;},[hyst]);
   const autoRef   = useRef(auto);    useEffect(()=>{autoRef.current=auto;},[auto]);
@@ -463,9 +461,68 @@ function ThermoMotorProtected({
 
   const lastErrLogRef = useRef(0);
 
-  // Local proxy helper
+  // LCD state/refs
+  const lcdReadyRef = useRef(false);
+  const lcdLastInitTryRef = useRef(0);
+  const lcdCooldownUntilRef = useRef(0);
+  const lcdAlertUntilRef = useRef(0);
+  const lcdLastTextRef = useRef<{l1:string; l2:string}>({ l1: "", l2: "" });
+
+  // Proxy bound helper
   async function jget<T=any>(p: string, qs?: Record<string,string|number>) {
     return jgetPico<T>(baseURL, p, qs);
+  }
+
+  // LCD helpers
+  function cut16(s: string) { // safe ASCII only
+    // Avoid '°' on HD44780 (not portable); keep A-Z0-9 symbols.
+    s = s.replace(/[^\x20-\x7E]/g, "?");
+    return s.length > 16 ? s.slice(0, 16) : s.padEnd(0);
+  }
+  async function lcdEnsure() {
+    if (!lcdSync || !baseURL) return false;
+    if (lcdReadyRef.current) return true;
+    // throttle re-init tries
+    if (Date.now() - lcdLastInitTryRef.current < 1500) return false;
+    lcdLastInitTryRef.current = Date.now();
+    try {
+      const st = await jget<{ready:boolean}>(`/api/lcd/status`);
+      if (st.ready) { lcdReadyRef.current = true; return true; }
+    } catch {}
+    try {
+      await jget(`/api/lcd/init`, { addr: "0x27", cols: 16, rows: 2 });
+      lcdReadyRef.current = true;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  async function lcdSetRow(row: 0|1, text: string) {
+    if (!lcdSync || !lcdReadyRef.current) return;
+    const t = cut16(text);
+    await jget(`/api/lcd/set`, { row, align: "left", text: t });
+  }
+  async function lcdShow(l1: string, l2: string) {
+    if (!lcdSync) return;
+    if (Date.now() < lcdCooldownUntilRef.current) return;
+    if (!(await lcdEnsure())) return;
+    const t1 = cut16(l1), t2 = cut16(l2);
+    // avoid redundant writes
+    const last = lcdLastTextRef.current;
+    if (last.l1 === t1 && last.l2 === t2) return;
+    try {
+      await lcdSetRow(0, t1);
+      await lcdSetRow(1, t2);
+      lcdLastTextRef.current = { l1: t1, l2: t2 };
+      lcdCooldownUntilRef.current = Date.now() + 250; // small cooldown
+    } catch {/* ignore */}
+  }
+  async function lcdClear() {
+    if (!(await lcdEnsure())) return;
+    try { await jget(`/api/lcd/clear`); lcdLastTextRef.current = { l1: "", l2: "" }; } catch {}
+  }
+  function lcdScheduleAlert(durationMs = 6000) {
+    lcdAlertUntilRef.current = Date.now() + durationMs;
   }
 
   // API wrappers
@@ -501,6 +558,7 @@ function ThermoMotorProtected({
     alarmActiveRef.current = true;
     buzzCooldownUntilRef.current = Date.now() + 300;
     logger.push("buzzer","warn","Alarm START", { on_ms: buzzOnRef.current, off_ms: buzzOffRef.current });
+    lcdScheduleAlert(8000);
     await readBuzzerStatus();
   };
   const stopAlarm = async () => {
@@ -519,7 +577,6 @@ function ThermoMotorProtected({
       await jget(`/api/leds/set`, { red, green });
       lastLEDRef.current = { red, green };
       ledCooldownUntilRef.current = Date.now() + 300;
-      // (optional) could log LED changes; skipping to avoid noise
     } catch {}
   }
 
@@ -527,13 +584,17 @@ function ThermoMotorProtected({
   useEffect(() => {
     if (!baseURL) return;
     (async () => {
-      try { await readThermistor(); await readMotorStatus(); await readBuzzerStatus(); }
+      try { 
+        await readThermistor(); await readMotorStatus(); await readBuzzerStatus();
+        // warm up LCD (async; ignore errors)
+        if (lcdSync) { await lcdEnsure(); await lcdShow("Initializing...", ""); }
+      } 
       catch (e:any) { setError(e?.message || "Request failed"); logger.push("system","error","Initial connect failed", { error: String(e?.message || e) }); }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseURL]);
 
-  // Poll loop
+  // Poll loop + LCD updates
   useEffect(() => {
     if (!baseURL) return;
     const tick = async () => {
@@ -572,12 +633,30 @@ function ThermoMotorProtected({
             const bz = buzzerRef.current;
             if (alarmActiveRef.current || bz.alarm || bz.state === "on") await stopAlarm();
           }
+
+          // LCD: show alert if active, else normal status
+          if (lcdSync) {
+            if (lcdAlerts && Date.now() < lcdAlertUntilRef.current) {
+              // Keep last alert message visible (the effect below sets text on push)
+              // Nothing to do here.
+            } else {
+              const tStr = `T:${temp.toFixed(1)}C`;
+              const mStr = motorRef.current === "on" ? "M:ON" : motorRef.current === "off" ? "M:OFF" : "M:?";
+              const l1 = `${tStr} ${mStr}`.slice(0, 16);
+
+              const uW = logger.unread.warn;
+              const uE = logger.unread.err;
+              const l2 = (uW || uE) ? `W:${uW} E:${uE}` : "OK";
+              await lcdShow(l1, l2);
+            }
+          }
         }
       } catch (e:any) {
         setError(e?.message || "Request failed");
         const now = Date.now();
         if (now - lastErrLogRef.current > 5000) {
           logger.push("system","error","Poll failed", { error: String(e?.message || e) });
+          if (lcdSync && lcdAlerts) { await lcdShow("ERROR: POLL", "See log"); lcdScheduleAlert(4000); }
           lastErrLogRef.current = now;
         }
       } finally {
@@ -588,7 +667,23 @@ function ThermoMotorProtected({
     tick();
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseURL, auto, syncLEDs, buzzEnable, buzzLatch]);
+  }, [baseURL, auto, syncLEDs, buzzEnable, buzzLatch, lcdSync, lcdAlerts]);
+
+  // Mirror NEW warn/error log entries to LCD for a few seconds
+  const lastLogCountRef = useRef(0);
+  useEffect(() => {
+    const n = logger.logs.length;
+    if (!lcdSync || !lcdAlerts || n === 0 || n === lastLogCountRef.current) return;
+    const latest = logger.logs[n - 1];
+    lastLogCountRef.current = n;
+    if (latest.level === "warn" || latest.level === "error") {
+      const lvl = latest.level.toUpperCase();
+      const kind = latest.kind.toUpperCase();
+      const l1 = `${lvl}: ${kind}`;
+      const l2 = (latest.msg || "").toString();
+      (async () => { await lcdShow(l1, l2); lcdScheduleAlert(latest.level === "error" ? 9000 : 6000); })();
+    }
+  }, [logger.logs, lcdSync, lcdAlerts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function safe<T>(fn: () => Promise<T>) {
     if (busy) return;
@@ -621,6 +716,24 @@ function ThermoMotorProtected({
             <input type="checkbox" checked={syncLEDs} onChange={(e)=>setSyncLEDs(e.target.checked)} /> Sync LEDs
           </label>
           <button onClick={onRelock} style={btnLight} title="Re-lock this page">Lock Now</button>
+        </div>
+
+        {/* LCD controls */}
+        <div style={{ ...row, marginTop: 8 }}>
+          <label style={{ ...row, color: "#374151" }}>
+            <input type="checkbox" checked={lcdSync} onChange={(e)=>setLcdSync(e.target.checked)} />
+            LCD sync
+          </label>
+          <label style={{ ...row, color: "#374151" }}>
+            <input type="checkbox" checked={lcdAlerts} onChange={(e)=>setLcdAlerts(e.target.checked)} />
+            LCD alerts from logs
+          </label>
+          <button onClick={() => safe(async () => { await lcdEnsure(); await lcdShow("LCD TEST", "Hello!"); })} style={btnLight}>
+            Test LCD
+          </button>
+          <button onClick={() => safe(lcdClear)} style={btnLight}>
+            Clear LCD
+          </button>
         </div>
       </div>
 

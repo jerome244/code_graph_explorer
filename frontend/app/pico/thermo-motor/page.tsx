@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Shared localStorage key so pages share the Pico base URL
+// Shared localStorage key so all pages share the Pico base URL
 const LS_KEY = "pico_baseURL";
 
 function useBaseURL() {
@@ -58,13 +58,13 @@ export default function ThermoMotorPage() {
   const [targetC, setTargetC] = useState(30);         // motor threshold
   const [hyst, setHyst] = useState(1.0);              // motor hysteresis
   const [syncLEDs, setSyncLEDs] = useState(true);     // physical LEDs
-  // NEW: buzzer safety
+  // Safety buzzer
   const [critC, setCritC] = useState(40);             // critical temperature
   const [critHyst, setCritHyst] = useState(0.5);      // hysteresis for alarm clear
   const [buzzOnMs, setBuzzOnMs] = useState(400);
   const [buzzOffMs, setBuzzOffMs] = useState(400);
   const [buzzEnable, setBuzzEnable] = useState(true);
-  const [buzzLatch, setBuzzLatch] = useState(true);   // require manual silence
+  const [buzzLatch, setBuzzLatch] = useState(false);  // default: auto-stop when cooled
 
   const [busy, setBusy] = useState(false);
 
@@ -76,10 +76,10 @@ export default function ThermoMotorPage() {
   const inflightRef = useRef(false);
   const cooldownUntilRef = useRef(0);        // relay cooldown
   const backoffUntilRef = useRef(0);         // after 5xx
+
   const lastLEDRef = useRef<{ red: OnOff; green: OnOff }>({ red: "off", green: "off" });
   const ledCooldownUntilRef = useRef(0);
 
-  // NEW: buzzer control refs
   const critRef = useRef(critC); useEffect(()=>{critRef.current=critC;},[critC]);
   const critHystRef = useRef(critHyst); useEffect(()=>{critHystRef.current=critHyst;},[critHyst]);
   const buzzEnableRef = useRef(buzzEnable); useEffect(()=>{buzzEnableRef.current=buzzEnable;},[buzzEnable]);
@@ -88,6 +88,8 @@ export default function ThermoMotorPage() {
   const buzzOffRef = useRef(buzzOffMs); useEffect(()=>{buzzOffRef.current=buzzOffMs;},[buzzOffMs]);
   const alarmActiveRef = useRef(false);   // last commanded alarm state
   const buzzCooldownUntilRef = useRef(0);
+  const buzzerRef = useRef<{ state: OnOff; alarm: boolean }>({ state: "off", alarm: false });
+  useEffect(()=>{buzzerRef.current=buzzer;},[buzzer]);
 
   // ─────────────────────── proxy helper ───────────────────────
   async function jgetPico<T = any>(picoPath: string, qs?: Record<string,string|number>): Promise<T> {
@@ -137,7 +139,7 @@ export default function ThermoMotorPage() {
     await jgetPico(`/api/buzzer/alarm`, { cmd: "start", on_ms: buzzOnRef.current, off_ms: buzzOffRef.current });
     alarmActiveRef.current = true;
     buzzCooldownUntilRef.current = Date.now() + 300;
-    setBuzzer({ state: "on", alarm: true });
+    await readBuzzerStatus(); // resync
   };
 
   const stopAlarm = async () => {
@@ -145,7 +147,7 @@ export default function ThermoMotorPage() {
     await jgetPico(`/api/buzzer/alarm`, { cmd: "stop" });
     alarmActiveRef.current = false;
     buzzCooldownUntilRef.current = Date.now() + 300;
-    setBuzzer({ state: "off", alarm: false });
+    await readBuzzerStatus(); // resync
   };
 
   async function setLEDs(red: OnOff, green: OnOff) {
@@ -198,11 +200,24 @@ export default function ThermoMotorPage() {
           // Buzzer safety
           if (buzzEnableRef.current) {
             const crit = critRef.current;
-            const clr = critRef.current - critHystRef.current;
+            const clr  = critRef.current - critHystRef.current;
+            const bz = buzzerRef.current;
+
             if (temp >= crit) {
-              if (!alarmActiveRef.current) await startAlarm();
+              if (!alarmActiveRef.current || !bz.alarm || bz.state !== "on") {
+                await startAlarm();
+              }
             } else if (temp <= clr) {
-              if (alarmActiveRef.current && !buzzLatchRef.current) await stopAlarm();
+              // auto-clear only when not latched
+              if (!buzzLatchRef.current && (alarmActiveRef.current || bz.alarm || bz.state === "on")) {
+                await stopAlarm();
+              }
+            }
+          } else {
+            // safety disabled → ensure buzzer is off
+            const bz = buzzerRef.current;
+            if (alarmActiveRef.current || bz.alarm || bz.state === "on") {
+              await stopAlarm();
             }
           }
         }
@@ -250,7 +265,10 @@ export default function ThermoMotorPage() {
             onChange={(e) => setInput(e.target.value)}
             style={{ width: 320, padding: 10, border: "1px solid #e5e7eb", borderRadius: 10 }}
           />
-          <button onClick={() => safe(async () => { await readThermistor(); await readMotorStatus(); await readBuzzerStatus(); })} style={btnDark}>
+          <button
+            onClick={() => safe(async () => { await readThermistor(); await readMotorStatus(); await readBuzzerStatus(); })}
+            style={btnDark}
+          >
             Connect / Refresh
           </button>
           <span style={pill}>Motor: {motor === "unknown" ? "—" : motor.toUpperCase()}</span>
@@ -303,12 +321,12 @@ export default function ThermoMotorPage() {
           </div>
         </div>
 
-        {/* NEW: Safety buzzer */}
+        {/* Safety buzzer */}
         <div style={card}>
           <div style={{ fontSize: 32 }}>🔔</div>
           <div style={cardTitle}>Safety Buzzer (Critical)</div>
           <div style={{ ...cardDesc, marginBottom: 8 }}>
-            Starts <code>/api/buzzer/alarm</code> when temp ≥ critical. Stops when ≤ (critical − hysteresis), unless latched.
+            Starts <code>/api/buzzer/alarm</code> when temp ≥ critical. Auto-stops at ≤ (critical − hysteresis) unless latched.
           </div>
 
           <div style={{ display: "grid", gap: 10 }}>

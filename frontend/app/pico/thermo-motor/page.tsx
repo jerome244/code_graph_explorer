@@ -30,6 +30,7 @@ const LS_ALLOW = "pico_rfid_allow";
 const LS_LOCK  = "pico_secure_lock";
 const LS_TTL   = "pico_secure_ttl";
 const LS_SESS  = "pico_secure_session";
+const LS_LOG   = "pico_event_log";
 
 /** ─────────────────────────────────────────────────────────────
  *  Types
@@ -38,6 +39,18 @@ type AllowItem = { uid: string; label?: string };
 type OnOff = "on" | "off";
 type MotorState = "on" | "off" | "unknown";
 type Thermo = { raw:number; raw_bits:number; voltage:number; resistance_ohm:number; temp_c:number };
+
+type LogLevel = "info" | "warn" | "error";
+type LogKind  = "access" | "motor" | "buzzer" | "system";
+type LogItem  = { id: string; ts: number; level: LogLevel; kind: LogKind; msg: string; data?: any };
+
+type TimePreset = "all" | "5m" | "15m" | "1h" | "24h";
+type LogFilters = {
+  kinds: Record<LogKind, boolean>;
+  level: LogLevel | "all";
+  q: string;
+  time: TimePreset;
+};
 
 /** ─────────────────────────────────────────────────────────────
  *  Helpers: baseURL & access-control
@@ -86,13 +99,213 @@ async function jgetPico<T=any>(baseURL: string, picoPath: string, qs?: Record<st
 }
 
 /** ─────────────────────────────────────────────────────────────
- *  OUTER WRAPPER: handles RFID gate and renders child
- *  (no early returns with hooks afterwards)
+ *  LOGGING: hook + panel
+ *  ────────────────────────────────────────────────────────────*/
+function useLogger() {
+  const [logs, setLogs] = useState<LogItem[]>([]);
+  const [filters, setFilters] = useState<LogFilters>({
+    kinds: { access: true, motor: true, buzzer: true, system: true },
+    level: "all",
+    q: "",
+    time: "1h",
+  });
+
+  // load once
+  useEffect(() => {
+    try {
+      const js = JSON.parse(localStorage.getItem(LS_LOG) || "[]");
+      if (Array.isArray(js)) setLogs(js);
+    } catch {/* noop */}
+  }, []);
+
+  function persist(arr: LogItem[]) {
+    localStorage.setItem(LS_LOG, JSON.stringify(arr));
+  }
+
+  function push(kind: LogKind, level: LogLevel, msg: string, data?: any) {
+    const item: LogItem = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      ts: Date.now(),
+      level, kind, msg, data
+    };
+    setLogs(prev => {
+      const arr = [...prev, item];
+      // keep last 500
+      if (arr.length > 500) arr.splice(0, arr.length - 500);
+      persist(arr);
+      return arr;
+    });
+  }
+
+  function clear() { setLogs([]); persist([]); }
+
+  function exportJSON() {
+    const blob = new Blob([JSON.stringify(logs, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "pico-log.json"; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const filtered = useMemo(() => {
+    const now = Date.now();
+    const since = (() => {
+      switch (filters.time) {
+        case "5m":  return now - 5 * 60_000;
+        case "15m": return now - 15 * 60_000;
+        case "1h":  return now - 60 * 60_000;
+        case "24h": return now - 24 * 60 * 60_000;
+        default:    return 0;
+      }
+    })();
+    const q = filters.q.trim().toLowerCase();
+
+    return [...logs].filter(it => {
+      if (!filters.kinds[it.kind]) return false;
+      if (filters.level !== "all" && it.level !== filters.level) return false;
+      if (since && it.ts < since) return false;
+      if (q && !(it.msg.toLowerCase().includes(q) || JSON.stringify(it.data||{}).toLowerCase().includes(q))) return false;
+      return true;
+    }).sort((a,b) => b.ts - a.ts);
+  }, [logs, filters]);
+
+  return { logs, filtered, filters, setFilters, push, clear, exportJSON };
+}
+
+function badge(kind: LogKind) {
+  const base: React.CSSProperties = { padding: "2px 8px", borderRadius: 999, fontSize: 12, fontWeight: 700 };
+  const map: Record<LogKind, React.CSSProperties> = {
+    access: { ...base, background: "#eef2ff", color: "#3730a3" },
+    motor:  { ...base, background: "#ecfdf5", color: "#065f46" },
+    buzzer: { ...base, background: "#fff7ed", color: "#9a3412" },
+    system: { ...base, background: "#f1f5f9", color: "#0f172a" },
+  };
+  return map[kind];
+}
+
+function levelColor(level: LogLevel) {
+  const base: React.CSSProperties = { fontWeight: 800 };
+  if (level === "error") return { ...base, color: "#b91c1c" };
+  if (level === "warn")  return { ...base, color: "#b45309" };
+  return { ...base, color: "#064e3b" };
+}
+
+function LogPanel({
+  filtered, filters, setFilters, clear, exportJSON,
+}: {
+  filtered: LogItem[];
+  filters: LogFilters;
+  setFilters: React.Dispatch<React.SetStateAction<LogFilters>>;
+  clear: () => void;
+  exportJSON: () => void;
+}) {
+  return (
+    <div style={{ ...card, gridColumn: "1 / -1" }}>
+      <div style={{ fontSize: 18, fontWeight: 800, color: "#111827" }}>Log</div>
+
+      {/* Filters */}
+      <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr auto", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <label style={{ ...row, color: "#374151" }}>
+            <input
+              type="checkbox"
+              checked={filters.kinds.access}
+              onChange={(e)=>setFilters(s => ({ ...s, kinds: { ...s.kinds, access: e.target.checked } }))}
+            /> Access
+          </label>
+          <label style={{ ...row, color: "#374151" }}>
+            <input
+              type="checkbox"
+              checked={filters.kinds.motor}
+              onChange={(e)=>setFilters(s => ({ ...s, kinds: { ...s.kinds, motor: e.target.checked } }))}
+            /> Motor
+          </label>
+          <label style={{ ...row, color: "#374151" }}>
+            <input
+              type="checkbox"
+              checked={filters.kinds.buzzer}
+              onChange={(e)=>setFilters(s => ({ ...s, kinds: { ...s.kinds, buzzer: e.target.checked } }))}
+            /> Buzzer
+          </label>
+          <label style={{ ...row, color: "#374151" }}>
+            <input
+              type="checkbox"
+              checked={filters.kinds.system}
+              onChange={(e)=>setFilters(s => ({ ...s, kinds: { ...s.kinds, system: e.target.checked } }))}
+            /> System
+          </label>
+
+          <select
+            value={filters.level}
+            onChange={(e)=>setFilters(s => ({ ...s, level: e.target.value as any }))}
+            style={{ padding: 8, borderRadius: 10, border: "1px solid #e5e7eb" }}
+          >
+            <option value="all">Level: all</option>
+            <option value="info">info</option>
+            <option value="warn">warn</option>
+            <option value="error">error</option>
+          </select>
+
+          <select
+            value={filters.time}
+            onChange={(e)=>setFilters(s => ({ ...s, time: e.target.value as TimePreset }))}
+            style={{ padding: 8, borderRadius: 10, border: "1px solid #e5e7eb" }}
+          >
+            <option value="5m">Last 5m</option>
+            <option value="15m">Last 15m</option>
+            <option value="1h">Last 1h</option>
+            <option value="24h">Last 24h</option>
+            <option value="all">All</option>
+          </select>
+
+          <input
+            placeholder="Search…"
+            value={filters.q}
+            onChange={(e)=>setFilters(s => ({ ...s, q: e.target.value }))}
+            style={{ minWidth: 200, padding: 8, borderRadius: 10, border: "1px solid #e5e7eb" }}
+          />
+        </div>
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button onClick={exportJSON} style={btnLight}>Export JSON</button>
+          <button onClick={clear} style={btnWarn}>Clear</button>
+        </div>
+      </div>
+
+      {/* List */}
+      <div style={{ display: "grid", gap: 8, marginTop: 6, maxHeight: 380, overflow: "auto" }}>
+        {filtered.length === 0 ? (
+          <div style={{ color: "#6b7280" }}>No log entries.</div>
+        ) : filtered.map(it => (
+          <div key={it.id} style={{ display: "grid", gridTemplateColumns: "160px 90px 1fr", gap: 10, alignItems: "baseline", border: "1px solid #e5e7eb", borderRadius: 10, padding: 10 }}>
+            <div style={{ color: "#374151", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}>
+              {new Date(it.ts).toLocaleString()}
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={badge(it.kind)}>{it.kind.toUpperCase()}</span>
+              <span style={levelColor(it.level)}>{it.level}</span>
+            </div>
+            <div>
+              <div style={{ color: "#111827", fontWeight: 600 }}>{it.msg}</div>
+              {it.data ? (
+                <pre style={{ margin: 0, color: "#6b7280", fontSize: 12, overflow: "auto" }}>{JSON.stringify(it.data, null, 2)}</pre>
+              ) : null}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** ─────────────────────────────────────────────────────────────
+ *  OUTER WRAPPER: handles RFID gate, logger, renders child
  *  ────────────────────────────────────────────────────────────*/
 export default function ThermoMotorPage() {
   const { input, setInput, baseURL } = useBaseURL();
+  const logger = useLogger();
 
-  // Gate state/hooks (always called)
+  // Gate state (always mounted)
   const [locked, setLocked] = useState(false);
   const [authorized, setAuthorized] = useState(false);
   const [allow, setAllow] = useState<AllowItem[]>([]);
@@ -115,11 +328,13 @@ export default function ThermoMotorPage() {
     try {
       const js = await jgetPico<{ uid: string|null; at_ms: number; age_ms: number }>(baseURL, "/api/rfid/scan", { ms: 3000 });
       if (!js.uid) { setGateError("No tag detected. Hold the card on the reader."); return; }
-      if (!allow.some(x => x.uid === js.uid)) { setGateError(`UID ${js.uid} is not allowed.`); return; }
+      if (!allow.some(x => x.uid === js.uid)) { setGateError(`UID ${js.uid} is not allowed.`); logger.push("access","warn","Denied tag", { uid: js.uid }); return; }
       grantSession(js.uid, ttl);
       setAuthorized(true);
+      logger.push("access","info","Access granted", { uid: js.uid, ttl });
     } catch (e: any) {
       setGateError(e?.message || "Scan failed");
+      logger.push("access","error","Scan failed", { error: String(e?.message || e) });
     } finally {
       setGateBusy(false);
     }
@@ -127,7 +342,7 @@ export default function ThermoMotorPage() {
 
   return (
     <main style={pageWrap}>
-      {/* Header (always shown) */}
+      {/* Header */}
       <div style={headerBar}>
         <div>
           <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 4 }}>Thermo ⇄ Motor + Safety</h1>
@@ -139,7 +354,7 @@ export default function ThermoMotorPage() {
         <Link href="/pico" style={{ color: "#374151", textDecoration: "none" }}>← Back</Link>
       </div>
 
-      {/* If locked & not authorized → show gate; else render protected app */}
+      {/* Gate or App */}
       {locked && !authorized ? (
         <>
           <div style={{ ...card, marginBottom: 16 }}>
@@ -164,36 +379,44 @@ export default function ThermoMotorPage() {
               </div>
             )}
           </div>
-
-          <div style={{ border: "1px dashed #e5e7eb", borderRadius: 12, padding: 16, color: "#6b7280" }}>
-            Tip: Add your tag in <b>Access Control</b>, enable the lock, and set a session TTL. Then scan here to enter.
-          </div>
         </>
       ) : (
         <ThermoMotorProtected
           baseURL={baseURL}
           input={input}
           setInput={setInput}
-          onRelock={() => { revokeSession(); setAuthorized(false); }}
+          onRelock={() => { revokeSession(); setAuthorized(false); logger.push("access","info","Session revoked manually"); }}
+          logger={logger}
         />
       )}
+
+      {/* Log always visible (shows gate & app events) */}
+      <LogPanel
+        filtered={logger.filtered}
+        filters={logger.filters}
+        setFilters={logger.setFilters}
+        clear={logger.clear}
+        exportJSON={logger.exportJSON}
+      />
     </main>
   );
 }
 
 /** ─────────────────────────────────────────────────────────────
- *  CHILD: the full thermo/motor/buzzer app (all control hooks live here)
+ *  CHILD: the full thermo/motor/buzzer app (adds log hooks)
  *  ────────────────────────────────────────────────────────────*/
 function ThermoMotorProtected({
   baseURL,
   input,
   setInput,
   onRelock,
+  logger,
 }: {
   baseURL: string;
   input: string;
   setInput: (v: string) => void;
   onRelock: () => void;
+  logger: ReturnType<typeof useLogger>;
 }) {
   const [thermo, setThermo] = useState<Thermo | null>(null);
   const [motor, setMotor] = useState<MotorState>("unknown");
@@ -238,7 +461,9 @@ function ThermoMotorProtected({
   const buzzerRef = useRef<{ state: OnOff; alarm: boolean }>({ state: "off", alarm: false });
   useEffect(()=>{buzzerRef.current=buzzer;},[buzzer]);
 
-  // Local proxy helper bound to this baseURL
+  const lastErrLogRef = useRef(0);
+
+  // Local proxy helper
   async function jget<T=any>(p: string, qs?: Record<string,string|number>) {
     return jgetPico<T>(baseURL, p, qs);
   }
@@ -263,6 +488,7 @@ function ThermoMotorProtected({
     await jget(`/api/relay`, { state });
     setMotor(state); motorRef.current = state;
     cooldownUntilRef.current = Date.now() + 2500;
+    logger.push("motor","info",`Motor ${state.toUpperCase()}`);
     setTimeout(() => { readMotorStatus().catch(()=>{}); }, 1200);
   };
   const readBuzzerStatus = async () => {
@@ -274,6 +500,7 @@ function ThermoMotorProtected({
     await jget(`/api/buzzer/alarm`, { cmd: "start", on_ms: buzzOnRef.current, off_ms: buzzOffRef.current });
     alarmActiveRef.current = true;
     buzzCooldownUntilRef.current = Date.now() + 300;
+    logger.push("buzzer","warn","Alarm START", { on_ms: buzzOnRef.current, off_ms: buzzOffRef.current });
     await readBuzzerStatus();
   };
   const stopAlarm = async () => {
@@ -281,6 +508,7 @@ function ThermoMotorProtected({
     await jget(`/api/buzzer/alarm`, { cmd: "stop" });
     alarmActiveRef.current = false;
     buzzCooldownUntilRef.current = Date.now() + 300;
+    logger.push("buzzer","info","Alarm STOP");
     await readBuzzerStatus();
   };
   async function setLEDs(red: OnOff, green: OnOff) {
@@ -291,6 +519,7 @@ function ThermoMotorProtected({
       await jget(`/api/leds/set`, { red, green });
       lastLEDRef.current = { red, green };
       ledCooldownUntilRef.current = Date.now() + 300;
+      // (optional) could log LED changes; skipping to avoid noise
     } catch {}
   }
 
@@ -298,8 +527,8 @@ function ThermoMotorProtected({
   useEffect(() => {
     if (!baseURL) return;
     (async () => {
-      try { await readThermistor(); await readMotorStatus(); await readBuzzerStatus(); } 
-      catch (e:any) { setError(e?.message || "Request failed"); }
+      try { await readThermistor(); await readMotorStatus(); await readBuzzerStatus(); }
+      catch (e:any) { setError(e?.message || "Request failed"); logger.push("system","error","Initial connect failed", { error: String(e?.message || e) }); }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseURL]);
@@ -346,6 +575,11 @@ function ThermoMotorProtected({
         }
       } catch (e:any) {
         setError(e?.message || "Request failed");
+        const now = Date.now();
+        if (now - lastErrLogRef.current > 5000) {
+          logger.push("system","error","Poll failed", { error: String(e?.message || e) });
+          lastErrLogRef.current = now;
+        }
       } finally {
         inflightRef.current = false;
       }
@@ -360,7 +594,7 @@ function ThermoMotorProtected({
     if (busy) return;
     setBusy(true);
     try { return await fn(); }
-    catch (e:any) { setError(e?.message || "Request failed"); }
+    catch (e:any) { setError(e?.message || "Request failed"); logger.push("system","error","Action failed", { error: String(e?.message || e) }); }
     finally { setBusy(false); }
   }
 

@@ -1,6 +1,5 @@
 // frontend/app/pico/page.tsx
 import Link from "next/link";
-import LcdGreeter from "./thermo-motor/components/LcdGreeter";
 
 export default function PicoDashboard() {
   return (
@@ -9,9 +8,6 @@ export default function PicoDashboard() {
         Raspberry Pi Pico W
       </h1>
       <p style={{ color: "#6b7280", marginBottom: 24 }}>Choose a tool:</p>
-
-      {/* Ensures the LCD is initialized, backlight on, and shows a greeting */}
-      <LcdGreeter />
 
       <div
         style={{

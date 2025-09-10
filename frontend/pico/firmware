@@ -1,5 +1,5 @@
 /*
-  Pico W — LED · RFID · Relay (non-blocking pulse) · Thermistor · Buzzer · DHT11 · LCD1602 · Dual LEDs (HTTP API)
+  Pico W — LED · RFID · Relay (non-blocking pulse) · Thermistor · Buzzer · DHT11 · LCD1602 · Dual LEDs · BMP180 (HTTP API)
 
   Endpoints (GET):
     /api/status                    -> {state:"off|on|blinking"}
@@ -39,12 +39,17 @@
     /api/lcd/print?row=R&col=C&text=...
     /api/lcd/scroll?dir=left|right&steps=1..40
 
-    // NEW: Dual external LEDs on GP10 (red) & GP11 (green)
+    // Dual external LEDs on GP10 (red) & GP11 (green)
     /api/leds/status               -> {red:{state},green:{state}}
     /api/leds/set?red=on|off&green=on|off
     /api/leds/red?state=on|off
     /api/leds/green?state=on|off
     /api/leds/blink?color=red|green|both&hz=1..20
+
+    // NEW: BMP180 barometer
+    /api/bmp180/status             -> {ready,addr,oss}
+    /api/bmp180/read[?oss=0..3&slp=1013.25]
+                                   -> {ok,temp_c,pressure_pa,pressure_hpa,altitude_m,oss}
 
   Pins (defaults):
     LED_BUILTIN
@@ -55,16 +60,15 @@
     RFID (SPI0)    SS->GP17, SCK->GP18, MOSI->GP19, MISO->GP16, RST->GP22
     THERMISTOR ADC GP26 (ADC0), divider selectable with NTC_TO_3V3
 
-    // NEW:
-    LED_RED_PIN    GP10 (series 330–1kΩ to LED anode, LED cathode to GND)
-    LED_GREEN_PIN  GP11 (series 330–1kΩ to LED anode, LED cathode to GND)
+    LED_RED_PIN    GP10 (series resistor)
+    LED_GREEN_PIN  GP11 (series resistor)
 */
 
 #include <WiFi.h>
 #include <WebServer.h>
 #include <SPI.h>
 
-// RFID clone-friendly speed
+// RFID
 #define MFRC522_SPICLOCK 4000000
 #include <MFRC522.h>
 #include <math.h>
@@ -86,6 +90,12 @@ uint8_t lcdAddr = LCD_I2C_DEFAULT_ADDR;
 uint8_t lcdCols = 16, lcdRows = 2;
 bool lcdReady = false;
 bool lcdBacklightOn = true;
+
+// BMP180 (I²C)
+#include <Adafruit_BMP085.h>   // Adafruit BMP085/BMP180
+Adafruit_BMP085 bmp;
+bool bmpReady = false;
+uint8_t bmpOSS = 3; // 0..3
 
 // ================= WIFI =================
 const char* SSID     = "";
@@ -811,6 +821,56 @@ void handleLedsBlink() {
   server.send(200, "application/json", json);
 }
 
+// ----------------- BMP180 Handlers -----------------
+static uint8_t ossToMode(uint8_t oss) {
+  switch (oss) {
+    case 0: return BMP085_ULTRALOWPOWER;
+    case 1: return BMP085_STANDARD;
+    case 2: return BMP085_HIGHRES;
+    default: return BMP085_ULTRAHIGHRES;
+  }
+}
+static bool ensureBMP(uint8_t oss) {
+  if (!bmpReady || oss != bmpOSS) {
+    bmpOSS = oss;
+    bmpReady = bmp.begin(ossToMode(oss));
+  }
+  return bmpReady;
+}
+void handleBmpStatus() {
+  enableCORS();
+  String json = "{";
+  json += "\"ready\":" + String(bmpReady ? "true" : "false");
+  json += ",\"addr\":\"0x77\"";
+  json += ",\"oss\":" + String((int)bmpOSS);
+  json += "}";
+  server.send(200, "application/json", json);
+}
+void handleBmpRead() {
+  enableCORS();
+  uint8_t oss = server.hasArg("oss") ? (uint8_t) constrain(server.arg("oss").toInt(), 0, 3) : bmpOSS;
+  if (!ensureBMP(oss)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"bmp not found\"}");
+    return;
+  }
+  float slp_hpa = server.hasArg("slp") ? server.arg("slp").toFloat() : 1013.25f;
+  if (slp_hpa < 300.0f || slp_hpa > 1100.0f) slp_hpa = 1013.25f;
+
+  float tC = bmp.readTemperature();          // °C
+  long  pPa = bmp.readPressure();            // Pa
+  float alt = bmp.readAltitude(slp_hpa * 100.0f); // m
+
+  String json = "{";
+  json += "\"ok\":true";
+  json += ",\"temp_c\":" + String(tC, 2);
+  json += ",\"pressure_pa\":" + String((long)pPa);
+  json += ",\"pressure_hpa\":" + String((float)pPa / 100.0f, 2);
+  json += ",\"altitude_m\":" + String(alt, 1);
+  json += ",\"oss\":" + String((int)oss);
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
 // ----------------- Misc -----------------
 void handleOptions() { enableCORS(); server.send(204); }
 void handleNotFound() { enableCORS(); server.send(404, "text/plain", "Not found"); }
@@ -826,7 +886,7 @@ void setup() {
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
 
-  // NEW: dual LEDs pins
+  // dual LEDs pins
   pinMode(LED_RED_PIN, OUTPUT);   digitalWrite(LED_RED_PIN, LOW);
   pinMode(LED_GREEN_PIN, OUTPUT); digitalWrite(LED_GREEN_PIN, LOW);
 
@@ -850,6 +910,9 @@ void setup() {
   // I2C for LCD + auto-init
   LCD_BeginWire();
   LCD_Create(LCD_I2C_DEFAULT_ADDR, 16, 2);
+
+  // Try BMP180
+  bmpReady = bmp.begin(ossToMode(bmpOSS));
 
   // Routes
   server.on("/api/status",          HTTP_GET, handleStatus);
@@ -886,12 +949,16 @@ void setup() {
   server.on("/api/lcd/print",       HTTP_GET, handleLcdPrint);
   server.on("/api/lcd/scroll",      HTTP_GET, handleLcdScroll);
 
-  // NEW: Dual LEDs routes
+  // Dual LEDs routes
   server.on("/api/leds/status",     HTTP_GET, handleLedsStatus);
   server.on("/api/leds/set",        HTTP_GET, handleLedsSet);
   server.on("/api/leds/red",        HTTP_GET, handleLedRed);
   server.on("/api/leds/green",      HTTP_GET, handleLedGreen);
   server.on("/api/leds/blink",      HTTP_GET, handleLedsBlink);
+
+  // BMP180 routes
+  server.on("/api/bmp180/status",   HTTP_GET, handleBmpStatus);
+  server.on("/api/bmp180/read",     HTTP_GET, handleBmpRead);
 
   // CORS preflight
   server.on("/",                    HTTP_OPTIONS, handleOptions);
@@ -929,12 +996,16 @@ void setup() {
   server.on("/api/lcd/print",       HTTP_OPTIONS, handleOptions);
   server.on("/api/lcd/scroll",      HTTP_OPTIONS, handleOptions);
 
-  // NEW: Dual LEDs CORS preflight
+  // Dual LEDs CORS
   server.on("/api/leds/status",     HTTP_OPTIONS, handleOptions);
   server.on("/api/leds/set",        HTTP_OPTIONS, handleOptions);
   server.on("/api/leds/red",        HTTP_OPTIONS, handleOptions);
   server.on("/api/leds/green",      HTTP_OPTIONS, handleOptions);
   server.on("/api/leds/blink",      HTTP_OPTIONS, handleOptions);
+
+  // BMP180 CORS
+  server.on("/api/bmp180/status",   HTTP_OPTIONS, handleOptions);
+  server.on("/api/bmp180/read",     HTTP_OPTIONS, handleOptions);
 
   server.onNotFound(handleNotFound);
   server.begin();
@@ -981,7 +1052,7 @@ void loop() {
     }
   }
 
-  // NEW: Dual LEDs non-blocking blink
+  // Dual LEDs non-blocking blink
   unsigned long _now = millis();
   if (redMode == L2_BLINK && (_now - redLastToggle) >= redBlinkIntervalMs) {
     redLevel = !redLevel; digitalWrite(LED_RED_PIN, redLevel ? HIGH : LOW); redLastToggle = _now;

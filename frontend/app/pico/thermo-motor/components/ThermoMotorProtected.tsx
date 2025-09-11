@@ -424,27 +424,50 @@ export default function ThermoMotorProtected({
             <input type="checkbox" checked={syncLEDs} onChange={(e)=>setSyncLEDs(e.target.checked)} /> Sync LEDs
           </label>
 
-          {/* LCD controls */}
-          <label style={{ ...row, color: "#374151" }}>
-            <input type="checkbox" checked={lcdSync} onChange={(e)=>setLcdSync(e.target.checked)} />
-            LCD sync
-          </label>
-          <label style={{ ...row, color: "#374151" }}>
-            <input type="checkbox" checked={lcdAlerts} onChange={(e)=>setLcdAlerts(e.target.checked)} />
-            LCD alerts
-          </label>
-          <button onClick={() => safe(async () => { await lcdEnsure(); await lcdShow("LCD TEST","Hello!"); })} style={btnLight}>
-            Test LCD
-          </button>
-          <button onClick={() => safe(lcdClear)} style={btnLight}>Clear LCD</button>
-          <button
-            onClick={() => safe(lcdBacklightToggle)}
-            style={btnLight}
-            title={lcdReady ? "Toggle LCD backlight" : "LCD not initialized"}
-            disabled={!baseURL || busy}
-          >
-            {lcdBacklight == null ? "LCD Light" : (lcdBacklight ? "LCD Light OFF" : "LCD Light ON")}
-          </button>
+{/* LCD controls */}
+<button
+  onClick={() => setLcdSync(!lcdSync)}
+  style={btnLight}
+>
+  LCD Sync
+</button>
+
+<button
+  onClick={() => setLcdAlerts(!lcdAlerts)}
+  style={btnLight}
+>
+  LCD Alerts
+</button>
+
+<button
+  onClick={() =>
+    safe(async () => {
+      await lcdEnsure();
+      await lcdShow("LCD TEST", "Hello!");
+    })
+  }
+  style={btnLight}
+>
+  Test LCD
+</button>
+
+<button onClick={() => safe(lcdClear)} style={btnLight}>
+  Clear LCD
+</button>
+
+<button
+  onClick={() => safe(lcdBacklightToggle)}
+  style={btnLight}
+  title={lcdReady ? "Toggle LCD backlight" : "LCD not initialized"}
+  disabled={!baseURL || busy}
+>
+  {lcdBacklight == null
+    ? "LCD Light"
+    : lcdBacklight
+    ? "LCD Light OFF"
+    : "LCD Light ON"}
+</button>
+
 
           <button onClick={onRelock} style={btnLight} title="Re-lock this page">Lock Now</button>
         </div>

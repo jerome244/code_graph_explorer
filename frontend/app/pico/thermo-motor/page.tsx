@@ -7,10 +7,19 @@ import { pageWrap, headerBar } from "./components/ui";
 import ThermoMotorProtected from "./components/ThermoMotorProtected";
 import LogPanel from "./components/LogPanel";
 import { useBaseURL, useLogger } from "./lib/hooks";
-import { grantSession, isLocked, readAllow, readSession, readTTL, revokeSession } from "./lib/storage";
+import {
+  grantSession,
+  isLocked,
+  readAllow,
+  readSession,
+  readTTL,
+  revokeSession,
+  // NEW: setter so "Lock now" actually locks
+  setLocked as setLockedInStorage,
+} from "./lib/storage";
 import { jgetPico } from "./lib/api";
 import type { AllowItem } from "./lib/types";
-import { btnDark, btnLight, card, errorBox, row } from "./components/ui";
+import { btnDark, card, errorBox, row } from "./components/ui";
 
 export default function Page() {
   const { input, setInput, baseURL } = useBaseURL();
@@ -23,28 +32,60 @@ export default function Page() {
   const [gateBusy, setGateBusy] = useState(false);
   const [gateError, setGateError] = useState("");
 
-  useEffect(() => {
+  // Recompute UI auth state from storage
+  function refreshAuth() {
     const lk = isLocked();
     setLocked(lk);
     setAllow(readAllow());
     setTTL(readTTL());
     const s = readSession();
     setAuthorized(!lk || !!s);
+  }
+
+  useEffect(() => {
+    refreshAuth();
+    // Keep in sync if other tabs/pages change storage
+    const onStorage = (e: StorageEvent) => {
+      if (!e.key) return;
+      if (
+        e.key.includes("pico.locked") ||
+        e.key.includes("pico.session") ||
+        e.key.includes("pico.allow") ||
+        e.key.includes("pico.ttl")
+      ) {
+        refreshAuth();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function scanGrant() {
     setGateError("");
     setGateBusy(true);
     try {
-      const js = await jgetPico<{ uid: string|null; at_ms: number; age_ms: number }>(baseURL, "/api/rfid/scan", { ms: 3000 });
-      if (!js.uid) { setGateError("No tag detected. Hold the card on the reader."); return; }
-      if (!allow.some(x => x.uid === js.uid)) { setGateError(`UID ${js.uid} is not allowed.`); logger.push("access","warn","Denied tag",{uid:js.uid}); return; }
+      const js = await jgetPico<{ uid: string | null; at_ms: number; age_ms: number }>(
+        baseURL,
+        "/api/rfid/scan",
+        { ms: 3000 }
+      );
+      if (!js.uid) {
+        setGateError("No tag detected. Hold the card on the reader.");
+        return;
+      }
+      if (!allow.some((x) => x.uid === js.uid)) {
+        setGateError(`UID ${js.uid} is not allowed.`);
+        logger.push("access", "warn", "Denied tag", { uid: js.uid });
+        return;
+      }
       grantSession(js.uid, ttl);
-      setAuthorized(true);
-      logger.push("access","info","Access granted",{ uid: js.uid, ttl });
-    } catch (e:any) {
+      logger.push("access", "info", "Access granted", { uid: js.uid, ttl });
+      // After granting, recompute auth (locked stays true; session makes authorized true)
+      refreshAuth();
+    } catch (e: any) {
       setGateError(e?.message || "Scan failed");
-      logger.push("access","error","Scan failed", { error: String(e?.message || e) });
+      logger.push("access", "error", "Scan failed", { error: String(e?.message || e) });
     } finally {
       setGateBusy(false);
     }
@@ -54,10 +95,13 @@ export default function Page() {
     <main style={pageWrap}>
       <div style={headerBar}>
         <div>
-          <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 4 }}>Thermo ⇄ Motor + Humidity</h1>
-          <p style={{ color: "#6b7280" }}>Auto motor, safety buzzer, LEDs, LCD, logs — with DHT11 humidity.</p>
+          <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 4 }}>
+            Thermo ⇄ Motor + Humidity
+          </h1>
         </div>
-        <Link href="/pico" style={{ color: "#374151", textDecoration: "none" }}>← Back</Link>
+        <Link href="/pico" style={{ color: "#374151", textDecoration: "none" }}>
+          ← Back
+        </Link>
       </div>
 
       {locked && !authorized ? (
@@ -89,7 +133,13 @@ export default function Page() {
           input={input}
           setInput={setInput}
           logger={logger}
-          onRelock={() => { revokeSession(); setAuthorized(false); logger.push("access","info","Session revoked manually"); }}
+          onRelock={() => {
+            // Actually lock, revoke session, and refresh UI
+            setLockedInStorage(true);
+            revokeSession();
+            refreshAuth();
+            logger.push("access", "info", "Session revoked manually");
+          }}
         />
       )}
 

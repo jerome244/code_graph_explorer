@@ -12,11 +12,31 @@ export const LS_LOG_SEEN = "pico_event_seen";
 export function readAllow(): AllowItem[] {
   try { return JSON.parse(localStorage.getItem(LS_ALLOW) || "[]"); } catch { return []; }
 }
-export function isLocked(): boolean { return localStorage.getItem(LS_LOCK) === "1"; }
+
+// Default to **locked** if the key is missing
+export function isLocked(): boolean {
+  const v = localStorage.getItem(LS_LOCK);
+  return v === null ? true : v === "1";
+}
+
+// NEW: set/toggle lock flag
+export function setLocked(v: boolean) {
+  localStorage.setItem(LS_LOCK, v ? "1" : "0");
+}
+export function toggleLocked() {
+  setLocked(!isLocked());
+}
+
 export function readTTL(): number {
   const n = Number(localStorage.getItem(LS_TTL));
   return Number.isFinite(n) && n > 0 ? n : 300;
 }
+// (optional) setter if you change TTL from UI
+export function setTTL(n: number) {
+  const v = Math.max(1, Math.floor(n));
+  localStorage.setItem(LS_TTL, String(v));
+}
+
 export function readSession() {
   try {
     const js = JSON.parse(localStorage.getItem(LS_SESS) || "null");
@@ -25,10 +45,12 @@ export function readSession() {
     return js as { uid: string; grantedAt: number; expiresAt: number };
   } catch { return null; }
 }
+
 export function grantSession(uid: string, ttlSec: number) {
   const now = Date.now();
   localStorage.setItem(LS_SESS, JSON.stringify({
     uid, grantedAt: now, expiresAt: now + ttlSec * 1000,
   }));
 }
+
 export function revokeSession() { localStorage.removeItem(LS_SESS); }

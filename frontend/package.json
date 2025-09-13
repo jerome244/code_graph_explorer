@@ -10,6 +10,8 @@
   "dependencies": {
     "@react-three/drei": "9.122.0",
     "@react-three/fiber": "8.18.0",
+    "@tensorflow-models/coco-ssd": "^2.2.3",
+    "@tensorflow/tfjs": "^4.22.0",
     "cytoscape": "^3.33.1",
     "jszip": "^3.10.1",
     "monaco-editor": "^0.52.2",

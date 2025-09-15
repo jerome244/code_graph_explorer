@@ -105,14 +105,14 @@ flowchart LR
   Media["Media Storage (local -> S3)"]
   Cache["Redis (channels layer)"]
 
-  UI -->|HTTPS JSON + JWT| routeREST
+  UI --> routeREST
   routeREST --> DRF
-  AuthUI -->|POST /api/auth/*| routeREST
-  UI -->|WS JSON + JWT| routeWS
+  AuthUI --> routeREST
+  UI --> routeWS
   routeWS --> CH
-  DRF -->|ORM (CRUD)| DB
-  CH -->|persist shapes & presence snapshots| DB
-  DRF -->|file uploads (multipart)| Media
+  DRF --> DB
+  CH --> DB
+  DRF --> Media
   CH --- Cache
   assets -.-> UI
 ```
@@ -221,14 +221,14 @@ CREATE INDEX idx_project_file_project_path ON project_file(project_id, path);
 - `ProjectsList` / `ProjectCard` — list & open projects.
 - `ZipImport` — reads ZIP in browser (JSZip) and posts bulk payloads.
 
-**Interactions overview**
+**Interactions overview (labels removed for GitHub Mermaid)**
 ```mermaid
 flowchart TD
-  ZipImport -->|files[]| ApiClient
-  ApiClient -->|POST bulk| Backend
-  GraphCanvas -->|shapeOps/nodeMove| RealtimeProvider
-  RealtimeProvider -->|WS broadcast| BackendWS
-  BackendWS -->|rebroadcast| GraphCanvas
+  ZipImport --> ApiClient
+  ApiClient --> Backend
+  GraphCanvas --> RealtimeProvider
+  RealtimeProvider --> BackendWS
+  BackendWS --> GraphCanvas
   SidebarFilters --> GraphCanvas
   NodeSearch --> GraphCanvas
   ShareDialog --> ApiClient

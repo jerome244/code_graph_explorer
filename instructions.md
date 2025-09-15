@@ -7,6 +7,7 @@ daphne -p 8000 config.asgi:application
 
 cd ~/holberton/code_graph_explorer/frontend/
 npm i
+npm i @tensorflow/tfjs @tensorflow/tfjs-backend-webgl @tensorflow/tfjs-backend-webgpu
 npm install three@0.160.0 @react-three/fiber@8 @react-three/drei@9 --save-exact
 npm run dev
 

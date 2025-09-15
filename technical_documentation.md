@@ -82,20 +82,23 @@
 ### 2.1 High-level architecture & data flow
 ```mermaid
 flowchart LR
-  subgraph Client [Browser - Next.js 14 React]
-    UI[Graph UI (Cytoscape)]
+  subgraph Client
+    direction TB
+    UI[Graph UI - Cytoscape]
     AuthUI[Auth Pages]
-    ZIP[ZIP Parser (JSZip)]
-    RTC[WS Client (presence/chat/shapes)]
+    ZIP[ZIP Parser - JSZip]
+    RTC[WS Client - presence chat shapes]
   end
 
-  subgraph Edge [Reverse Proxy - Caddy]
-    routeREST[Route: /api/* -> DRF]
-    routeWS[Route: /ws/* -> Channels]
-    assets[Static / Assets]
+  subgraph Edge
+    direction TB
+    routeREST[Route: /api/* to DRF]
+    routeWS[Route: /ws/* to Channels]
+    assets[Static and Assets]
   end
 
-  subgraph Backend [Django 5 - DRF - Channels (ASGI)]
+  subgraph Backend
+    direction TB
     DRF[REST API]
     CH[WebSocket Hub]
     JWT[SimpleJWT]

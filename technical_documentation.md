@@ -82,28 +82,28 @@
 ### 2.1 High-level architecture & data flow
 ```mermaid
 flowchart LR
-  subgraph Client["Browser - Next.js 14 React"]
-    UI["Graph UI (Cytoscape)"]
-    AuthUI["Auth Pages"]
-    ZIP["ZIP Parser (JSZip)"]
-    RTC["WS Client (presence/chat/shapes)"]
+  subgraph Client [Browser - Next.js 14 React]
+    UI[Graph UI (Cytoscape)]
+    AuthUI[Auth Pages]
+    ZIP[ZIP Parser (JSZip)]
+    RTC[WS Client (presence/chat/shapes)]
   end
 
-  subgraph Edge["Reverse Proxy - Caddy"]
-    routeREST["Route: /api/* -> DRF"]
-    routeWS["Route: /ws/* -> Channels"]
-    assets["Static / Assets"]
+  subgraph Edge [Reverse Proxy - Caddy]
+    routeREST[Route: /api/* -> DRF]
+    routeWS[Route: /ws/* -> Channels]
+    assets[Static / Assets]
   end
 
-  subgraph Backend["Django 5 - DRF - Channels (ASGI)"]
-    DRF["REST API"]
-    CH["WebSocket Hub"]
-    JWT["SimpleJWT"]
+  subgraph Backend [Django 5 - DRF - Channels (ASGI)]
+    DRF[REST API]
+    CH[WebSocket Hub]
+    JWT[SimpleJWT]
   end
 
-  DB["Database (SQLite -> PostgreSQL)"]
-  Media["Media Storage (local -> S3)"]
-  Cache["Redis (channels layer)"]
+  DB[(Database)]
+  Media[(Media Storage)]
+  Cache[(Redis)]
 
   UI --> routeREST
   routeREST --> DRF
@@ -115,6 +115,7 @@ flowchart LR
   DRF --> Media
   CH --- Cache
   assets -.-> UI
+
 ```
 
 ### 2.2 Notes on scalability & reliability
@@ -232,6 +233,7 @@ flowchart TD
   SidebarFilters --> GraphCanvas
   NodeSearch --> GraphCanvas
   ShareDialog --> ApiClient
+
 ```
 
 ---

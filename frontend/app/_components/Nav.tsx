@@ -3,8 +3,11 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import LogoutButton from "../(auth)/LogoutButton";
 import UserSearch from "./UserSearch";
+import ThemeToggle from "./ThemeToggle"; // ← 追加（client component）
 
-async function getMe() {
+type Me = { username: string } | null;
+
+async function getMe(): Promise<Me> {
   const cookieStore = await cookies();
   const access = cookieStore.get("access")?.value;
   if (!access) return null;
@@ -41,10 +44,11 @@ export default async function Nav() {
             )}
           </nav>
 
-          {/* spacer は grid の 1fr が担保 */}
-
-          {/* Right: search + auth/user actions（元の機能を維持） */}
+          {/* Right: search + theme + auth/user actions（機能は現状維持） */}
           <div className="nav__actions">
+            {/* テーマ切替（light/dark） */}
+            <ThemeToggle />
+
             {me && <UserSearch />}
 
             {!me ? (

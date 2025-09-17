@@ -220,4 +220,46 @@
   @media (prefers-reduced-motion: reduce){
     *{ animation: none !important; transition: none !important; }
   }
+
+  /* ===== Default: pick one as fallback (dark) ===== */
+:root {
+    --bg: #1e2227;
+    --surface: #252a31;
+    --text: #f2f4f8;
+    --muted: #c0c5cc;
+    --border: #323840;
+    --radius: 10px;
+    --accent: #7aa2ff;
+    --accent-strong: #5f8fff;
+    --gap: 16px;
+    --shadow-sm: 0 4px 10px rgba(0,0,0,.12);
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+                 "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic UI",
+                 "Meiryo", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  
+  /* ===== Explicit themes ===== */
+  :root[data-theme="dark"]{
+    --bg: #1e2227;
+    --surface: #252a31;
+    --text: #f2f4f8;
+    --muted: #c0c5cc;
+    --border: #323840;
+    --accent: #7aa2ff;
+    --accent-strong: #5f8fff;
+  }
+  
+  :root[data-theme="light"]{
+    --bg: #f7f8fa;        /* 明るいが眩しくない */
+    --surface: #ffffff;   /* カード */
+    --text: #1b1f24;      /* 文字色は濃紺寄り */
+    --muted: #5b6572;     /* 補助テキスト */
+    --border: #e5e8ee;    /* 輪郭は薄め */
+    --accent: #275df7;    /* 落ち着いたブルー */
+    --accent-strong: #1e4fe0;
+  }
+  
+  /* 以降は既存のベース/タイポ/ユーティリティ/Nav/btn/cardの定義をそのまま利用 */
+  /* （あなたの globals.css の本体はそのまま活きます。変数だけテーマで切替） */
+  
   

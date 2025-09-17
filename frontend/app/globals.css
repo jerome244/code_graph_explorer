@@ -1,0 +1,93 @@
+:root{
+    --bg: #1e2227;             /* ページ背景：明るめのスレート */
+    --surface: #252a31;        /* カード背景：背景より少し明るい */
+    --text: #f2f4f8;           /* 本文：より明るく */
+    --muted: #c0c5cc;          /* サブテキストも視認性UP */
+    --border: #323840;         /* 少し明るめの境界線 */
+    --radius: 10px;
+    --accent: #7aa2ff;         
+    --accent-strong: #5f8fff;
+  
+    --gap: 16px;
+    --shadow-sm: 0 4px 10px rgba(0,0,0,.12);  /* 影も控えめ */
+  }
+  
+  
+  /* ==== Base ==== */
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  }
+  
+  /* リンクは基本的に本文色のまま（ホバーでうっすら） */
+  a { color: inherit; text-decoration: none; }
+  a:hover { opacity: .9; }
+  
+  /* Typography（控えめで読みやすく） */
+  :where(p){ margin: 0 0 1rem 0; line-height: 1.65; color: var(--muted); }
+  :where(h1){ margin: 0 0 .5rem 0; line-height: 1.2; font-size: clamp(26px, 4vw, 36px); font-weight: 800; }
+  :where(h2){ margin: 0 0 .5rem 0; line-height: 1.25; font-size: clamp(20px, 3vw, 24px); font-weight: 700; }
+  
+  /* Layout helpers */
+  .container{
+    width: 100%;
+    max-width: 980px;
+    margin-inline: auto;
+    padding-inline: clamp(16px, 3vw, 28px);
+  }
+  
+  /* Subtle card */
+  .card{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    padding: 24px;
+  }
+  
+  /* Buttons（フラット＋繊細な境界、影はなし） */
+  .btn{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 42px;
+    padding: 0 14px;
+    gap: 8px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: #1a1f26;
+    color: var(--text);
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color .15s ease, border-color .15s ease, transform .06s ease, opacity .15s ease;
+    outline: none;
+  }
+  .btn:hover{ background: #1c2229; }
+  .btn:focus-visible{ outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn:active{ transform: translateY(1px); }
+  
+  /* Primary は“くすんだ青”で上品に */
+  .btn--primary{
+    background: var(--accent);
+    border-color: color-mix(in oklab, var(--accent) 60%, #000);
+    color: #0c1020;
+  }
+  .btn--primary:hover{ background: var(--accent-strong); }
+  
+  /* Ghost は背景と揃え、ボーダーで存在感を出しすぎない */
+  .btn--ghost{
+    background: #171b21;
+    color: var(--text);
+  }
+  
+  /* Utilities */
+  .stack{ display: grid; gap: var(--gap); }
+  .hstack{ display: flex; gap: var(--gap); align-items: center; }
+  

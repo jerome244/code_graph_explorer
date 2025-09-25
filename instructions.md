@@ -17,6 +17,6 @@ caddy run --config ./Caddyfile
 
 
 cd ~/holberton/code_graph_explorer
-cloudflared tunnel --url http://localhost:8080
+cloudflared tunnel --protocol http2 --edge-ip-version 4 --url http://localhost:8080
 
 

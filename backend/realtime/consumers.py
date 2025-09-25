@@ -1,11 +1,14 @@
 # /backend/realtime/consumers.py
 from uuid import uuid4
 from datetime import datetime, timezone
+import asyncio
+from typing import Dict, Any
 
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from django.db.models import Q
+from django.conf import settings
 
 # Try to import your Project model for access control.
 # If it's not available or its field names differ, the guard below falls back permissively.
@@ -14,18 +17,27 @@ try:
 except Exception:  # pragma: no cover
     Project = None  # type: ignore
 
+# ---------- Tunables (override via Django settings) ----------
+REALTIME_MAX_PEERS_PER_PROJECT = getattr(settings, "REALTIME_MAX_PEERS_PER_PROJECT", 10)
+REALTIME_MAX_CONN_PER_USER = getattr(settings, "REALTIME_MAX_CONN_PER_USER", 4)
+
 # --- Very light in-memory presence just for dev/demo ---
-# { group_name: { user_id: {"id": int, "username": str, "color": str} } }
-PRESENCE = {}
+# PRESENCE = { group_name: { user_id: {"id": int, "username": str, "color": str, "sockets": int, "last_seen": iso} } }
+PRESENCE: Dict[str, Dict[int, Dict[str, Any]]] = {}
+PRESENCE_LOCK = asyncio.Lock()
 
 # --- Very light in-memory chat history (ephemeral; per process) ---
 # { group_name: [ {id, text, ts, user:{id,username,color}} ] }
-CHAT_HISTORY = {}
+CHAT_HISTORY: Dict[str, list] = {}
 CHAT_HISTORY_MAX = 100  # cap backlog per project group
 
 # --- Viewport sync: last known viewport per project (ephemeral; per process) ---
 # { group_name: {"zoom": float, "pan": {"x": float, "y": float}} }
-VIEWPORT_STATE = {}
+VIEWPORT_STATE: Dict[str, Dict[str, Any]] = {}
+
+# --- Per-user global concurrent connection counts (across rooms; dev only) ---
+USER_CONN_COUNTS: Dict[int, int] = {}
+USER_CONN_LOCK = asyncio.Lock()
 
 
 def _color_for_user(uid: int) -> str:
@@ -45,6 +57,10 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
     Presence events: presence_state / presence_join / presence_leave
     Chat events: chat_history (on connect), chat (live)
     Shapes events: shapes_full (on connect), shape_op / shape_ops relay, optional shape_commit
+
+    Limits:
+      - Per-room unique peers: REALTIME_MAX_PEERS_PER_PROJECT
+      - Per-user concurrent sockets: REALTIME_MAX_CONN_PER_USER
     """
 
     # ---------- Access control helper ----------
@@ -90,27 +106,92 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
 
         # Must be authenticated
         if not user or isinstance(user, AnonymousUser) or not user.is_authenticated:
-            await self.close()
+            await self.accept()
+            await self.send_json({"type": "error", "code": "unauthorized", "message": "Authentication required."})
+            await self.close(code=4401)
             return
 
         # Must be a member (best-effort; see helper above)
         if not await self._user_can_access_project(user, int(self.project_id)):
-            await self.close()
+            await self.accept()
+            await self.send_json({"type": "error", "code": "forbidden", "message": "You do not have access."})
+            await self.close(code=4403)
             return
+
+        self.uid = int(user.id)
+        self.username = getattr(user, "username", f"user-{self.uid}")
+
+        # ---- Enforce room cap & tentatively add presence (under lock) ----
+        async with PRESENCE_LOCK:
+            room = PRESENCE.setdefault(self.group_name, {})
+            unique_users = len(room)
+            is_already_here = self.uid in room
+
+            if unique_users >= REALTIME_MAX_PEERS_PER_PROJECT and not is_already_here:
+                await self.accept()
+                await self.send_json({
+                    "type": "error",
+                    "code": "room_full",
+                    "message": "This project room is full.",
+                    "limit": REALTIME_MAX_PEERS_PER_PROJECT,
+                })
+                await self.close(code=4001)
+                return
+
+            # Reserve / refresh presence
+            if not is_already_here:
+                room[self.uid] = {
+                    "id": self.uid,
+                    "username": self.username,
+                    "color": _color_for_user(self.uid),
+                    "sockets": 0,
+                    "last_seen": datetime.now(timezone.utc).isoformat(),
+                }
+            room[self.uid]["sockets"] += 1
+            room[self.uid]["last_seen"] = datetime.now(timezone.utc).isoformat()
+            self._presence_reserved = True  # flag for cleanup
+
+        # ---- Enforce per-user global concurrent connection cap ----
+        async with USER_CONN_LOCK:
+            current = USER_CONN_COUNTS.get(self.uid, 0)
+            if current >= REALTIME_MAX_CONN_PER_USER:
+                # roll back the room reservation
+                try:
+                    async with PRESENCE_LOCK:
+                        room = PRESENCE.get(self.group_name, {})
+                        entry = room.get(self.uid)
+                        if entry:
+                            entry["sockets"] = max(0, entry["sockets"] - 1)
+                            if entry["sockets"] == 0:
+                                room.pop(self.uid, None)
+                        if not room:
+                            PRESENCE.pop(self.group_name, None)
+                except Exception:
+                    pass
+
+                await self.accept()
+                await self.send_json({
+                    "type": "error",
+                    "code": "too_many_tabs",
+                    "message": "Too many concurrent connections.",
+                    "limit": REALTIME_MAX_CONN_PER_USER,
+                })
+                await self.close(code=4002)
+                return
+
+            USER_CONN_COUNTS[self.uid] = current + 1
+            self._conn_counted = True
 
         # Join group & accept
         await self.channel_layer.group_add(self.group_name, self.channel_name)
+        self._joined_group = True
         await self.accept()
 
-        # Presence: add me
-        peers = PRESENCE.setdefault(self.group_name, {})
-        me = peers.get(user.id)
-        if not me:
-            me = {"id": user.id, "username": user.username, "color": _color_for_user(user.id)}
-            peers[user.id] = me
-
+        # ----- Initial payloads -----
         # Send full presence state to me
-        await self.send_json({"type": "presence_state", "peers": list(peers.values())})
+        async with PRESENCE_LOCK:
+            peers_list = list(PRESENCE.get(self.group_name, {}).values())
+        await self.send_json({"type": "presence_state", "peers": peers_list})
 
         # Send lightweight chat backlog to me
         await self.send_json({
@@ -130,34 +211,70 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
         # Announce my join to others
         await self.channel_layer.group_send(
             self.group_name,
-            {"type": "broadcast", "payload": {"type": "presence_join", "peer": me}},
+            {"type": "broadcast", "payload": {"type": "presence_join", "peer": {
+                "id": self.uid, "username": self.username, "color": _color_for_user(self.uid)
+            }}},
         )
 
     async def disconnect(self, code):
         user = self.scope.get("user", AnonymousUser())
 
+        # Group cleanup
         try:
-            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+            if getattr(self, "_joined_group", False):
+                await self.channel_layer.group_discard(self.group_name, self.channel_name)
         except Exception:
             pass
 
-        if not user or isinstance(user, AnonymousUser) or not user.is_authenticated:
-            return
+        # Presence cleanup
+        try:
+            if getattr(self, "_presence_reserved", False) and user and not isinstance(user, AnonymousUser) and user.is_authenticated:
+                async with PRESENCE_LOCK:
+                    room = PRESENCE.get(self.group_name, {})
+                    entry = room.get(user.id)
+                    if entry:
+                        entry["sockets"] = max(0, entry["sockets"] - 1)
+                        if entry["sockets"] == 0:
+                            room.pop(user.id, None)
+                    if not room:
+                        PRESENCE.pop(self.group_name, None)
+        except Exception:
+            pass
 
-        peers = PRESENCE.get(self.group_name, {})
-        if user.id in peers:
-            peer = peers.pop(user.id)
-            await self.channel_layer.group_send(
-                self.group_name,
-                {"type": "broadcast", "payload": {"type": "presence_leave", "peer": {"id": peer["id"]}}},
-            )
-        if not peers:
-            PRESENCE.pop(self.group_name, None)
+        # Notify others if still in room list (only send if we actually had presence)
+        if user and not isinstance(user, AnonymousUser) and user.is_authenticated:
+            peers = PRESENCE.get(self.group_name, {})
+            if user.id not in peers:
+                # already removed; still broadcast a leave event
+                await self.channel_layer.group_send(
+                    self.group_name,
+                    {"type": "broadcast", "payload": {"type": "presence_leave", "peer": {"id": int(user.id)}}},
+                )
+
+        # Global per-user conn decrement
+        try:
+            if getattr(self, "_conn_counted", False) and user and not isinstance(user, AnonymousUser) and user.is_authenticated:
+                async with USER_CONN_LOCK:
+                    if user.id in USER_CONN_COUNTS:
+                        USER_CONN_COUNTS[user.id] = max(0, USER_CONN_COUNTS[user.id] - 1)
+                        if USER_CONN_COUNTS[user.id] == 0:
+                            USER_CONN_COUNTS.pop(user.id, None)
+        except Exception:
+            pass
 
     # ---------- Frontend -> Server ----------
     async def receive_json(self, content, **kwargs):
         t = content.get("type")
         user = self.scope.get("user")
+
+        # Touch presence timestamp on any activity
+        try:
+            async with PRESENCE_LOCK:
+                room = PRESENCE.get(self.group_name, {})
+                if user and getattr(user, "id", None) in room:
+                    room[user.id]["last_seen"] = datetime.now(timezone.utc).isoformat()
+        except Exception:
+            pass
 
         # Cursor (lightweight, throttled by client)
         if t == "cursor":
@@ -320,7 +437,7 @@ class ProjectConsumer(AsyncJsonWebsocketConsumer):
                 },
             )
 
-        # --- New: realtime chat ---
+        # --- Realtime chat ---
         elif t == "chat":
             text = (content.get("text") or "").strip()
             if not text:

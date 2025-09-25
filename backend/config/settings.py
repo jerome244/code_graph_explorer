@@ -177,5 +177,14 @@ else:
         }
     }
 
+# --- Realtime caps (tunable via env vars) ---
+# Game (Minecraft-like)
+GAME_MAX_PLAYERS_PER_SESSION = int(os.getenv("GAME_MAX_PLAYERS_PER_SESSION", 8))
+GAME_MAX_CONN_PER_USER = int(os.getenv("GAME_MAX_CONN_PER_USER", 3))
+
+# Graph realtime rooms
+REALTIME_MAX_PEERS_PER_PROJECT = int(os.getenv("REALTIME_MAX_PEERS_PER_PROJECT", 10))
+REALTIME_MAX_CONN_PER_USER = int(os.getenv("REALTIME_MAX_CONN_PER_USER", 4))
+
 # Django 3.2+ default primary key type
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

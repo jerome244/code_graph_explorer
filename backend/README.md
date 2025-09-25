@@ -15,3 +15,22 @@ wscat -c ws://127.0.0.1:8000/ws/game/testroom/
 
 terminal C:
 wscat -c ws://127.0.0.1:8000/ws/game/testroom/
+
+
+
+
+
+
+
+{"type":"ping"}
+{"type":"join","name":"Alice"}
+{"type":"chat","message":"hello everyone"}
+{"type":"move","x":1,"y":2,"z":3}
+{"type":"place_block","x":0,"y":0,"z":0,"block":"stone"}
+{"type":"remove_block","x":0,"y":0,"z":0}
+
+
+
+
+
+{"type":"chat","message":"B joined!"}

@@ -1,265 +1,322 @@
 /* =========================================================
-   Global Styles — Elegant Slate (not pure black)
-   - Consistent tokens for dark UI (brighter slate background)
-   - Professional typography (JP-friendly)
+   Global Styles — Elegant Slate + Galaxy Photo Landing
+   - Consistent tokens for dark UI (brighter slate)
+   - JP-friendly typography
    - Reusable utilities: container / card / btn / stack / nav
+   - Landing helpers: galaxy-photo, vignette, slow-appear title
    ========================================================= */
 
-/* ===== Tokens ===== */
+/* ===== Tokens (unified) ===== */
 :root{
-    /* Colors */
-    --bg: #1e2227;            /* page background: brighter slate */
-    --surface: #252a31;       /* card surface */
-    --text: #f2f4f8;          /* primary text */
-    --muted: #c0c5cc;         /* secondary text */
-    --border: #323840;        /* subtle outline */
-    --accent: #7aa2ff;        /* elegant, muted blue */
-    --accent-strong: #5f8fff;
-  
-    /* Radii & shadows */
-    --radius: 10px;
-    --shadow-sm: 0 4px 10px rgba(0,0,0,.12);
-  
-    /* Spacing */
-    --gap: 16px;
-  
-    /* Typography stack */
-    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
-                 "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic UI",
-                 "Meiryo", Roboto, "Helvetica Neue", Arial, sans-serif;
-  }
-  
-  /* ===== Base ===== */
-  * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; padding: 0; }
-  body{
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font-sans);
-    font-size: clamp(15px, 1.5vw, 16px);
-    line-height: 1.65;
-    letter-spacing: 0.01em;                    /* JP: 少し広げて可読性UP */
-    -webkit-font-smoothing: antialiased;
-    text-rendering: optimizeLegibility;
-    font-kerning: normal;
-    font-feature-settings: "kern" 1, "liga" 1, "palt" 1;
-  }
-  
-  a { color: inherit; text-decoration: none; }
-  a:hover { opacity: .92; }
-  
-  /* ===== Typography ===== */
-  :where(p){ margin: 0 0 0.9rem 0; color: var(--muted); }
-  :where(h1,h2,h3,h4,h5,h6){
-    margin: 0 0 .5rem 0;
-    font-weight: 800;
-    line-height: 1.2;
-    letter-spacing: -0.01em;
-  }
-  :lang(ja) :where(h1,h2,h3){ letter-spacing: 0; }
-  
-  h1{ font-size: clamp(26px, 4vw, 36px); }
-  h2{ font-size: clamp(20px, 3vw, 24px); font-weight: 750; }
-  h3{ font-size: clamp(18px, 2.6vw, 20px); font-weight: 700; }
-  
-  /* Reading width helpers */
-  .measure{ max-width: 68ch; }
-  .measure-narrow{ max-width: 58ch; }
-  
-  /* Lead paragraph */
-  .lead{
-    font-size: clamp(16px, 1.4vw, 18px);
-    line-height: 1.7;
-    color: var(--muted);
-  }
-  
-  /* Small section label */
-  .kicker{
-    text-transform: uppercase;
-    font-weight: 600;
-    font-size: 0.75rem;
-    letter-spacing: .08em;
-    color: var(--muted);
-    margin-bottom: .25rem;
-  }
-  
-  /* Code & numbers */
-  .num{ font-variant-numeric: tabular-nums; }
-  code,kbd,pre{
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-    font-size: .95em;
-  }
-  
-  /* ===== Layout helpers ===== */
-  .container{
-    width: 100%;
-    max-width: 980px;
-    margin-inline: auto;
-    padding-inline: clamp(16px, 3vw, 28px);
-  }
-  
-  .stack{ display: grid; gap: var(--gap); }
-  .hstack{ display: flex; gap: var(--gap); align-items: center; }
-  
-  /* ===== Card ===== */
-  .card{
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow-sm);
-    padding: 24px;
-  }
-  
-  /* ===== Buttons ===== */
-  .btn{
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 42px;
-    padding: 0 14px;
-    gap: 8px;
-    border-radius: 9px;
-    border: 1px solid var(--border);
-    background: #1a1f26;                  /* slate-ish, not pure black */
-    color: var(--text);
-    font-weight: 700;
-    font-size: 14px;
-    cursor: pointer;
-    user-select: none;
-    transition: background-color .15s ease, border-color .15s ease, transform .06s ease, opacity .15s ease;
-    outline: none;
-  }
-  .btn:hover{ background: #1c2229; }
-  .btn:focus-visible{ outline: 2px solid var(--accent); outline-offset: 2px; }
-  .btn:active{ transform: translateY(1px); }
-  
-  .btn--primary{
-    background: var(--accent);
-    border-color: color-mix(in oklab, var(--accent) 60%, #000);
-    color: #0c1020;
-  }
-  .btn--primary:hover{ background: var(--accent-strong); }
-  
-  .btn--ghost{
-    background: #171b21;
-    color: var(--text);
-  }
-  
-  /* ===== Top Navigation ===== */
-  .nav-wrap{
-    position: sticky;
-    top: 0;
-    z-index: 50;
-    padding-block: 10px;                   /* slight breathing room */
-    background: var(--bg);                 /* prevents shimmer on scroll */
-  }
-  
-  .nav{
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    height: 56px;
-    display: flex;
-    align-items: center;
-  }
-  
-  .nav__inner{
-    display: grid;
-    grid-template-columns: auto 1fr auto;  /* left links / spacer / right actions */
-    align-items: center;
-    width: 100%;
-    gap: 12px;
-    padding-inline: 12px;
-  }
-  
-  .nav__brand{
-    display: inline-flex; align-items: center; gap: 10px;
-    font-weight: 800;
-    letter-spacing: .01em;
-  }
-  .nav__logo{
-    width: 20px; height: 20px; border-radius: 6px;
-    background: conic-gradient(from 140deg, var(--accent), #8b5cf6, #06b6d4, var(--accent));
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.22);
-  }
-  
-  .nav__links{
-    display: inline-flex; align-items: center; gap: 16px;
-  }
-  .nav__link{
-    display: inline-flex; align-items: center;
-    height: 36px; padding: 0 10px;
-    border-radius: 8px;
-    color: var(--text);
-    opacity: .92;
-    text-decoration: none;
-    font-weight: 600;
-    font-size: 14px;
-    transition: background-color .15s ease, opacity .15s ease;
-  }
-  .nav__link:hover{ background: #2a2f36; opacity: 1; }
-  .nav__link.is-active{
-    background: #2f3540;
-    outline: 1px solid color-mix(in oklab, var(--accent) 40%, #000);
-    outline-offset: 0;
-    opacity: 1;
-  }
-  
-  .nav__actions{
-    display: inline-flex; align-items: center; gap: 12px;
-  }
-  
-  .nav__greet{
-    font-size: 13.5px;
-    font-weight: 600;
-    color: var(--muted);
-  }
-  
-  /* ===== Accessibility & Motion ===== */
-  :focus-visible{ outline-color: var(--accent); }
-  @media (prefers-reduced-motion: reduce){
-    *{ animation: none !important; transition: none !important; }
-  }
+  /* Colors */
+  --bg: #1e2227;            /* page background: brighter slate */
+  --surface: #252a31;       /* card surface */
+  --text: #f2f4f8;          /* primary text */
+  --muted: #c0c5cc;         /* secondary text */
+  --border: #323840;        /* subtle outline */
+  --accent: #7aa2ff;        /* elegant, muted blue */
+  --accent-strong: #5f8fff;
 
-  /* ===== Default: pick one as fallback (dark) ===== */
-:root {
-    --bg: #1e2227;
-    --surface: #252a31;
-    --text: #f2f4f8;
-    --muted: #c0c5cc;
-    --border: #323840;
-    --radius: 10px;
-    --accent: #7aa2ff;
-    --accent-strong: #5f8fff;
-    --gap: 16px;
-    --shadow-sm: 0 4px 10px rgba(0,0,0,.12);
-    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
-                 "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic UI",
-                 "Meiryo", Roboto, "Helvetica Neue", Arial, sans-serif;
-  }
-  
-  /* ===== Explicit themes ===== */
-  :root[data-theme="dark"]{
-    --bg: #1e2227;
-    --surface: #252a31;
-    --text: #f2f4f8;
-    --muted: #c0c5cc;
-    --border: #323840;
-    --accent: #7aa2ff;
-    --accent-strong: #5f8fff;
-  }
-  
-  :root[data-theme="light"]{
-    --bg: #f7f8fa;        /* 明るいが眩しくない */
-    --surface: #ffffff;   /* カード */
-    --text: #1b1f24;      /* 文字色は濃紺寄り */
-    --muted: #5b6572;     /* 補助テキスト */
-    --border: #e5e8ee;    /* 輪郭は薄め */
-    --accent: #275df7;    /* 落ち着いたブルー */
-    --accent-strong: #1e4fe0;
-  }
-  
-  /* 以降は既存のベース/タイポ/ユーティリティ/Nav/btn/cardの定義をそのまま利用 */
-  /* （あなたの globals.css の本体はそのまま活きます。変数だけテーマで切替） */
+  /* Radii & shadows */
+  --radius: 10px;
+  --shadow-sm: 0 4px 10px rgba(0,0,0,.12);
+
+  /* Spacing */
+  --gap: 16px;
+
+  /* Typography stack */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+               "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic UI",
+               "Meiryo", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* Explicit themes */
+:root[data-theme="dark"]{
+  --bg: #1e2227;
+  --surface: #252a31;
+  --text: #f2f4f8;
+  --muted: #c0c5cc;
+  --border: #323840;
+  --accent: #7aa2ff;
+  --accent-strong: #5f8fff;
+}
+:root[data-theme="light"]{
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --text: #1b1f24;
+  --muted: #5b6572;
+  --border: #e5e8ee;
+  --accent: #275df7;
+  --accent-strong: #1e4fe0;
+}
+
+/* ===== Base ===== */
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; padding: 0; }
+body{
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: clamp(15px, 1.5vw, 16px);
+  line-height: 1.65;
+  letter-spacing: 0.01em;                    /* JP: 少し広げて可読性UP */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-kerning: normal;
+  font-feature-settings: "kern" 1, "liga" 1, "palt" 1;
+}
+a { color: inherit; text-decoration: none; }
+a:hover { opacity: .92; }
+
+/* ===== Typography ===== */
+:where(p){ margin: 0 0 0.9rem 0; color: var(--muted); }
+:where(h1,h2,h3,h4,h5,h6){
+  margin: 0 0 .5rem 0;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+:lang(ja) :where(h1,h2,h3){ letter-spacing: 0; }
+h1{ font-size: clamp(26px, 4vw, 36px); }
+h2{ font-size: clamp(20px, 3vw, 24px); font-weight: 750; }
+h3{ font-size: clamp(18px, 2.6vw, 20px); font-weight: 700; }
+
+/* Reading width helpers */
+.measure{ max-width: 68ch; }
+.measure-narrow{ max-width: 58ch; }
+
+/* Lead / Sub paragraph */
+.lead,
+.sub{
+  font-size: clamp(16px, 1.4vw, 18px);
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+/* Small section label */
+.kicker{
+  text-transform: uppercase;
+  font-weight: 600;
+  font-size: 0.75rem;
+  letter-spacing: .08em;
+  color: var(--muted);
+  margin-bottom: .25rem;
+}
+
+/* Code & numbers */
+.num{ font-variant-numeric: tabular-nums; }
+code,kbd,pre{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: .95em;
+}
+
+/* ===== Layout helpers ===== */
+.container{
+  width: 100%;
+  max-width: 980px;
+  margin-inline: auto;
+  padding-inline: clamp(16px, 3vw, 28px);
+}
+.stack{ display: grid; gap: var(--gap); }
+.hstack{ display: flex; gap: var(--gap); align-items: center; }
+
+/* ===== Card ===== */
+.card{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 24px;
+}
+
+/* ===== Buttons ===== */
+.btn{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 14px;
+  gap: 8px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: #1a1f26;                  /* slate-ish, not pure black */
+  color: var(--text);
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color .15s ease, border-color .15s ease, transform .06s ease, opacity .15s ease;
+  outline: none;
+}
+.btn:hover{ background: #1c2229; }
+.btn:focus-visible{ outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn:active{ transform: translateY(1px); }
+.btn--primary{
+  background: var(--accent);
+  border-color: color-mix(in oklab, var(--accent) 60%, #000);
+  color: #0c1020;
+}
+.btn--primary:hover{ background: var(--accent-strong); }
+.btn--ghost{
+  background: #171b21;
+  color: var(--text);
+}
+
+/* ===== Top Navigation ===== */
+.nav-wrap{
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  padding-block: 10px;                   /* slight breathing room */
+  background: var(--bg);                 /* prevents shimmer on scroll */
+}
+.nav{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+}
+.nav__inner{
+  display: grid;
+  grid-template-columns: auto 1fr auto;  /* left links / spacer / right actions */
+  align-items: center;
+  width: 100%;
+  gap: 12px;
+  padding-inline: 12px;
+}
+.nav__brand{
+  display: inline-flex; align-items: center; gap: 10px;
+  font-weight: 800;
+  letter-spacing: .01em;
+}
+.nav__logo{
+  width: 20px; height: 20px; border-radius: 6px;
+  background: conic-gradient(from 140deg, var(--accent), #8b5cf6, #06b6d4, var(--accent));
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.22);
+}
+.nav__links{
+  display: inline-flex; align-items: center; gap: 16px;
+}
+.nav__link{
+  display: inline-flex; align-items: center;
+  height: 36px; padding: 0 10px;
+  border-radius: 8px;
+  color: var(--text);
+  opacity: .92;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 14px;
+  transition: background-color .15s ease, opacity .15s ease;
+}
+.nav__link:hover{ background: #2a2f36; opacity: 1; }
+.nav__link.is-active{
+  background: #2f3540;
+  outline: 1px solid color-mix(in oklab, var(--accent) 40%, #000);
+  outline-offset: 0;
+  opacity: 1;
+}
+.nav__actions{
+  display: inline-flex; align-items: center; gap: 12px;
+}
+.nav__greet{
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* ===== Accessibility & Motion ===== */
+:focus-visible{ outline-color: var(--accent); }
+@media (prefers-reduced-motion: reduce){
+  *{ animation: none !important; transition: none !important; }
+}
+
+/* =========================================================
+   Landing Helpers (photo background + slow appear title)
+   ========================================================= */
+
+/* Layout for landing */
+.landing{
+  min-height: 100svh;
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  padding: 64px 24px;
+}
+.hero{
+  position: relative;
+  z-index: 10;
+  text-align: center;
+  max-width: 960px;
+  margin-inline: auto;
+  display: grid;
+  gap: 16px;
+}
+.title{
+  line-height: .95;
+  font-weight: 900;
+  margin: 0;
+  display: grid;
+  gap: 4px;
+  font-size: clamp(40px, 7vw, 112px);
+}
+.cta{
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+/* Photo background (put galaxy.jpg at /public/images/galaxy.jpg) */
+.galaxy-photo{
+  background-image: url("/images/galaxy.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* Soft vignette to improve readability on photo */
+.vignette{
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1200px 800px at 50% 120%, rgba(0,0,0,0.60), transparent 60%),
+    linear-gradient(to top, rgba(5,8,22,0.55), rgba(5,8,22,0.20) 40%, transparent);
+}
+
+/* (Optional) tiny photo credit */
+.credit{
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  z-index: 10;
+  color: rgba(255,255,255,0.65);
+  font-size: 12px;
+  text-shadow: 0 1px 2px rgba(0,0,0,.35);
+}
+
+/* Title: slow appear (no wash) */
+.title-appear { will-change: opacity, transform, filter; }
+.line-appear{
+  display: block;
+  opacity: 0;
+  transform: translateY(8px);
+  filter: blur(3px);
+  animation: fadeRise 1.6s ease-out both;
+}
+@keyframes fadeRise{
+  0%   { opacity: 0; transform: translateY(8px); filter: blur(3px); }
+  60%  { opacity: 1; transform: translateY(0);   filter: blur(1px); }
+  100% { opacity: 1; transform: translateY(0);   filter: blur(0); }
+}
+@media (prefers-reduced-motion: reduce){
+  .line-appear { animation: none !important; opacity: 1; transform: none; filter: none; }
+}
+
   
   

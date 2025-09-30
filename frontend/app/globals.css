@@ -168,3 +168,60 @@ code,kbd,pre{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation
   border-color: transparent !important;
   box-shadow: none !important;
 }
+
+/* ===== Hero center patch (scope: .hero-center) ===== */
+.hero-center { 
+  position: relative;
+  z-index: 10;
+  min-height: 80vh;
+  display: grid;
+  place-items: center;
+  text-align: center !important;
+}
+
+/* 旧レイアウトの left/float/margin を無効化 */
+.hero-center .title,
+.hero-center .kicker,
+.hero-center .sub {
+  text-align: center !important;
+  float: none !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
+/* CTA を確実に中央へ */
+.hero-center .cta {
+  display: flex !important;
+  justify-content: center !important;
+  gap: 12px;
+}
+
+/* ボタンが消える対策：強制的に表示・整列 */
+.hero-center .btn {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 3Dは背面に固定（テキストに被らない） */
+#hero-astro-slot {
+  z-index: 0 !important;   /* 背面 */
+  pointer-events: none;
+}
+
+/* Hero center hard-fix */
+.hero-center, .hero-center .title, .hero-center .sub, .hero-center .cta {
+  text-align: center !important;
+  float: none !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
+/* Hard fix for hero center (scoped by #hero-center) */
+#hero-center, #hero-center * {
+  text-align: center !important;
+  float: none !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+

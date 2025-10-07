@@ -3,17 +3,13 @@
 import React, { useEffect, useState } from "react";
 import { BLOCKS } from "../lib/constants";
 import type { BlockId } from "../lib/types";
-
-// ✅ Only import what we need; no isBlockId
 import { ITEM_SPEC, type ItemId } from "../lib/items";
-import { applyCraftOnce, evaluateCraft, type MaybeItem, type ItemStack } from "../lib/crafting";
-
-type ItemStackX = ItemStack;
+import { applyCraftOnce, evaluateCraft, type MaybeItem } from "../lib/crafting";
 
 // Local visual resolver — uses `typeof id === "number"` to detect blocks
 function getVisualSpec(id: ItemId) {
   if (typeof id === "number") return BLOCKS[id as BlockId];
-  return ITEM_SPEC[id]; // tools / sticks, etc.
+  return ITEM_SPEC[id]; // tools / sticks / swords, etc.
 }
 
 function Slot({
@@ -110,8 +106,8 @@ function Slot({
       }}
     >
       {item && (() => {
-        const spec = getVisualSpec(item.id);
-        const name = (spec?.name as string) ?? String(item.id);
+        const spec = getVisualSpec(item.id as ItemId);
+        const name = (spec as any)?.name ?? String(item.id);
         const color = (spec as any)?.color ?? "#666";
         const transparent = (spec as any)?.transparent ?? false;
         return (
@@ -161,12 +157,12 @@ export default function InventoryOverlay({
 }: {
   open: boolean;
   onClose: () => void;
-  inventory: ItemStackX[];
-  setInventory: (updater: (curr: ItemStackX[]) => ItemStackX[]) => void;
-  craft: ItemStackX[]; // 3x3 == 9
-  setCraft: (updater: (curr: ItemStackX[]) => ItemStackX[]) => void;
-  hotbar: ItemStackX[]; // 9
-  setHotbar: (updater: (curr: ItemStackX[]) => ItemStackX[]) => void;
+  inventory: MaybeItem[];
+  setInventory: (updater: (curr: MaybeItem[]) => MaybeItem[]) => void;
+  craft: MaybeItem[]; // 3x3 == 9
+  setCraft: (updater: (curr: MaybeItem[]) => MaybeItem[]) => void;
+  hotbar: MaybeItem[]; // 9
+  setHotbar: (updater: (curr: MaybeItem[]) => MaybeItem[]) => void;
   addToInventory: (id: ItemId, amount: number) => void;
 }) {
   const [cursor, setCursor] = useState<MaybeItem>(null);
@@ -190,12 +186,12 @@ export default function InventoryOverlay({
 
   if (!open) return null;
 
-  const craftEval = evaluateCraft(craft as MaybeItem[]);
+  const craftEval = evaluateCraft(craft);
   const craftable = !!craftEval.result;
 
   const applyCraft = () => {
-    const { grid, result } = applyCraftOnce(craft as MaybeItem[]);
-    setCraft(() => grid as ItemStackX[]);
+    const { grid, result } = applyCraftOnce(craft);
+    setCraft(() => grid);
     if (result) addToInventory(result.id, result.count);
   };
 
@@ -243,7 +239,7 @@ export default function InventoryOverlay({
                   onChange={(next) =>
                     setCraft((curr) => {
                       const copy = curr.slice();
-                      copy[idx] = next as ItemStackX;
+                      copy[idx] = next;
                       return copy;
                     })
                   }
@@ -257,7 +253,7 @@ export default function InventoryOverlay({
             <div style={{ fontWeight: 700, opacity: 0.9 }}>Result</div>
             <div style={{ display: "grid", gridTemplateColumns: "56px", gap: 8 }}>
               <Slot
-                item={craftEval.result ? ({ id: craftEval.result.id, count: craftEval.result.count } as ItemStackX) : null}
+                item={craftEval.result ? { id: craftEval.result.id, count: craftEval.result.count } : null}
                 onChange={() => {}}
               />
             </div>
@@ -298,7 +294,7 @@ export default function InventoryOverlay({
                   onChange={(next) =>
                     setInventory((curr) => {
                       const copy = curr.slice();
-                      copy[idx] = next as ItemStackX;
+                      copy[idx] = next;
                       return copy;
                     })
                   }
@@ -326,7 +322,7 @@ export default function InventoryOverlay({
                   onChange={(next) =>
                     setHotbar((curr) => {
                       const copy = curr.slice();
-                      copy[idx] = next as ItemStackX;
+                      copy[idx] = next;
                       return copy;
                     })
                   }
@@ -367,32 +363,68 @@ export default function InventoryOverlay({
             zIndex: 1100,
           }}
         >
-          <div
-            style={{
-              width: 42,
-              height: 42,
-              borderRadius: 8,
-              background: getVisualSpec(cursor.id)?.color ?? "#666",
-              opacity: (getVisualSpec(cursor.id) as any)?.transparent ? 0.7 : 1,
-              outline: "2px solid rgba(255,255,255,.15)",
-              boxShadow: "0 2px 8px rgba(0,0,0,.3)",
-              position: "relative",
-            }}
-          >
-            <div
-              style={{
-                position: "absolute",
-                right: 4,
-                bottom: 2,
-                fontSize: 12,
-                color: "white",
-                textShadow: "0 1px 1px rgba(0,0,0,.8)",
-                fontWeight: 700,
-              }}
-            >
-              {cursor.count}
-            </div>
-          </div>
+          {(() => {
+            // Use block visuals if numeric; otherwise a neutral chip
+            if (typeof cursor.id === "number") {
+              const spec = BLOCKS[cursor.id as BlockId];
+              return (
+                <div
+                  style={{
+                    width: 42,
+                    height: 42,
+                    borderRadius: 8,
+                    background: spec?.color ?? "#666",
+                    opacity: spec?.transparent ? 0.7 : 1,
+                    outline: "2px solid rgba(255,255,255,.15)",
+                    boxShadow: "0 2px 8px rgba(0,0,0,.3)",
+                    position: "relative",
+                  }}
+                >
+                  <div
+                    style={{
+                      position: "absolute",
+                      right: 4,
+                      bottom: 2,
+                      fontSize: 12,
+                      color: "white",
+                      textShadow: "0 1px 1px rgba(0,0,0,.8)",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {cursor.count}
+                  </div>
+                </div>
+              );
+            }
+            // Non-block items (stick/tools): neutral badge
+            return (
+              <div
+                style={{
+                  width: 42,
+                  height: 42,
+                  borderRadius: 8,
+                  background: "#666",
+                  outline: "2px solid rgba(255,255,255,.15)",
+                  boxShadow: "0 2px 8px rgba(0,0,0,.3)",
+                  position: "relative",
+                }}
+              >
+                <div
+                  style={{
+                    position: "absolute",
+                    right: 4,
+                    bottom: 2,
+                    fontSize: 12,
+                    color: "white",
+                    textShadow: "0 1px 1px rgba(0,0,0,.8)",
+                    fontWeight: 700,
+                  }}
+                >
+                  {cursor.count}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>

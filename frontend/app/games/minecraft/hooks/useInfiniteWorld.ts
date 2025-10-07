@@ -132,11 +132,19 @@ export function useInfiniteWorld({
         const next = new Map(prev);
         for (const b of gen) {
           const tk = topKey(b.x, b.z);
-          baseHeight.current.set(tk, b.y);     // base surface
-          const edit = edits.current.get(cellKey(b.x, b.y, b.z));
-          // If player placed something at exactly surface, prefer that
-          const id = (typeof edit === "number") ? edit : b.id;
-          next.set(cellKey(b.x, b.y, b.z), { pos: [b.x, b.y, b.z], id });
+          baseHeight.current.set(tk, b.y); // base surface
+
+          const e = edits.current.get(cellKey(b.x, b.y, b.z));
+
+          // ⬅️ handle air (0) safely: don't insert a WorldBlock with id=0
+          if (e === 0) {
+            // player previously removed this surface block; keep it empty
+          } else {
+            const id: BlockId =
+              (typeof e === "number" ? e : b.id) as BlockId;
+            next.set(cellKey(b.x, b.y, b.z), { pos: [b.x, b.y, b.z], id });
+          }
+
           // top is max of seen surface and any prior placements above
           const prevTop = columnTop.current.get(tk);
           columnTop.current.set(tk, prevTop != null ? Math.max(prevTop, b.y) : b.y);

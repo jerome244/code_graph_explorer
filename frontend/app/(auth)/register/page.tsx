@@ -1,10 +1,11 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import type { CSSProperties } from "react";
 
 export default function RegisterPage() {
   const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(""); // optional
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -15,7 +16,7 @@ export default function RegisterPage() {
   function humanizeErrors(e: any): string {
     if (!e) return "Registration failed";
     if (typeof e === "string") return e;
-    if ((e as any).detail) return String((e as any).detail);
+    if (e.detail) return String(e.detail);
     try {
       const parts: string[] = [];
       Object.entries(e).forEach(([k, v]) => {
@@ -37,42 +38,36 @@ export default function RegisterPage() {
     if (password !== confirmPassword) return setErr("Passwords do not match");
     if (password.length < 8) return setErr("Password must be at least 8 characters");
 
-    try {
-      // 1) Register
-      const r = await fetch("/api/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: uname, email: email.trim() || undefined, password }),
-      });
+    // 1) Register (proxy to Django)
+    const r = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: uname, email: email.trim() || undefined, password }),
+    });
 
-      if (!r.ok) {
-        // read ONCE as text, then try JSON.parse
-        const raw = await r.text(); // body consumed here
-        let errorPayload: any;
-        try { errorPayload = JSON.parse(raw); } catch { errorPayload = raw || "Registration failed"; }
-        return setErr(humanizeErrors(errorPayload));
+    if (!r.ok) {
+      let errorPayload: any;
+      try {
+        errorPayload = await r.json();
+      } catch {
+        errorPayload = await r.text();
       }
-
-      // 2) Auto-login so httpOnly cookies are set by the server
-      const login = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: uname, password }),
-      });
-
-      if (!login.ok) {
-        const raw = await login.text();
-        let errorPayload: any;
-        try { errorPayload = JSON.parse(raw); } catch { errorPayload = raw || "Sign-in failed"; }
-        return setErr(humanizeErrors(errorPayload) || "Registered successfully, but sign-in failed. Please log in.");
-      }
-
-      router.replace("/dashboard");
-      router.refresh();
-    } catch (e: any) {
-      // network or unexpected error
-      setErr("Network error. Please try again.");
+      return setErr(humanizeErrors(errorPayload));
     }
+
+    // 2) Auto-login so httpOnly cookies are set by the server
+    const login = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: uname, password }),
+    });
+
+    if (!login.ok) {
+      return setErr("Registered successfully, but sign-in failed. Please log in.");
+    }
+
+    router.replace("/dashboard");
+    router.refresh();
   };
 
   return (
@@ -81,19 +76,45 @@ export default function RegisterPage() {
       <form onSubmit={onSubmit} style={formStyle}>
         <div style={inputGroupStyle}>
           <label htmlFor="username" style={labelStyle}>Username</label>
-          <input id="username" value={username} onChange={e => setUsername(e.target.value)} required autoComplete="username" style={inputStyle}/>
+          <input
+            id="username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+            autoComplete="username"
+            style={inputStyle}
+          />
         </div>
 
         <div style={inputGroupStyle}>
           <label htmlFor="email" style={labelStyle}>Email (optional)</label>
-          <input id="email" type="email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" style={inputStyle}/>
+          <input
+            id="email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
+            style={inputStyle}
+          />
         </div>
 
         <div style={inputGroupStyle}>
           <label htmlFor="password" style={labelStyle}>Password</label>
           <div style={{ position: "relative" }}>
-            <input id="password" type={showPassword ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} required autoComplete="new-password" style={{ ...inputStyle, height: 40 }}/>
-            <button type="button" onClick={() => setShowPassword(s => !s)} style={toggleButtonStyle}>
+            <input
+              id="password"
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              autoComplete="new-password"
+              style={{ ...inputStyle, height: 40 }}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((s) => !s)}
+              style={toggleButtonStyle}
+            >
               {showPassword ? "Hide" : "Show"}
             </button>
           </div>
@@ -102,8 +123,19 @@ export default function RegisterPage() {
         <div style={inputGroupStyle}>
           <label htmlFor="confirmPassword" style={labelStyle}>Confirm Password</label>
           <div style={{ position: "relative" }}>
-            <input id="confirmPassword" type={showConfirmPassword ? "text" : "password"} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required style={{ ...inputStyle, height: 40 }}/>
-            <button type="button" onClick={() => setShowConfirmPassword(s => !s)} style={toggleButtonStyle}>
+            <input
+              id="confirmPassword"
+              type={showConfirmPassword ? "text" : "password"}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+              style={{ ...inputStyle, height: 40 }}
+            />
+            <button
+              type="button"
+              onClick={() => setShowConfirmPassword((s) => !s)}
+              style={toggleButtonStyle}
+            >
               {showConfirmPassword ? "Hide" : "Show"}
             </button>
           </div>
@@ -114,21 +146,104 @@ export default function RegisterPage() {
       </form>
 
       <div style={loginLinkStyle}>
-        <p>Already have an account? <a href="/login" style={linkStyle}>Login here</a></p>
+        <p>
+          Already have an account?{" "}
+          <a href="/login" style={linkStyle}>Login here</a>
+        </p>
       </div>
     </main>
   );
 }
 
-// styles…
-const mainStyle = { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", maxWidth: "500px", margin: "auto", padding: "2rem 1rem", backgroundColor: "#ffffff", boxShadow: "0 4px 12px rgba(0,0,0,.1)", borderRadius: 8 };
-const headingStyle = { fontSize: 32, fontWeight: 600 as const, color: "#333", marginBottom: "1rem" };
-const formStyle = { display: "flex", flexDirection: "column" as const, gap: "16px", width: "100%" };
-const inputGroupStyle = { display: "flex", flexDirection: "column" as const, gap: "4px" };
-const labelStyle = { fontSize: 14, color: "#6b7280", fontWeight: 500 };
-const inputStyle = { padding: "10px", fontSize: 16, borderRadius: 8, border: "1px solid #d1d5db", outline: "none", transition: "border-color .3s", width: "100%", backgroundColor: "#f9fafb", boxSizing: "border-box" as const };
-const toggleButtonStyle = { position: "absolute" as const, top: "50%", right: 10, transform: "translateY(-50%)", background: "none", border: "none", color: "#2563eb", cursor: "pointer", fontSize: 14 };
-const errorStyle = { fontSize: 14, color: "crimson", marginTop: 8 };
-const submitButtonStyle = { padding: 12, fontSize: 16, backgroundColor: "#2563eb", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", transition: "background-color .3s ease, transform .2s ease" };
-const loginLinkStyle = { marginTop: 16, textAlign: "center" as const, fontSize: 14 };
-const linkStyle = { color: "#2563eb", textDecoration: "none", fontWeight: 600 };
+/* ---- styles ---- */
+const mainStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  maxWidth: "500px",
+  margin: "auto",
+  padding: "2rem 1rem",
+  backgroundColor: "#ffffff",
+  boxShadow: "0 4px 12px rgba(0,0,0,.1)",
+  borderRadius: 8,
+};
+
+const headingStyle: CSSProperties = {
+  fontSize: 32,
+  fontWeight: 600,
+  color: "#333",
+  marginBottom: "1rem",
+};
+
+const formStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "16px",
+  width: "100%",
+};
+
+const inputGroupStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "4px",
+};
+
+const labelStyle: CSSProperties = {
+  fontSize: 14,
+  color: "#6b7280",
+  fontWeight: 500,
+};
+
+const inputStyle: CSSProperties = {
+  padding: "10px",
+  fontSize: 16,
+  borderRadius: 8,
+  border: "1px solid #d1d5db",
+  outline: "none",
+  transition: "border-color .3s",
+  width: "100%",
+  backgroundColor: "#f9fafb",
+  boxSizing: "border-box",
+};
+
+const toggleButtonStyle: CSSProperties = {
+  position: "absolute",
+  top: "50%",
+  right: 10,
+  transform: "translateY(-50%)",
+  background: "none",
+  border: "none",
+  color: "#2563eb",
+  cursor: "pointer",
+  fontSize: 14,
+};
+
+const errorStyle: CSSProperties = {
+  fontSize: 14,
+  color: "crimson",
+  marginTop: 8,
+};
+
+const submitButtonStyle: CSSProperties = {
+  padding: 12,
+  fontSize: 16,
+  backgroundColor: "#2563eb",
+  color: "#fff",
+  border: "none",
+  borderRadius: 8,
+  cursor: "pointer",
+  transition: "background-color .3s ease, transform .2s ease",
+};
+
+const loginLinkStyle: CSSProperties = {
+  marginTop: 16,
+  textAlign: "center",
+  fontSize: 14,
+};
+
+const linkStyle: CSSProperties = {
+  color: "#2563eb",
+  textDecoration: "none",
+  fontWeight: 600,
+};

@@ -1,5 +1,6 @@
 "use client";
 
+import "@react-three/fiber";
 import React, { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
@@ -82,9 +83,9 @@ export default function BlocksOptimized({
     x: number;
     y: number;
     z: number;
-    needed: number;      // seconds to finish
-    elapsed: number;     // accumulated seconds
-    allowDrop: boolean;  // drop rule captured at start
+    needed: number; // seconds to finish
+    elapsed: number; // accumulated seconds
+    allowDrop: boolean; // drop rule captured at start
     active: boolean;
   } | null>(null);
 
@@ -141,11 +142,7 @@ export default function BlocksOptimized({
                 onUpdate={(mesh) => {
                   const obj = new THREE.Object3D();
                   for (let i = 0; i < count; i++) {
-                    obj.position.set(
-                      posArray[i * 3 + 0],
-                      posArray[i * 3 + 1],
-                      posArray[i * 3 + 2]
-                    );
+                    obj.position.set(posArray[i * 3 + 0], posArray[i * 3 + 1], posArray[i * 3 + 2]);
                     obj.updateMatrix();
                     mesh.setMatrixAt(i, obj.matrix);
                   }
@@ -166,7 +163,7 @@ export default function BlocksOptimized({
                   if (button === 0) {
                     // LMB: start timed mining with tool effects
                     const effect = getMiningEffectFor(currentTool ?? null, Number(id) as BlockId);
-                    const speed  = Math.max(0.05, effect.speedMultiplier);
+                    const speed = Math.max(0.05, effect.speedMultiplier);
                     const needed = Math.max(0.18, hardness / speed); // never faster than ~180ms baseline
                     miningRef.current = {
                       x: bx,
@@ -194,8 +191,7 @@ export default function BlocksOptimized({
                     const y = by + ny;
                     const z = bz + nz;
 
-                    const eye =
-                      (camera.position as THREE.Vector3) ?? new THREE.Vector3(0, 2.6, 0);
+                    const eye = (camera.position as THREE.Vector3) ?? new THREE.Vector3(0, 2.6, 0);
                     if (blockOverlapsPlayer(eye, x, y, z)) return;
 
                     // stop any mining in progress
@@ -213,7 +209,11 @@ export default function BlocksOptimized({
                     onMiningProgress?.(null);
                   }
                 }}
-                onContextMenu={(e) => e.preventDefault()}
+                onContextMenu={(e) => {
+                  // ThreeEvent doesn't have preventDefault; use the DOM event
+                  e.nativeEvent.preventDefault();
+                  e.stopPropagation();
+                }}
               >
                 <meshStandardMaterial
                   color={spec.color}

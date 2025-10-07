@@ -1,7 +1,6 @@
 "use client";
-
+import "@react-three/fiber";
 import React from "react";
-import * as THREE from "three";
 import { BLOCKS } from "../lib/constants";
 import { key } from "../lib/utils";
 import type { WorldBlock } from "../lib/types";

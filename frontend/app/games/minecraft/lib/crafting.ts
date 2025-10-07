@@ -14,10 +14,15 @@ export type CraftResult = {
   consume: Array<{ index: number; amount: number }>; // cells to consume once
 };
 
-const isStick = (s: MaybeItem) => s?.id === "stick";
+// ---- Local helpers (no runtime imports) ----
+
+// Narrow to string ItemId before literal comparisons
+const idIs = (s: MaybeItem, lit: string) =>
+  typeof s?.id === "string" && (s.id as string) === lit;
+
+const isStick = (s: MaybeItem) => idIs(s, "stick");
 const isEmpty = (s: MaybeItem) => !s || s.count <= 0;
 
-// ---- Local helpers (no runtime imports) ----
 function isBlockIdLocal(id: ItemId): id is BlockId {
   return typeof id === "number";
 }
@@ -154,9 +159,9 @@ function tryTools(grid: CraftGrid): CraftResult | null {
     {
       const m1 = matchPattern(grid, PATTERNS.axeA, { material: mat });
       const m2 = matchPattern(grid, PATTERNS.axeB, { material: mat });
-      const m = m1.ok ? m1 : m2.ok ? m2 : { ok: false as const };
-      if ((m as any).ok) {
-        return { result: { id: (mat === "wood" ? "wooden_axe" : "stone_axe"), count: 1 }, consume: (m as any).used };
+      const m = m1.ok ? m1 : m2;
+      if (m.ok) {
+        return { result: { id: (mat === "wood" ? "wooden_axe" : "stone_axe"), count: 1 }, consume: m.used };
       }
     }
   }

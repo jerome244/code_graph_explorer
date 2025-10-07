@@ -7,20 +7,36 @@ import type { BlockId } from "./types";
 // ───────────────────────────────────────────────────────────────────────────────
 export type ToolTier = "wooden" | "stone" | "iron" | "diamond" | "gold" | "netherite";
 export type ToolKind = "axe" | "pickaxe" | "shovel";
+
 export type ToolItemId =
   | "wooden_axe" | "stone_axe" | "iron_axe" | "diamond_axe" | "gold_axe" | "netherite_axe"
   | "wooden_pickaxe" | "stone_pickaxe" | "iron_pickaxe" | "diamond_pickaxe" | "gold_pickaxe" | "netherite_pickaxe"
   | "wooden_shovel" | "stone_shovel" | "iron_shovel" | "diamond_shovel" | "gold_shovel" | "netherite_shovel";
 
-// Inventory/Hotbar items can be either a block (number) or a tool (string)
-export type ItemId = BlockId | ToolItemId;
+// Non-tool inventory items that still need labels/visuals
+export type NonToolItemId =
+  | "stick"
+  | "wooden_sword" | "stone_sword"; // crafting can create these
+
+// All non-block items (tools + other items)
+export type NonBlockItemId = ToolItemId | NonToolItemId;
+
+// Inventory/Hotbar items can be either a block (number) or any non-block item (string)
+export type ItemId = BlockId | NonBlockItemId;
 
 // ───────────────────────────────────────────────────────────────────────────────
-// Visual spec for tools (used by InventoryOverlay + Hotbar labels)
+// Visual spec for items (used by InventoryOverlay + Hotbar labels)
 // ───────────────────────────────────────────────────────────────────────────────
 type ItemSpec = { name: string; short: string };
 
-export const ITEM_SPEC: Record<ToolItemId, ItemSpec> = {
+export const ITEM_SPEC: Record<NonBlockItemId, ItemSpec> = {
+  // Misc
+  stick: { name: "Stick", short: "ST" },
+
+  // Swords (not treated as mining tools; just labeled visuals)
+  wooden_sword: { name: "Wooden Sword", short: "W-Sw" },
+  stone_sword:  { name: "Stone Sword",  short: "S-Sw" },
+
   // Axes
   wooden_axe:    { name: "Wooden Axe",    short: "Axe W" },
   stone_axe:     { name: "Stone Axe",     short: "Axe S" },
@@ -49,7 +65,15 @@ export const ITEM_SPEC: Record<ToolItemId, ItemSpec> = {
 // ───────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ───────────────────────────────────────────────────────────────────────────────
-const TOOL_IDS = new Set(Object.keys(ITEM_SPEC) as ToolItemId[]);
+// Keep a clean list of *tool* ids only, so non-tools like "stick"/swords don’t get treated as tools.
+const TOOL_ID_LIST = [
+  "wooden_axe","stone_axe","iron_axe","diamond_axe","gold_axe","netherite_axe",
+  "wooden_pickaxe","stone_pickaxe","iron_pickaxe","diamond_pickaxe","gold_pickaxe","netherite_pickaxe",
+  "wooden_shovel","stone_shovel","iron_shovel","diamond_shovel","gold_shovel","netherite_shovel",
+] as const satisfies readonly ToolItemId[];
+
+const TOOL_IDS = new Set<ToolItemId>(TOOL_ID_LIST);
+
 export function isToolItemId(x: unknown): x is ToolItemId {
   return typeof x === "string" && TOOL_IDS.has(x as ToolItemId);
 }
@@ -97,14 +121,10 @@ function matchMultiplier(kind: ToolKind, tag: BlockTag): number {
     (kind === "axe"     && (tag === "wood" || tag === "leaves")) ||
     (kind === "pickaxe" && (tag === "stone" || tag === "ore" || tag === "metal")) ||
     (kind === "shovel"  && (tag === "dirt" || tag === "sand" || tag === "gravel" || tag === "snow" || tag === "clay"));
-  return rightTool ? 1.6 : 0.6;   // faster with the right tool, not instant
+  return rightTool ? 1.6 : 0.6;
 }
 
-/**
- * Returns how the current tool affects mining a given block:
- *  - speedMultiplier: multiplied against (1 / seconds). Bigger = faster.
- *  - allowDrop: whether the block should drop when mined with this tool.
- */
+/** Tool effect on mining speed and drop behavior */
 export function getMiningEffectFor(
   tool: ToolItemId | null,
   block: BlockId
@@ -112,19 +132,13 @@ export function getMiningEffectFor(
   const tag = inferTag(block);
 
   if (!tool) {
-    // Bare hands: okay for soft stuff; slow for hard materials/ores.
     const soft = tag === "dirt" || tag === "sand" || tag === "gravel" || tag === "snow" || tag === "clay" || tag === "leaves" || tag === "wood";
     return { speedMultiplier: soft ? 0.5 : 0.18, allowDrop: soft };
   }
 
-  const { tier, kind } = parseTool(tool);
-  const tierMul = TIER_SPEED[tier];
-  const matchMul = matchMultiplier(kind, tag);
-  const speedMultiplier = Math.max(0.05, tierMul * matchMul);
+  const [tierMul, { kind }] = [TIER_SPEED[tool.split("_")[0] as ToolTier], parseTool(tool)];
+  const speedMultiplier = Math.max(0.05, tierMul * matchMultiplier(kind, tag));
 
-  // Simple drop rules:
-  // - Ores/stone/metal need a pickaxe to drop
-  // - Others drop regardless
   const needsPick = tag === "ore" || tag === "metal" || tag === "stone";
   const allowDrop = needsPick ? kind === "pickaxe" : true;
 

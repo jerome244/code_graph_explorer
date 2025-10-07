@@ -1,0 +1,22 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: [.env]
+    ports:
+      - "127.0.0.1:8000:8000"
+    # Linux-only, see note above
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    env_file: [.env]
+    ports:
+      - "127.0.0.1:3000:3000"
+    # Linux-only:
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"

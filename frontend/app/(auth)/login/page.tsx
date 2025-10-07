@@ -1,12 +1,13 @@
 "use client";
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import type { CSSProperties } from "react";
 
 export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
-  const [showPassword, setShowPassword] = useState(false);  // Password visibility state
+  const [showPassword, setShowPassword] = useState(false); // Password visibility state
   const router = useRouter();
   const params = useSearchParams();
   const next = params.get("next");
@@ -39,7 +40,9 @@ export default function LoginPage() {
       <h1 style={headingStyle}>Login</h1>
       <form onSubmit={onSubmit} style={formStyle}>
         <div style={inputGroupStyle}>
-          <label htmlFor="username" style={labelStyle}>Username</label>
+          <label htmlFor="username" style={labelStyle}>
+            Username
+          </label>
           <input
             id="username"
             value={username}
@@ -51,8 +54,10 @@ export default function LoginPage() {
         </div>
 
         <div style={inputGroupStyle}>
-          <label htmlFor="password" style={labelStyle}>Password</label>
-          <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+          <label htmlFor="password" style={labelStyle}>
+            Password
+          </label>
+          <div style={{ display: "flex", alignItems: "center", position: "relative" }}>
             <input
               id="password"
               type={showPassword ? "text" : "password"}
@@ -74,7 +79,9 @@ export default function LoginPage() {
 
         {err && <p style={errorStyle}>{err}</p>}
 
-        <button type="submit" style={submitButtonStyle}>Sign in</button>
+        <button type="submit" style={submitButtonStyle}>
+          Sign in
+        </button>
       </form>
 
       {/* Registration Link */}
@@ -88,7 +95,7 @@ export default function LoginPage() {
   );
 }
 
-const mainStyle = {
+const mainStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
@@ -101,45 +108,45 @@ const mainStyle = {
   borderRadius: "8px",
 };
 
-const headingStyle = {
+const headingStyle: CSSProperties = {
   fontSize: "32px",
   fontWeight: 600,
   color: "#333",
   marginBottom: "1rem",
 };
 
-const formStyle = {
+const formStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "16px",
   width: "100%",
 };
 
-const inputGroupStyle = {
+const inputGroupStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "4px",
 };
 
-const labelStyle = {
+const labelStyle: CSSProperties = {
   fontSize: "14px",
   color: "#6b7280",
   fontWeight: 500,
 };
 
-const inputStyle = {
+const inputStyle: CSSProperties = {
   padding: "10px",
   fontSize: "16px",
   borderRadius: "8px",
   border: "1px solid #d1d5db",
   outline: "none",
   transition: "border-color 0.3s",
-  minWidth: "250px", // Set a minimum width for the inputs
-  maxWidth: "100%",  // Allow the inputs to expand to 100% of the parent width
-  width: "auto", // Allow the width to adjust based on the content
+  minWidth: "250px",
+  maxWidth: "100%",
+  width: "auto",
 };
 
-const showHideButtonStyle = {
+const showHideButtonStyle: CSSProperties = {
   background: "none",
   border: "none",
   cursor: "pointer",
@@ -151,13 +158,13 @@ const showHideButtonStyle = {
   transform: "translateY(-50%)",
 };
 
-const errorStyle = {
+const errorStyle: CSSProperties = {
   fontSize: "14px",
   color: "crimson",
   marginTop: "8px",
 };
 
-const submitButtonStyle = {
+const submitButtonStyle: CSSProperties = {
   padding: "12px",
   fontSize: "16px",
   backgroundColor: "#2563eb",

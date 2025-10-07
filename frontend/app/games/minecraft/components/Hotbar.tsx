@@ -21,22 +21,22 @@ export default function Hotbar({ hotbar, selectedSlot, setSelectedSlot, disabled
       const n = parseInt(e.key, 10);
       if (n >= 1 && n <= 9) setSelectedSlot(n - 1);
     };
+
     const onWheel = (e: WheelEvent) => {
       if (disabled) return;
-      setSelectedSlot((prev) => {
-        let next = prev + (e.deltaY > 0 ? 1 : -1);
-        if (next < 0) next = 8;
-        if (next > 8) next = 0;
-        return next;
-      });
+      let next = selectedSlot + (e.deltaY > 0 ? 1 : -1);
+      if (next < 0) next = 8;
+      if (next > 8) next = 0;
+      setSelectedSlot(next);
     };
+
     window.addEventListener("keydown", onKey);
     window.addEventListener("wheel", onWheel);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("wheel", onWheel);
     };
-  }, [disabled, setSelectedSlot]);
+  }, [disabled, selectedSlot, setSelectedSlot]);
 
   return (
     <div

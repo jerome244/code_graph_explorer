@@ -20,10 +20,13 @@ import { blockOverlapsPlayer } from "./lib/physics";
 import type { BlockId } from "./lib/types";
 import { GameSocket } from "./lib/ws";
 
-// 👇 tool helpers
+// tool helpers
 import { isToolItemId, type ToolItemId } from "./lib/items";
+// item/crafting shared types
+import type { MaybeItem } from "./lib/crafting";
+import type { ItemId } from "./lib/items";
 
-// 👇 clouds
+// clouds
 import CloudLayer from "./components/CloudLayer";
 
 // Drive chunk streaming from inside the Canvas
@@ -117,30 +120,30 @@ export default function GamePage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [inventoryOpen]);
 
-  // Inventory items can be a BlockId (number) or a ToolItemId (string)
-  type ItemStack = { id: BlockId | ToolItemId; count: number } | null;
-
-  const [inv, setInv] = useState<ItemStack[]>(() => {
-    const a = Array.from({ length: 27 }, () => null) as ItemStack[];
+  // ✅ Unify on shared MaybeItem[] everywhere
+  const [inv, setInv] = useState<MaybeItem[]>(() => {
+    const a = Array.from({ length: 27 }, () => null) as MaybeItem[];
     a[0] = { id: 1, count: 32 };
     a[1] = { id: 5, count: 18 };
     a[2] = { id: 7, count: 12 };
     a[3] = { id: "wooden_axe" as ToolItemId, count: 1 }; // sample tool
-    a[4] = { id: 8, count: 16 }; // Lava
-    a[5] = { id: 9, count: 32 }; // Snow
+    a[4] = { id: 8, count: 16 };  // Lava
+    a[5] = { id: 9, count: 32 };  // Snow
     return a;
   });
 
-  const [craft, setCraft] = useState<ItemStack[]>(() => Array.from({ length: 9 }, () => null) as ItemStack[]);
-
-  // 🔹 Hotbar starts empty by default (can hold blocks or tools)
-  const [hotbarInv, setHotbarInv] = useState<ItemStack[]>(
-    () => Array.from({ length: 9 }, () => null) as ItemStack[]
+  const [craft, setCraft] = useState<MaybeItem[]>(
+    () => Array.from({ length: 9 }, () => null) as MaybeItem[]
   );
 
-  // 🔹 Which hotbar slot is active (0..8), controlled by Hotbar (1..9 keys & wheel)
+  // Hotbar can hold blocks or tools
+  const [hotbarInv, setHotbarInv] = useState<MaybeItem[]>(
+    () => Array.from({ length: 9 }, () => null) as MaybeItem[]
+  );
+
+  // Which hotbar slot is active (0..8)
   const [selectedSlot, setSelectedSlot] = useState(0);
-  const selectedStack: ItemStack = hotbarInv[selectedSlot] ?? null;
+  const selectedStack: MaybeItem = hotbarInv[selectedSlot] ?? null;
 
   // What can we place?
   const selectedBlockId: BlockId | null =
@@ -152,8 +155,9 @@ export default function GamePage() {
       ? (selectedStack.id as ToolItemId)
       : null;
 
-  // Add mined items into inventory (blocks only)
-  const addItemToInventory = useCallback((id: BlockId, amount: number = 1) => {
+  // Add items into inventory (we only stack blocks here)
+  const addItemToInventory = useCallback((id: ItemId, amount: number = 1) => {
+    if (typeof id !== "number") return; // only stacking blocks in this helper
     setInv((curr) => {
       let remain = amount;
       const next = curr.slice();
@@ -368,10 +372,6 @@ export default function GamePage() {
         <color attach="background" args={["#87CEEB"]} />
         {/* Clouds */}
         <CloudLayer height={60} size={3000} tile={280} threshold={0.5} opacity={0.85} speed={0.012} />
-        {/* Optional second layer for depth */}
-        {/* <CloudLayer height={74} size={3200} tile={360} threshold={0.6} opacity={0.65} speed={0.006} /> */}
-        {/* Optional: mild fog for distance fade */}
-        {/* <fog attach="fog" args={["#87CEEB", 120, 900]} /> */}
 
         {/* Stream chunks around the camera */}
         <Streamer updateAround={updateAround} />
@@ -392,9 +392,9 @@ export default function GamePage() {
           removeWithDrop={(x, y, z, allowDrop) => wrappedRemove(x, y, z, true, allowDrop)}
           // 'selected' is only used for RMB placement inside BlocksOptimized; we guard above.
           selected={(selectedBlockId ?? 1) as BlockId}
-          // 👇 THIS makes tools affect mining speed
+          // Tools affect mining speed
           currentTool={currentTool}
-          miningSpeedMultiplier={0.6} // overall pacing; keep differences visible
+          miningSpeedMultiplier={0.6}
           onMiningProgress={setMiningProgress}
         />
 
@@ -452,7 +452,7 @@ export default function GamePage() {
         </div>
       )}
 
-      {/* New hotbar: driven by inventory 'hotbarInv' and keyboard/wheel selection */}
+      {/* Hotbar */}
       <Hotbar
         hotbar={hotbarInv}
         selectedSlot={selectedSlot}

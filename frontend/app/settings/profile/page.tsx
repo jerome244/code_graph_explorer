@@ -44,7 +44,7 @@ function toMediaProxy(raw?: string | null) {
 }
 
 // ───────────────── Server Actions ─────────────────
-export async function updateProfile(formData: FormData) {
+async function updateProfile(formData: FormData) {
   "use server";
   const payload: Record<string, unknown> = {};
   const username = formData.get("username")?.toString().trim();
@@ -70,7 +70,7 @@ export async function updateProfile(formData: FormData) {
   return { ok: true };
 }
 
-export async function uploadAvatar(formData: FormData) {
+async function uploadAvatar(formData: FormData) {
   "use server";
   const file = formData.get("avatar");
   if (!(file instanceof File) || file.size === 0) {
@@ -95,7 +95,7 @@ export async function uploadAvatar(formData: FormData) {
   redirect("/settings/profile?uploaded=1");
 }
 
-export async function deleteAccount(formData: FormData) {
+async function deleteAccount(formData: FormData) {
   "use server";
   const confirm = formData.get("confirm")?.toString().trim();
   if (confirm !== "DELETE") return { ok: false, error: "Type DELETE to confirm." };

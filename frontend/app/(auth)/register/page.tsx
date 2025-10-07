@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 
 export default function RegisterPage() {
   const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");              // NEW
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -15,9 +15,8 @@ export default function RegisterPage() {
   function humanizeErrors(e: any): string {
     if (!e) return "Registration failed";
     if (typeof e === "string") return e;
-    if (e.detail) return String(e.detail);
+    if ((e as any).detail) return String((e as any).detail);
     try {
-      // DRF shape: { field: [msg, ...], ... }
       const parts: string[] = [];
       Object.entries(e).forEach(([k, v]) => {
         if (Array.isArray(v) && v.length) parts.push(`${k}: ${v[0]}`);
@@ -38,34 +37,42 @@ export default function RegisterPage() {
     if (password !== confirmPassword) return setErr("Passwords do not match");
     if (password.length < 8) return setErr("Password must be at least 8 characters");
 
-    // 1) Register (proxy to Django)
-    const r = await fetch("/api/auth/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: uname, email: email.trim() || undefined, password }),
-    });
+    try {
+      // 1) Register
+      const r = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: uname, email: email.trim() || undefined, password }),
+      });
 
-    if (!r.ok) {
-      let errorPayload: any;
-      try { errorPayload = await r.json(); } catch { errorPayload = await r.text(); }
-      return setErr(humanizeErrors(errorPayload));
+      if (!r.ok) {
+        // read ONCE as text, then try JSON.parse
+        const raw = await r.text(); // body consumed here
+        let errorPayload: any;
+        try { errorPayload = JSON.parse(raw); } catch { errorPayload = raw || "Registration failed"; }
+        return setErr(humanizeErrors(errorPayload));
+      }
+
+      // 2) Auto-login so httpOnly cookies are set by the server
+      const login = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: uname, password }),
+      });
+
+      if (!login.ok) {
+        const raw = await login.text();
+        let errorPayload: any;
+        try { errorPayload = JSON.parse(raw); } catch { errorPayload = raw || "Sign-in failed"; }
+        return setErr(humanizeErrors(errorPayload) || "Registered successfully, but sign-in failed. Please log in.");
+      }
+
+      router.replace("/dashboard");
+      router.refresh();
+    } catch (e: any) {
+      // network or unexpected error
+      setErr("Network error. Please try again.");
     }
-
-    // 2) Auto-login so httpOnly cookies are set by the server
-    const login = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: uname, password }),
-    });
-
-    if (!login.ok) {
-      // Registered but couldn’t auto-login (should be rare)
-      return setErr("Registered successfully, but sign-in failed. Please log in.");
-    }
-
-    // Force server components (Nav) to re-evaluate auth
-    router.replace("/dashboard");
-    router.refresh();
   };
 
   return (
@@ -113,7 +120,7 @@ export default function RegisterPage() {
   );
 }
 
-// styles (unchanged from your version) ...
+// styles…
 const mainStyle = { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", maxWidth: "500px", margin: "auto", padding: "2rem 1rem", backgroundColor: "#ffffff", boxShadow: "0 4px 12px rgba(0,0,0,.1)", borderRadius: 8 };
 const headingStyle = { fontSize: 32, fontWeight: 600 as const, color: "#333", marginBottom: "1rem" };
 const formStyle = { display: "flex", flexDirection: "column" as const, gap: "16px", width: "100%" };

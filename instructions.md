@@ -1,16 +1,16 @@
-# Docker:
+# Run Docker:
 docker compose -f docker-compose.dev.yml up -d --build
 
 
-# Caddy (terminal #3):
-cd ~/holberton/code_graph_explorer
-caddy run --config ./Caddyfile
-
-
-# Cloudflared (terminal #4):
-cd ~/holberton/code_graph_explorer
-cloudflared tunnel --protocol http2 --edge-ip-version 4 --url http://localhost:8080
+# Display Cloudflare html:
+docker compose -f docker-compose.dev.yml logs -f cloudflared
 
 
 
 
+
+
+# Stop Docker: 
+docker compose -f docker-compose.dev.yml down
+# clean up old extras if you see “orphan containers”
+docker compose -f docker-compose.dev.yml down --remove-orphans

@@ -199,8 +199,13 @@ export default function GamePage() {
   const bump = () => forceTick((n) => (n + 1) % 1_000_000);
 
   useEffect(() => {
-    const wsBase = "ws://localhost:8000";
-    const url = `${wsBase}/ws/game/${encodeURIComponent(sessionId)}/`;
+  const proto =
+    typeof window !== "undefined" && window.location.protocol === "https:"
+      ? "wss"
+      : "ws";
+  const wsBase =
+    (process.env.NEXT_PUBLIC_DJANGO_WS_BASE as string | undefined) ||
+    `${proto}://${window.location.host}`;    const url = `${wsBase}/ws/game/${encodeURIComponent(sessionId)}/`;
 
     const onMsg = (raw: any) => {
       const msg = { ...raw, type: typeof raw?.type === "string" ? raw.type.replaceAll(".", "_") : raw?.type };

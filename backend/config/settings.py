@@ -12,6 +12,7 @@ DEBUG = os.environ.get("DEBUG", "1") == "1"
 # Keep permissive by default so WS sync isn’t blocked in dev; allow override via env
 # Example to tighten later: ALLOWED_HOSTS="localhost,127.0.0.1,app.example.com"
 ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "*").split(",") if h.strip()]
+ALLOW_TRYCLOUDFLARE=1
 
 # Tell Django about the proxy chain (Cloudflare -> Caddy)
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

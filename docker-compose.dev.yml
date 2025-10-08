@@ -24,7 +24,10 @@ services:
       - ./backend:/app
     ports:
       - "8000:8000"
-    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    command: >
+      sh -lc "python manage.py migrate &&
+              daphne -b 0.0.0.0 -p 8000 config.asgi:application"
+
 
   frontend:
     build:
@@ -34,6 +37,7 @@ services:
     environment:
       NEXT_TELEMETRY_DISABLED: 1
       DJANGO_API_BASE: http://backend:8000
+      NEXT_PUBLIC_DJANGO_WS_BASE: ws://localhost:8080
     depends_on:
       - backend
     volumes:

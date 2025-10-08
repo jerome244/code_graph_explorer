@@ -15,8 +15,42 @@ docker compose -f docker-compose.dev.yml logs -f backend
 docker compose -f docker-compose.dev.yml logs -f backend frontend
 
 
+
+
 # stop everything : 
 docker compose -f docker-compose.dev.yml down
 # clean up old extras if you see “orphan containers”
 docker compose -f docker-compose.dev.yml down --remove-orphans
 
+
+
+
+# check :
+docker compose -f docker-compose.dev.yml exec -T db sh -lc \
+'PGPASSWORD="postgres" psql -h localhost -U postgres -d codegraph -c "\conninfo"'
+
+
+
+
+# if password doesnt match with actual db :
+If it fails, set the password (no data loss)
+
+Inside the running DB container, change the postgres user’s password to match your .env:
+
+docker compose -f docker-compose.dev.yml exec -T db sh -lc \
+'psql -U postgres -d postgres -c "ALTER USER postgres WITH PASSWORD '\''postgres'\'';"'
+
+
+(If that command asks for a password and you don’t know it, skip to the “reset volume” option below.)
+
+Also ensure the database exists:
+
+docker compose -f docker-compose.dev.yml exec -T db sh -lc '
+psql -U postgres -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='\''codegraph'\''" | grep -q 1 || \
+psql -U postgres -d postgres -c "CREATE DATABASE codegraph OWNER postgres"
+'
+
+
+Then restart the backend:
+
+docker compose -f docker-compose.dev.yml up -d backend

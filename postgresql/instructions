@@ -1,17 +1,58 @@
+If you want the “ORM model classes” / schema
+
+Pick one (or more) of these:
+
+Your real models are in your code: app/models.py + Django migrations in app/migrations/.
+
+Generate models from an existing DB (reverse-engineer):
+
+python manage.py inspectdb > models_from_db.py
 
 
-python manage.py shell -c "from django.db import connection; print('vendor:', connection.vendor); cursor=connection.cursor(); cursor.execute('select version()'); print(cursor.fetchone()[0]);"
+See the SQL for a migration:
 
-python manage.py shell -c "from django.db import connection; import json; print(json.dumps({k:connection.settings_dict[k] for k in ['NAME','USER','HOST','PORT']}, indent=2))"
-
-
-psql -h 127.0.0.1 -U codegraph -d code_graph_explorer -W   # enter: 007
-
-check Django :
-python manage.py shell -c "from django.db import connection; print(connection.settings_dict['PASSWORD'])"
+python manage.py sqlmigrate app_label 0001
 
 
-Change Postgresql password if needed:
-sudo -u postgres psql
-ALTER ROLE codegraph WITH LOGIN PASSWORD '007';
-\q
+Dump only the DB schema (Postgres):
+
+pg_dump -h HOST -U USER -d DB_NAME -s > schema.sql
+
+
+Explore schema in psql:
+
+\dn          -- list schemas
+\dt app_*    -- list tables (filter)
+\d table     -- describe a table
+
+
+
+
+
+# change existing password :
+docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d postgres -c "ALTER USER postgres WITH PASSWORD 'newpass';"
+
+# delete data:
+docker compose -f docker-compose.dev.yml down -v && docker compose -f docker-compose.dev.yml up -d
+
+
+# see where docker is located :
+docker volume inspect code_graph_explorer_db-data -f '{{ .Mountpoint }}'
+
+
+
+
+
+# Keep an eye on disk usage
+# What’s taking space:
+docker system df -v
+docker volume ls
+
+# Safe-ish cleanup (removes unused stuff; read prompts carefully):
+docker system prune
+docker system prune -a --volumes   # more aggressive; deletes unused images + volumes
+
+# Remove just this project’s volume (⚠️ wipes DB):
+docker compose -f docker-compose.dev.yml down -v
+
+

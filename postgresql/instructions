@@ -1,0 +1,17 @@
+
+
+python manage.py shell -c "from django.db import connection; print('vendor:', connection.vendor); cursor=connection.cursor(); cursor.execute('select version()'); print(cursor.fetchone()[0]);"
+
+python manage.py shell -c "from django.db import connection; import json; print(json.dumps({k:connection.settings_dict[k] for k in ['NAME','USER','HOST','PORT']}, indent=2))"
+
+
+psql -h 127.0.0.1 -U codegraph -d code_graph_explorer -W   # enter: 007
+
+check Django :
+python manage.py shell -c "from django.db import connection; print(connection.settings_dict['PASSWORD'])"
+
+
+Change Postgresql password if needed:
+sudo -u postgres psql
+ALTER ROLE codegraph WITH LOGIN PASSWORD '007';
+\q

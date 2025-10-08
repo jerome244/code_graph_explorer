@@ -1,4 +1,31 @@
-test ws limit
+# Backend (same shell so env vars apply)
+cd ~/holberton
+source venv/bin/activate
+
+# DB env for PostgreSQL (quoted to be safe)
+export DB_NAME='code_graph_explorer'
+export DB_USER='codegraph'
+export DB_PASSWORD='007'
+export DB_HOST='127.0.0.1'
+export DB_PORT='5432'
+
+cd code_graph_explorer/backend/
+pip install -r requirements.txt
+
+# Create/upgrade schema in Postgres
+python manage.py migrate
+
+# Start ASGI server
+daphne -p 8000 config.asgi:application
+
+
+
+
+
+
+
+
+## test ws limit
 
 terminal A:
 pkill -f daphne  # or Ctrl+C the running one

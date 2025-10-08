@@ -51,7 +51,6 @@ class Message(models.Model):
         return f"Msg<{self.id}> {self.sender_id}->{self.recipient_id}"
 
 
-# NEW: simple block relation
 class Block(models.Model):
     blocker = models.ForeignKey(User, on_delete=models.CASCADE, related_name="blocks_initiated")
     blocked = models.ForeignKey(User, on_delete=models.CASCADE, related_name="blocks_received")
@@ -65,8 +64,6 @@ class Block(models.Model):
     def __str__(self):
         return f"{self.blocker.username} ⛔ {self.blocked.username}"
 
-
-# ===== NEW: Group chat models =====
 
 class MessageGroup(models.Model):
     title = models.CharField(max_length=200, blank=True)

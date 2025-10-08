@@ -59,9 +59,9 @@ INSTALLED_APPS = [
     "corsheaders",
 
     # Project apps
-    "users",
     "projects",
     "game",
+    "users.apps.UsersConfig",
 ]
 
 MIDDLEWARE = [

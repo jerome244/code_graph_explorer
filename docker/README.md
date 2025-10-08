@@ -54,3 +54,32 @@ psql -U postgres -d postgres -c "CREATE DATABASE codegraph OWNER postgres"
 Then restart the backend:
 
 docker compose -f docker-compose.dev.yml up -d backend
+
+
+
+# change existing password :
+docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d postgres -c "ALTER USER postgres WITH PASSWORD 'newpass';"
+
+# delete data:
+docker compose -f docker-compose.dev.yml down -v && docker compose -f docker-compose.dev.yml up -d
+
+
+# see where docker is located :
+docker volume inspect code_graph_explorer_db-data -f '{{ .Mountpoint }}'
+
+
+
+
+
+# Keep an eye on disk usage
+# What’s taking space:
+docker system df -v
+docker volume ls
+
+# Safe-ish cleanup (removes unused stuff; read prompts carefully):
+docker system prune
+docker system prune -a --volumes   # more aggressive; deletes unused images + volumes
+
+# Remove just this project’s volume (⚠️ wipes DB):
+docker compose -f docker-compose.dev.yml down -v
+

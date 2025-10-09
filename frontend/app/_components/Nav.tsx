@@ -3,7 +3,7 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import LogoutButton from "../(auth)/LogoutButton";
 import UserSearch from "./UserSearch";
-import ThemeToggle from "./ThemeToggle"; // ← 追加（client component）
+//import ThemeToggle from "./ThemeToggle"; // ← 追加（client component)
 
 type Me = { username: string } | null;
 
@@ -47,7 +47,6 @@ export default async function Nav() {
           {/* Right: search + theme + auth/user actions（機能は現状維持） */}
           <div className="nav__actions">
             {/* テーマ切替（light/dark） */}
-            <ThemeToggle />
 
             {me && <UserSearch />}
 

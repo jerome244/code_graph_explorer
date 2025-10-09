@@ -11,17 +11,22 @@
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
                "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic UI",
                "Meiryo", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Graph ページ背景（必要に応じて差し替え） */
+  --graph-bg: url("/images/galaxy2.jpg");
 }
 
-/* Light theme (optional) */
+/* Light theme (optional) 
 :root[data-theme="light"]{
   --bg:#f7f8fa; --surface:#fff; --text:#1b1f24; --muted:#5b6572; --border:#e5e8ee;
   --accent:#275df7; --accent-strong:#1e4fe0;
-}
+}　/*
 
 /* ===== Base ===== */
 *{ box-sizing:border-box; }
-html,body{ height:100%; margin:0; padding:0; }
+
+/* ← 背景が確実に全画面でカバーされるよう高さを保証 */
+html,body{ height:100%; min-height:100%; margin:0; padding:0; }
+
 body{
   background:var(--bg); color:var(--text); font-family:var(--font-sans);
   font-size:clamp(15px,1.5vw,16px); line-height:1.65; letter-spacing:.01em;
@@ -118,7 +123,6 @@ code,kbd,pre{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation
    Landing (full-bleed background, no vignette)
    ========================================================= */
 
-/* 全画面＆黒幕なし */
 .landing{
   min-height:100vh;
   min-height:100dvh;          /* iOS の動的ビューポート対応 */
@@ -160,26 +164,42 @@ code,kbd,pre{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation
 
 /* --- Transparent nav on top of full-bleed background --- */
 .nav-wrap{
-  background: transparent !important;  /* 黒帯の原因を消す */
+  background: transparent !important;
 }
-
 .nav{
-  background: transparent !important;  /* バー自体も透明に */
+  background: transparent !important;
   border-color: transparent !important;
   box-shadow: none !important;
 }
 
 /* =========================================================
-   Landing visibility tweaks (make kicker/sub darker & crisper)
+   Graph 専用背景（CSSレイヤー方式 — 必要なら使用）
    ========================================================= */
 
-/* 背景写真上での可読性を上げるため、.landing のみ色を濃く＆薄い影を付与 */
-.landing .kicker{
-  color: rgba(255,255,255,0.95);            /* 以前より濃い白 */
-  text-shadow: 0 1px 2px rgba(0,0,0,0.35);  /* ほんのり縁取り */
+.graph-bg {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  isolation: isolate;
 }
-
-.landing .sub{
-  color: rgba(255,255,255,0.92);            /* muted → 濃い白に上書き */
-  text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+.graph-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: var(--graph-bg);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  z-index: -2;
+}
+.graph-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 30% 20%, rgba(0,0,0,0.15), rgba(0,0,0,0.65) 70%);
+  z-index: -1;
+}
+.graph-bg > * {
+  position: relative;
+  z-index: 0;
 }

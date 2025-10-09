@@ -1,0 +1,79 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend.dev
+    env_file: .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DEBUG: 1
+    depends_on:
+      - db
+    volumes:
+      - ./backend:/app
+    # You can keep this published for local debugging; not required for the tunnel
+    ports:
+      - "8000:8000"
+    command: >
+      sh -lc "python manage.py migrate &&
+              daphne -b 0.0.0.0 -p 8000 config.asgi:application"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend.dev
+    env_file: .env
+    environment:
+      NEXT_TELEMETRY_DISABLED: 1
+      DJANGO_API_BASE: http://backend:8000
+      # IMPORTANT: remove the hardcoded WS base so the client uses window.location host (Cloudflare)
+      # NEXT_PUBLIC_DJANGO_WS_BASE: (unset)
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "3000:3000"  # optional for local dev
+    command: npm run dev -- -p 3000 -H 0.0.0.0
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      - frontend
+      - backend
+    ports:
+      - "8080:8080"   # cloudflared will hit this
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    depends_on:
+      - caddy
+    # This reproduces your CLI flags and creates a Quick Tunnel (random trycloudflare.com URL)
+    command: tunnel --no-autoupdate --url http://caddy:8080
+    restart: unless-stopped
+    # (No ports needed; it dials out to Cloudflare)
+
+volumes:
+  db-data:
+  frontend_node_modules:
+  caddy_data:
+  caddy_config:

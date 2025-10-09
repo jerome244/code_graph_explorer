@@ -1,22 +1,16 @@
-cd ~/holberton
-source venv/bin/activate
-cd code_graph_explorer/backend/
-pip install -r requirements.txt
-daphne -p 8000 config.asgi:application
+# Run Docker:
+docker compose -f docker-compose.dev.yml up -d --build
 
 
-cd ~/holberton/code_graph_explorer/frontend/
-npm i
-npm i @tensorflow/tfjs @tensorflow/tfjs-backend-webgl @tensorflow/tfjs-backend-webgpu
-npm install three@0.160.0 @react-three/fiber@8 @react-three/drei@9 --save-exact
-npm run dev
+# Display Cloudflare html:
+docker compose -f docker-compose.dev.yml logs -f cloudflared
 
 
-cd ~/holberton/code_graph_explorer
-caddy run --config ./Caddyfile
 
 
-cd ~/holberton/code_graph_explorer
-cloudflared tunnel --protocol http2 --edge-ip-version 4 --url http://localhost:8080
 
 
+# Stop Docker: 
+docker compose -f docker-compose.dev.yml down
+# clean up old extras if you see “orphan containers”
+docker compose -f docker-compose.dev.yml down --remove-orphans

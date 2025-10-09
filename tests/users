@@ -1,0 +1,42 @@
+# create users:
+# Alice
+curl -sS -L -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"Alic3!Pass_2025_Xy"}' \
+  http://localhost:8000/api/auth/register/
+
+# Bob
+curl -sS -L -H 'Content-Type: application/json' \
+  -d '{"username":"bob","password":"B0b!Pass_2025_Xy"}' \
+  http://localhost:8000/api/auth/register/
+
+
+
+# get token and switch users:
+
+ACCESS_ALICE=$(
+  curl -sS -L -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"Alic3!Pass_2025_Xy"}' \
+  http://localhost:8000/api/auth/token/ \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["access"])'
+)
+
+ACCESS_BOB=$(
+  curl -sS -L -H 'Content-Type: application/json' \
+  -d '{"username":"bob","password":"B0b!Pass_2025_Xy"}' \
+  http://localhost:8000/api/auth/token/ \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["access"])'
+)
+
+# Who am I?
+curl -sS -L http://localhost:8000/api/auth/me/ -H "Authorization: Bearer $ACCESS_ALICE"
+curl -sS -L http://localhost:8000/api/auth/me/ -H "Authorization: Bearer $ACCESS_BOB"
+
+
+
+
+# List users
+docker compose -f docker-compose.dev.yml exec -e PGPASSWORD=postgres db \
+  psql -U postgres -d codegraph -c "SELECT id, username, is_superuser FROM auth_user ORDER BY id;"
+
+
+

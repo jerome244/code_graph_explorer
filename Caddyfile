@@ -1,32 +1,18 @@
 :8080 {
-	encode zstd gzip
-	respond /health 200
+    encode zstd gzip
+    respond /health 200
 
-	# --- Django: websockets, admin, static/media (for admin assets) ---
-	@django path /ws/* /admin* /static/* /media/*
-	handle @django {
-		reverse_proxy 127.0.0.1:8000 {
-			header_up Host {host}
-			header_up X-Real-IP {remote}
-			header_up X-Forwarded-For {remote}
-		}
-	}
+    # Django: websockets, admin, static/media
+    @django path /ws/* /admin* /static/* /media/*
+    handle @django {
+        reverse_proxy backend:8000
+    }
 
-	# --- Next.js: EVERYTHING else (including /api/*) ---
-	handle {
-		@next_static path /_next/*    # Next's build assets
-		header @next_static Cache-Control "public, max-age=31536000, immutable"
+    # Next.js: everything else (incl. /api/*)
+    handle {
+        @next_static path /_next/*
+        header @next_static Cache-Control "public, max-age=31536000, immutable"
 
-		reverse_proxy 127.0.0.1:3000 {
-			header_up Host {host}
-			header_up X-Real-IP {remote}
-			header_up X-Forwarded-For {remote}
-		}
-	}
-
-	# Optional logs
-	# log {
-	#   output file /var/log/caddy/access.log
-	#   format json
-	# }
+        reverse_proxy frontend:3000
+    }
 }

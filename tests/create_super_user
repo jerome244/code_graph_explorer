@@ -1,0 +1,12 @@
+1) Use Django admin (fastest to browse/edit)
+# create a superuser
+docker compose -f docker-compose.dev.yml exec backend python manage.py createsuperuser
+
+
+Then sign in at:
+
+http://localhost:8000/admin
+ (direct)
+
+or http://localhost:8080/admin
+ (via Caddy)

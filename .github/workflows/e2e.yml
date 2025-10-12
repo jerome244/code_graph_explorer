@@ -1,0 +1,95 @@
+# .github/workflows/e2e.yml
+name: E2E API
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: code_graph_explorer
+          POSTGRES_USER: codegraph
+          POSTGRES_PASSWORD: "007"
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd="pg_isready -U codegraph -d code_graph_explorer"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      # Django DB settings used by your settings.py
+      DB_NAME: code_graph_explorer
+      DB_USER: codegraph
+      DB_PASSWORD: "007"
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      # Target URL for tests
+      BASE_URL: http://127.0.0.1:8000
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('**/requirements*.txt') }}
+
+      - name: Install backend deps
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install test deps
+        run: |
+          pip install pytest requests pytest-timeout
+
+      - name: Migrate database
+        working-directory: backend
+        run: python manage.py migrate --noinput
+
+      - name: Start Django (dev server)
+        working-directory: backend
+        run: |
+          nohup python manage.py runserver 0.0.0.0:8000 > /tmp/django.out 2>&1 &
+          echo $! > /tmp/django.pid
+
+      - name: Wait for API (200/401 on /api/projects/)
+        run: |
+          for i in {1..60}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/api/projects/" || true)
+            if echo "$code" | grep -Eq '^(200|401)$'; then
+              echo "API is up with HTTP $code"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API did not become ready in time"
+          exit 1
+
+      - name: Run E2E pytest suite
+        env:
+          BASE_URL: ${{ env.BASE_URL }}
+        run: pytest -q tests/api --maxfail=1 --disable-warnings
+
+      - name: Upload Django log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: django-out
+          path: /tmp/django.out

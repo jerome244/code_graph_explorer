@@ -1,5 +1,5 @@
 force rebuild postgres container:
-CLEAN=1 ./tests/run_e2e.sh
+CLEAN=1 ./run_e2e.sh
 
 
 

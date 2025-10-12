@@ -1,0 +1,37 @@
+Here’s what each test is for:
+
+test_unauthorized_projects_requires_auth
+Verifies /api/projects/ is protected. A request without a token must return 401.
+➜ Confirms auth middleware & permission classes are enforced.
+
+test_invalid_login_401
+Posts bad creds to the login endpoint(s). Expects 401 (or 404 if that path isn’t wired).
+➜ Confirms auth rejects wrong credentials.
+
+test_user1_happy_path
+Full happy path for one user:
+
+List projects (200, empty array OK)
+
+Create a project → capture PID
+
+Get project detail (200)
+
+Update project name (PATCH or PUT) and verify it changed
+
+Create a file (README.md) and update it again
+
+Create a second project and delete it, then verify it’s gone (404/403)
+➜ Confirms CRUD for projects + file upload works end-to-end with DB.
+
+test_cross_user_isolation
+Creates a second user and checks they cannot read or write to user1’s project (403/404).
+➜ Confirms object-level permissions / ownership isolation.
+
+test_optional_share_and_collab — skipped (s in your output)
+Best-effort probe to add user2 as a collaborator via common “share” endpoints. It only passes if, after “sharing,” user2 can actually read or write. If your API doesn’t expose one of the guessed endpoints/payloads (or requires invitation acceptance), it skips.
+➜ When you define your real share endpoint & payload, we’ll lock this test to it.
+
+test_optional_refresh_token
+If login returns a refresh token, tries /api/auth/token/refresh/. If not present, it skips.
+➜ Confirms token refresh flow when enabled.

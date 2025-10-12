@@ -13,6 +13,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.backend.dev
+      network: host
     env_file: .env
     environment:
       DB_HOST: db

@@ -65,12 +65,18 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    depends_on:
-      - caddy
-    # This reproduces your CLI flags and creates a Quick Tunnel (random trycloudflare.com URL)
-    command: tunnel --no-autoupdate --url http://caddy:8080
+    network_mode: host     # (Linux/WSL2 only; remove depends_on)
+    command: >
+      tunnel --no-autoupdate
+      --protocol http2
+      --edge-ip-version 4
+      --retries 100
+      --loglevel debug
+      --url http://localhost:8080
     restart: unless-stopped
-    # (No ports needed; it dials out to Cloudflare)
+
+
+
 
 volumes:
   db-data:

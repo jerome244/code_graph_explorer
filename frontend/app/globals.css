@@ -203,3 +203,81 @@ code,kbd,pre{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation
   position: relative;
   z-index: 0;
 }
+/* Elegant Slate tokens */
+:root{
+  --bg:#0a0f1a; /* 背景 */
+  --surface:#0f1624; /* カード */
+  --text:#e6edf5; /* 文字 */
+  --muted:#9aa4b2; /* 補助 */
+  --border:#1f2937; /* 枠線 */
+  --accent:#7aa2ff; /* 強調 */
+  }
+  
+  html,body { background: var(--bg); color: var(--text); }
+  
+  /* スクロール余白・見出しのちょい強化 */
+  .section-title{ @apply text-2xl font-semibold tracking-tight; }
+
+  /* ===== Polish tokens & utilities ===== */
+:root{
+  --bg:#0a0f1a; --surface:#0f1624; --text:#e6edf5; --muted:#9aa4b2;
+  --border:#1f2733; --ring:#6ea8ff; --accent:#7aa2ff; --accent-2:#5f8fff;
+}
+html,body{ background:var(--bg); color:var(--text); }
+*{ -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+::selection{ background:color-mix(in oklab, var(--accent) 30%, transparent); color:#fff; }
+
+.section-title{ @apply text-2xl sm:text-3xl font-semibold tracking-tight; }
+
+/* Buttons (componenty) */
+@layer components{
+  .btn{
+    @apply inline-flex items-center justify-center rounded-xl px-5 py-3 text-sm font-semibold
+           transition duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-0
+           focus-visible:ring-[--ring];
+  }
+  .btn-primary{
+    @apply btn bg-indigo-500 hover:bg-indigo-600 text-white shadow-sm;
+  }
+  .btn-ghost{
+    @apply btn border border-slate-700 hover:bg-slate-800/60 text-slate-200;
+  }
+}
+
+/* Subtle card/glass */
+.card{
+  @apply rounded-2xl border border-slate-800/80 bg-slate-900/40 shadow-sm;
+}
+.card-hover{
+  @apply transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_10px_30px_-10px_rgba(0,0,0,0.6)]
+         hover:border-slate-700/80;
+}
+
+/* dotted grid overlay utility */
+.bg-grid {
+  background-image:
+    linear-gradient(to right, rgba(148,163,184,0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148,163,184,0.08) 1px, transparent 1px);
+  background-size: 24px 24px;
+  mask-image: radial-gradient(circle at 50% 20%, black 60%, transparent 100%);
+}
+/* ===== Landing 背景のレスポンシブ最適化 ===== */
+@layer utilities {
+  /* 既定は cover（横に広い一般画面向け） */
+  .bg-landing {
+    background-image: url('/images/landing.jpg');
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: cover;
+  }
+
+  /* 縦長画面・スマホ・狭い幅では contain にして過拡大を防止 */
+  @media (max-aspect-ratio: 4/5), (max-width: 640px) {
+    .bg-landing {
+      background-size: contain;
+      background-position: top center;
+      /* 上に余白ができても土台色が見えるように */
+      background-color: #0a0f1a;
+    }
+  }
+}

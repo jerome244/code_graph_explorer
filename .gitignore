@@ -36,4 +36,8 @@ __pycache__/
 *.idea/
 
 *Zone.Identifier
+<<<<<<< HEAD
+=======
+
+>>>>>>> tests
 .venv

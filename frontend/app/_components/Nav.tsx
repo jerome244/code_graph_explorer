@@ -3,7 +3,6 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import LogoutButton from "../(auth)/LogoutButton";
 import UserSearch from "./UserSearch";
-//import ThemeToggle from "./ThemeToggle"; // ← 追加（client component)
 
 type Me = { username: string } | null;
 
@@ -24,46 +23,10 @@ export default async function Nav() {
   const me = await getMe();
 
   return (
-<<<<<<< HEAD
-    <header
-      style={{
-        height: 56,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        padding: "0 24px",
-        borderBottom: "1px solid #e5e7eb",
-        backgroundColor: "#ffffff",
-        position: "sticky",
-        top: 0,
-        zIndex: 50,
-        boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
-        gap: 16,
-      }}
-    >
-      {/* Left: navigation links */}
-      <nav style={{ display: "flex", gap: 24, alignItems: "center" }}>
-        <Link href={me ? "/dashboard" : "/"} style={navLinkStyle}>
-          {me ? "Dashboard" : "Home"}
-        </Link>
-        <Link href="/graph" style={navLinkStyle}>Graph</Link>
-        <Link href="/games" style={navLinkStyle}>Games</Link>
-        <Link href="/osint" style={navLinkStyle}>OSINT</Link>
-        <Link href="/pico" style={navLinkStyle}>Pico</Link>
-        <Link href="/animal-detector" style={navLinkStyle}>Animal Detector</Link>
-        
-        {me && (
-          <>
-            <Link href="/messages" style={navLinkStyle}>Messages</Link>
-            <Link href="/profile" style={navLinkStyle}>Profile</Link>
-          </>
-        )}
-      </nav>
-=======
     <div className="nav-wrap">
       <header className="nav">
         <div className="nav__inner container" style={{ paddingInline: 12 }}>
-          {/* Left: navigation links（元の並びを維持） */}
+          {/* Left: navigation links */}
           <nav className="nav__links" aria-label="Primary">
             <Link href={me ? "/dashboard" : "/"} className="nav__link">
               {me ? "Dashboard" : "Home"}
@@ -72,6 +35,7 @@ export default async function Nav() {
             <Link href="/games" className="nav__link">Games</Link>
             <Link href="/osint" className="nav__link">OSINT</Link>
             <Link href="/pico" className="nav__link">Pico</Link>
+            <Link href="/animal-detector" className="nav__link">Animal Detector</Link>
             {me && (
               <>
                 <Link href="/messages" className="nav__link">Messages</Link>
@@ -80,11 +44,8 @@ export default async function Nav() {
             )}
           </nav>
 
-          {/* Right: search + theme + auth/user actions（機能は現状維持） */}
+          {/* Right: search + auth/user actions */}
           <div className="nav__actions">
-            {/* テーマ切替（light/dark） */}
->>>>>>> landing
-
             {me && <UserSearch />}
 
             {!me ? (

@@ -3,8 +3,11 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import LogoutButton from "../(auth)/LogoutButton";
 import UserSearch from "./UserSearch";
+//import ThemeToggle from "./ThemeToggle"; // ← 追加（client component)
 
-async function getMe() {
+type Me = { username: string } | null;
+
+async function getMe(): Promise<Me> {
   const cookieStore = await cookies();
   const access = cookieStore.get("access")?.value;
   if (!access) return null;
@@ -21,6 +24,7 @@ export default async function Nav() {
   const me = await getMe();
 
   return (
+<<<<<<< HEAD
     <header
       style={{
         height: 56,
@@ -55,45 +59,48 @@ export default async function Nav() {
           </>
         )}
       </nav>
+=======
+    <div className="nav-wrap">
+      <header className="nav">
+        <div className="nav__inner container" style={{ paddingInline: 12 }}>
+          {/* Left: navigation links（元の並びを維持） */}
+          <nav className="nav__links" aria-label="Primary">
+            <Link href={me ? "/dashboard" : "/"} className="nav__link">
+              {me ? "Dashboard" : "Home"}
+            </Link>
+            <Link href="/graph" className="nav__link">Graph</Link>
+            <Link href="/games" className="nav__link">Games</Link>
+            <Link href="/osint" className="nav__link">OSINT</Link>
+            <Link href="/pico" className="nav__link">Pico</Link>
+            {me && (
+              <>
+                <Link href="/messages" className="nav__link">Messages</Link>
+                <Link href="/profile" className="nav__link">Profile</Link>
+              </>
+            )}
+          </nav>
 
-      {/* Right: search + auth/user actions */}
-      <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-        {me && <UserSearch />}
+          {/* Right: search + theme + auth/user actions（機能は現状維持） */}
+          <div className="nav__actions">
+            {/* テーマ切替（light/dark） */}
+>>>>>>> landing
 
-        {!me ? (
-          <>
-            <Link href="/login" style={authLinkStyle}>Login</Link>
-            <Link href="/register" style={authLinkStyle}>Register</Link>
-          </>
-        ) : (
-          <>
-            <span style={userGreetingStyle}>Hi, {me.username}</span>
-            <LogoutButton />
-          </>
-        )}
-      </div>
-    </header>
+            {me && <UserSearch />}
+
+            {!me ? (
+              <>
+                <Link href="/login" className="btn btn--ghost">Login</Link>
+                <Link href="/register" className="btn btn--primary">Register</Link>
+              </>
+            ) : (
+              <>
+                <span className="nav__greet">Hi, {me.username}</span>
+                <LogoutButton />
+              </>
+            )}
+          </div>
+        </div>
+      </header>
+    </div>
   );
 }
-
-const navLinkStyle: React.CSSProperties = {
-  fontSize: "16px",
-  fontWeight: 600,
-  color: "#4b5563",
-  textDecoration: "none",
-  transition: "color 0.3s ease",
-};
-const authLinkStyle: React.CSSProperties = {
-  fontSize: "14px",
-  fontWeight: 500,
-  color: "#2563eb",
-  textDecoration: "none",
-  padding: "6px 12px",
-  borderRadius: "4px",
-  transition: "background-color 0.3s ease",
-};
-const userGreetingStyle: React.CSSProperties = {
-  fontSize: "14px",
-  color: "#4b5563",
-  fontWeight: 600,
-};

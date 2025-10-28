@@ -1,0 +1,65 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    env_file: .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      # Public origin is where users access the app (Caddy)
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8080}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-*}
+      DEBUG: ${DEBUG:-0}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - static-data:/app/staticfiles
+      - media-data:/app/media
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    env_file: .env
+    environment:
+      # Next server routes call into Django via Docker DNS
+      DJANGO_API_BASE: http://backend:8000
+      # Leave unset to default to the browser host/port, or set explicitly:
+      # NEXT_PUBLIC_DJANGO_WS_BASE: ${NEXT_PUBLIC_DJANGO_WS_BASE:-}
+    depends_on:
+      - backend
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - static-data:/srv/staticfiles:ro
+      - media-data:/srv/media:ro
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  db-data:
+  static-data:
+  media-data:

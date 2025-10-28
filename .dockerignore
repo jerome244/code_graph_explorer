@@ -1,0 +1,12 @@
+**/__pycache__/
+**/.pytest_cache/
+**/.next/
+**/.venv/
+**/node_modules/
+**/.DS_Store
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/db.sqlite3
+**/media/*
+**/staticfiles/*

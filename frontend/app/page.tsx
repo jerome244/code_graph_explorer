@@ -1,55 +1,49 @@
-// app/page.tsx  (SERVER COMPONENT — no "use client")
+// app/page.tsx
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import Image from "next/image";
 
 export default async function Home() {
   const access = cookies().get("access")?.value;
-  if (access) {
-    redirect("/dashboard");
-  }
+  if (access) redirect("/dashboard");
 
   return (
-    <main style={mainStyle}>
-      <h1 style={headingStyle}>Welcome</h1>
-      <p>Use the buttons below to Login or Register.</p>
-
-      <div style={{ display: "flex", gap: "16px" }}>
-        <a href="/login" style={buttonStyle}>Login</a>
-        <a href="/register" style={buttonStyle}>Register</a>
+    <main className="landing">
+      {/* 背景：黒幕なし／常に全画面フィット */}
+      <div className="bg-wrap" aria-hidden>
+        <Image
+          src="/images/galaxy.jpg"  // public/images/galaxy.jpg
+          alt=""
+          fill
+          priority
+          sizes="100vw"
+          style={{ objectFit: "cover", objectPosition: "center" }}
+        />
       </div>
+
+      {/* 中央ヒーロー */}
+      <section className="hero">
+        <p className="kicker">Welcome to</p>
+
+        <h1 className="title title-appear" aria-label="Code Graph Explorer">
+          <span className="line-appear" style={{ animationDelay: "0s"  }}>Code</span>
+          <span className="line-appear" style={{ animationDelay: ".25s" }}>Graph</span>
+          <span className="line-appear" style={{ animationDelay: ".5s"  }}>Explorer</span>
+        </h1>
+
+        <p className="sub measure-narrow">
+          Visualize complex repositories as clear, interactive maps.
+        </p>
+
+        <div className="cta">
+          <a href="/login" className="btn btn--primary">Sign In</a>
+          <a href="/register" className="btn btn--ghost">Create Account</a>
+        </div>
+      </section>
     </main>
   );
 }
 
-const mainStyle = {
-  display: "flex",
-  flexDirection: "column" as const,
-  alignItems: "center",
-  justifyContent: "center",
-  maxWidth: "500px",
-  margin: "auto",
-  padding: "2rem 1rem",
-  backgroundColor: "#ffffff",
-  boxShadow: "0 4px 12px rgba(0, 0, 0, 0.1)",
-  borderRadius: "8px",
-};
 
-const headingStyle = {
-  fontSize: "36px",
-  fontWeight: 700,
-  color: "#333",
-  marginBottom: "1rem",
-};
 
-const buttonStyle = {
-  display: "inline-block",
-  padding: "12px",
-  fontSize: "16px",
-  backgroundColor: "#2563eb",
-  color: "#fff",
-  border: "none",
-  borderRadius: "8px",
-  textDecoration: "none",
-  cursor: "pointer",
-  transition: "background-color 0.3s ease, transform 0.2s ease",
-} as const;
+

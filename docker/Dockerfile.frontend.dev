@@ -1,9 +1,0 @@
-FROM node:20-alpine
-WORKDIR /app
-
-# Install deps (dev included)
-COPY frontend/package*.json ./
-RUN npm ci
-
-# Code mounts in via volume
-EXPOSE 3000

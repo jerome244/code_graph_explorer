@@ -1,4 +1,4 @@
-// app/page.tsx — hero + 3x3 logos + footer (logos w/o names, demo→/graph, animated title)
+// app/page.tsx — Hero + Logos 3x3 + Footer (final version)
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -24,13 +24,15 @@ export default async function Home() {
           className="title title-appear title-landing-anim"
           aria-label="Code Graph Explorer"
         >
-          <span className="line-appear gradient-accent" style={{ animationDelay: "0s" }}>
-            Code
-          </span>
-          <span className="line-appear" style={{ animationDelay: ".15s" }}>
+          <span className="line-appear gradient-accent">Code</span>
+          <span className="line-appear" style={{ animationDelay: "0.15s" }}>
             Graph
           </span>
-          <span className="line-appear shimmer-text" style={{ animationDelay: ".3s" }}>
+          <span
+            className="line-appear shimmer-text"
+            style={{ animationDelay: "0.3s" }}
+            data-text="Explorer"
+          >
             Explorer
           </span>
         </h1>
@@ -73,7 +75,7 @@ export default async function Home() {
         <div className="divider" aria-hidden />
       </div>
 
-      {/* Footer: Authors + GitHub */}
+      {/* Footer */}
       <footer className="footer section">
         <div className="footer-inner container">
           <div className="footer-left">
@@ -92,7 +94,6 @@ export default async function Home() {
               href="https://github.com/jerome244/code_graph_explorer"
               target="_blank"
               rel="noopener noreferrer"
-              aria-label="Open project on GitHub"
             >
               <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" className="icon">
                 <path fill="currentColor" d="M12 0C5.37 0 0 5.37 0 12a12 12 0 0 0 8.21 11.43c.6.11.82-.26.82-.57v-2.17c-3.34.73-4.04-1.41-4.04-1.41-.55-1.39-1.34-1.76-1.34-1.76-1.1-.75.08-.74.08-.74 1.22.09 1.86 1.25 1.86 1.25 1.08 1.85 2.83 1.31 3.52 1 .11-.79.42-1.31.76-1.61-2.66-.3-5.46-1.33-5.46-5.93 0-1.31.47-2.39 1.24-3.24-.12-.3-.54-1.51.12-3.14 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.66 1.63.24 2.84.12 3.14.77.85 1.23 1.93 1.23 3.24 0 4.61-2.8 5.62-5.47 5.92.43.38.81 1.12.81 2.26v3.35c0 .32.21.69.83.57A12 12 0 0 0 24 12c0-6.63-5.37-12-12-12Z"/>
@@ -111,8 +112,6 @@ export default async function Home() {
 function Logo({ src }: { src: string }) {
   return (
     <li className="logo-item">
-      {/* decorative only */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
       <img className="logo-img" src={src} alt="" aria-hidden="true" loading="lazy" />
     </li>
   );

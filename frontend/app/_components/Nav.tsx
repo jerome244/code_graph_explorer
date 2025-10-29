@@ -137,7 +137,7 @@ export default function Nav() {
               whiteSpace: "nowrap",
             }}
           >
-            DevGraph
+            CodeGraphExplorer
           </span>
         </Link>
 

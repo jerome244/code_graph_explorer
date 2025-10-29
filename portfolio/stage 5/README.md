@@ -22,19 +22,24 @@ Users can:
 
 | Category | Technology |
 |---------|------------|
-| Frontend | React |
+| Frontend | React / Next.js |
 | Backend | Django (Python) |
 | Real-time Features | WebSockets |
 | Audio Calls | WebRTC |
 | Database | PostgreSQL |
-| Deployment | Docker + Reverse Proxy |
+| Deployment | Docker + Reverse Proxy (Caddy) |
 | CI Automation | GitHub Actions |
 | Project Management | Taiga |
 
 ### System Architecture
 
+Below are the final architecture diagrams used in the MVP.
 
-*(Architecture diagrams from Stage 4 should be embedded here)* ✅
+**App Layers (Django ↔ Next.js/React)**
+![App Layers – Django / Next.js / React](sandbox:/mnt/data/code%20graph-Page-4.drawio.png)
+
+**Runtime & Networking (ASGI/Daphne, Proxies, Caddy/Cloudflare)**
+![Runtime & Networking – ASGI, Proxies, Caddy, Cloudflare](sandbox:/mnt/data/code%20graph-Page-3.drawio.png)
 
 ---
 
@@ -132,4 +137,4 @@ This project offered valuable experience in distributed systems, DevOps automati
 - Ryota Higa  
 - Jerome Tran  
 
-
+**End of Final Report** ✅

@@ -35,11 +35,11 @@ Users can:
 
 Below are the final architecture diagrams used in the MVP.
 
-**App Layers (Django ↔ Next.js/React)**
-![App Layers – Django / Next.js / React](sandbox:/mnt/data/code%20graph-Page-4.drawio.png)
+**App Layers (Django ↔ Next.js/React)**  
+![App Layers – Django / Next.js / React](https://github.com/jerome244/code_graph_explorer/blob/main/portfolio/stage%205/code%20graph-Page-4.drawio.png?raw=true)
 
-**Runtime & Networking (ASGI/Daphne, Proxies, Caddy/Cloudflare)**
-![Runtime & Networking – ASGI, Proxies, Caddy, Cloudflare](sandbox:/mnt/data/code%20graph-Page-3.drawio.png)
+**Runtime & Networking (ASGI/Daphne, Proxies, Caddy, Cloudflare)**  
+![Runtime & Networking – ASGI, Proxies, Caddy, Cloudflare](https://github.com/jerome244/code_graph_explorer/blob/main/portfolio/stage%205/code%20graph-Page-3.drawio.png?raw=true)
 
 ---
 
@@ -74,7 +74,7 @@ Below are the final architecture diagrams used in the MVP.
 
 | Test Type | Tools | Status |
 |----------|------|--------|
-| API End-to-End Testing | Python test suite included in repo | ✅ Implemented |
+| API End-to-End Testing | Python test suite included in repo | ✅ Implementated |
 | Live Sync Testing | Manual & Observational | ✅ Verified |
 | UI/UX Testing | Internal testing | ✅ Prototype-level validation |
 
@@ -104,8 +104,9 @@ Below are the final architecture diagrams used in the MVP.
 | Graph rendering complexity | Iterative prototypes + simplified MVP focus |
 | Managing multiple live collaboration features at once | Prioritization + stable CI pipeline |
 
-📌 **Lesson Learned:**  
-> Iterative prototyping and communication prevented bottlenecks.
+### 📌 Key Learning
+
+> By iterating rapidly on prototypes and validating each feature as soon as it was functional, the team avoided major architectural mistakes and reduced rework. Frequent communication and daily synchronization allowed blockers to be identified early, ensuring that no single developer was stuck waiting on others. This approach limited bottlenecks, improved technical alignment, and contributed to steady delivery throughout the project.
 
 ---
 
@@ -137,4 +138,3 @@ This project offered valuable experience in distributed systems, DevOps automati
 - Ryota Higa  
 - Jerome Tran  
 
-**End of Final Report** ✅

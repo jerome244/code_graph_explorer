@@ -1,67 +1,54 @@
-// frontend/app/_components/Nav.tsx
 "use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { usePathname } from "next/navigation";                // ⬅️ NEW
 import LogoutButton from "../(auth)/LogoutButton";
 import UserSearch from "./UserSearch";
 
 type Me = { id: number; username: string } | null;
 
-function Logo({ size = 28 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" aria-hidden="true">
-      <defs>
-        <linearGradient id="lg" x1="6" y1="6" x2="42" y2="42" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#6366F1" />
-          <stop offset="1" stopColor="#06B6D4" />
-        </linearGradient>
-      </defs>
-      <circle cx="24" cy="24" r="20" stroke="url(#lg)" strokeWidth="2.5" />
-      <circle cx="14" cy="16" r="4" fill="#6366F1" />
-      <circle cx="34" cy="14" r="4" fill="#06B6D4" />
-      <circle cx="36" cy="32" r="4" fill="#22C55E" />
-      <circle cx="16" cy="34" r="4" fill="#F59E0B" />
-      <path
-        d="M18 18 L30 16 M18 18 L18 30 M30 16 L34 28 M18 30 L32 32"
-        stroke="url(#lg)"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
+function Logo({ size = 28 }: { size?: number }) { /* ... keep your logo exactly ... */ }
 
 export default function Nav() {
   const [me, setMe] = useState<Me>(null);
   const [loading, setLoading] = useState(true);
+  const pathname = usePathname();                              // ⬅️ NEW
+
+  async function fetchMe() {
+    try {
+      setLoading(true);
+      const r = await fetch("/api/auth/me", { cache: "no-store", credentials: "include" });
+      if (r.ok) {
+        const u = await r.json();
+        setMe({ id: u.id, username: u.username });
+      } else {
+        setMe(null);
+      }
+    } catch {
+      setMe(null);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
     let alive = true;
-    (async () => {
-      try {
-        const r = await fetch("/api/auth/me", { cache: "no-store", credentials: "include" });
-        if (!alive) return;
-        if (r.ok) {
-          const u = await r.json();
-          setMe({ id: u.id, username: u.username });
-        } else {
-          setMe(null);
-        }
-      } catch {
-        setMe(null);
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => { alive = false; };
+    fetchMe();
+    // listen for explicit auth-change events (login/logout)
+    const onAuthChange = () => { if (alive) fetchMe(); };
+    window.addEventListener("cge-auth-change", onAuthChange);
+    return () => { alive = false; window.removeEventListener("cge-auth-change", onAuthChange); };
   }, []);
 
-  // simple active path highlight
-  const pathname = useMemo(() => (typeof window !== "undefined" ? window.location.pathname : "/"), []);
+  // Refetch when the URL changes (covers redirects after logout/login)
+  useEffect(() => { fetchMe(); }, [pathname]);                 // ⬅️ NEW
+
+  // simple active path highlight (keep your logic)
+  const activePath = useMemo(() => pathname || "/", [pathname]);
 
   const navItem = (href: string, label: string) => {
-    const active = pathname.startsWith(href);
+    const active = activePath.startsWith(href);
     return (
       <Link
         href={href}
@@ -69,7 +56,7 @@ export default function Nav() {
           position: "relative",
           fontSize: 15,
           fontWeight: 600,
-          color: active ? "#111827" : "#4b5563",
+          color: active ? "#e6e8ee" : "rgba(230,232,238,0.65)",
           textDecoration: "none",
           padding: "8px 4px",
           transition: "color 150ms ease",
@@ -105,38 +92,18 @@ export default function Nav() {
         position: "sticky",
         top: 0,
         zIndex: 70,
-        // pretty background with subtle blur
-        background: "rgba(255,255,255,0.85)",
+        background: "rgba(11,16,32,0.72)",
         backdropFilter: "saturate(160%) blur(10px)",
         WebkitBackdropFilter: "saturate(160%) blur(10px)",
-        borderBottom: "1px solid #e5e7eb",
-        boxShadow: "0 4px 18px rgba(2,6,23,0.06)",
+        borderBottom: "1px solid rgba(255,255,255,0.10)",
+        boxShadow: "0 10px 30px rgba(0,0,0,0.30)",
       }}
     >
       {/* Left: brand + nav */}
       <div style={{ display: "flex", alignItems: "center", gap: 18, minWidth: 0 }}>
-        <Link
-          href={me ? "/dashboard" : "/"}
-          aria-label="Home"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            textDecoration: "none",
-            padding: "6px 6px",
-            borderRadius: 10,
-          }}
-        >
+        <Link href={me ? "/dashboard" : "/"} aria-label="Home" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none", padding: "6px 6px", borderRadius: 10 }}>
           <Logo />
-          <span
-            style={{
-              fontSize: 16,
-              fontWeight: 800,
-              letterSpacing: 0.3,
-              color: "#0f172a",
-              whiteSpace: "nowrap",
-            }}
-          >
+          <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: 0.3, backgroundImage: "linear-gradient(180deg, #fff, rgba(255,255,255,0.72))", WebkitBackgroundClip: "text", color: "transparent", whiteSpace: "nowrap" }}>
             CodeGraphExplorer
           </span>
         </Link>
@@ -156,59 +123,24 @@ export default function Nav() {
         </nav>
       </div>
 
-      {/* Right: search + auth */}
-      <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+      {/* Right: search + auth (your latest spacing + white chip) */}
+      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
         {!!me && <UserSearch />}
 
         {!loading && !me && (
           <div style={{ display: "flex", gap: 8 }}>
-            <Link
-              href="/login"
-              style={{
-                fontSize: 14,
-                fontWeight: 700,
-                color: "#1d4ed8",
-                textDecoration: "none",
-                padding: "8px 12px",
-                borderRadius: 10,
-                border: "1px solid #bfdbfe",
-                background: "#eff6ff",
-              }}
-            >
+            <Link href="/login" style={{ fontSize: 14, fontWeight: 800, color: "#e6e8ee", textDecoration: "none", padding: "9px 12px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.10)", background: "linear-gradient(180deg, #6366F1 0%, #06B6D4 100%)", boxShadow: "0 8px 20px rgba(0,0,0,0.25)" }}>
               Login
             </Link>
-            <Link
-              href="/register"
-              style={{
-                fontSize: 14,
-                fontWeight: 700,
-                color: "#0f172a",
-                textDecoration: "none",
-                padding: "8px 12px",
-                borderRadius: 10,
-                border: "1px solid #e5e7eb",
-                background: "#ffffff",
-              }}
-            >
+            <Link href="/register" style={{ fontSize: 14, fontWeight: 800, color: "#e6e8ee", textDecoration: "none", padding: "9px 12px", borderRadius: 10, border: "1px solid rgba(255,255,255,0.10)", background: "rgba(255,255,255,0.06)" }}>
               Register
             </Link>
           </div>
         )}
 
         {!!me && (
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <span
-              style={{
-                fontSize: 13,
-                color: "#475569",
-                fontWeight: 700,
-                padding: "6px 10px",
-                background: "#f8fafc",
-                border: "1px solid #e2e8f0",
-                borderRadius: 999,
-              }}
-              title={`Signed in as ${me.username}`}
-            >
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginLeft: 20 }}>
+            <span style={{ fontSize: 13, color: "#ffffff", fontWeight: 800, padding: "6px 10px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 999 }} title={`Signed in as ${me.username}`}>
               Hi, {me.username}
             </span>
             <LogoutButton />

@@ -111,7 +111,106 @@ export async function deleteAccount(formData: FormData) {
   redirect("/goodbye");
 }
 
-// ───────────────── Page ─────────────────
+/* ───────────────── Theme ───────────────── */
+const dark = {
+  pageBg: "#0b1020",
+  glow: "radial-gradient(1200px 400px at 50% -10%, rgba(124,143,255,0.12), rgba(11,16,32,0))",
+  text: "#e6e8ee",
+  subText: "rgba(230,232,238,0.75)",
+  panelBg: "rgba(255,255,255,0.06)",
+  panelBorder: "rgba(255,255,255,0.10)",
+  inputBg: "rgba(255,255,255,0.05)",
+  inputBorder: "rgba(255,255,255,0.14)",
+  headerBg: "rgba(255,255,255,0.08)",
+  accent: "#9bb8ff",
+  primary: "#2563eb",
+  primaryBorder: "#1d4ed8",
+  danger: "#ef4444",
+  warnBg: "rgba(255, 187, 92, 0.12)",
+  warnBorder: "rgba(255, 187, 92, 0.45)",
+  warnText: "#ffd28a",
+} as const;
+
+/* ───────────────── Shared styles ───────────────── */
+const mainStyle: React.CSSProperties = {
+  maxWidth: 900,
+  margin: "32px auto",
+  padding: "0 16px 40px",
+  color: dark.text,
+  background: dark.glow,
+  minHeight: "calc(100vh - 56px)",
+};
+
+const h1Style: React.CSSProperties = {
+  fontSize: 30,
+  fontWeight: 800,
+  marginBottom: 8,
+  backgroundImage: "linear-gradient(180deg, #fff, rgba(255,255,255,0.72))",
+  WebkitBackgroundClip: "text",
+  color: "transparent",
+  letterSpacing: "-0.01em",
+};
+
+const subStyle: React.CSSProperties = {
+  color: dark.subText,
+  marginBottom: 24,
+  lineHeight: 1.6,
+};
+
+const card: React.CSSProperties = {
+  border: `1px solid ${dark.panelBorder}`,
+  borderRadius: 12,
+  padding: 16,
+  background: dark.panelBg,
+  boxShadow: "0 8px 30px rgba(0,0,0,0.25)",
+};
+
+const h2: React.CSSProperties = { fontSize: 18, fontWeight: 800, marginBottom: 12, color: dark.text };
+
+const label: React.CSSProperties = { display: "grid", gap: 6 };
+const labelTitle: React.CSSProperties = { fontWeight: 700, color: dark.subText };
+
+const input: React.CSSProperties = {
+  padding: "10px 12px",
+  border: `1px solid ${dark.inputBorder}`,
+  borderRadius: 10,
+  fontSize: 14,
+  background: dark.inputBg,
+  color: dark.text,
+  outline: "none",
+};
+
+const primaryBtn: React.CSSProperties = {
+  padding: "10px 14px",
+  borderRadius: 10,
+  border: `1px solid ${dark.primaryBorder}`,
+  background: dark.primary,
+  color: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
+};
+
+const secondaryBtn: React.CSSProperties = {
+  padding: "10px 14px",
+  borderRadius: 10,
+  border: `1px solid ${dark.panelBorder}`,
+  background: dark.headerBg,
+  color: dark.text,
+  fontWeight: 800,
+  cursor: "pointer",
+};
+
+const dangerBtn: React.CSSProperties = {
+  padding: "10px 14px",
+  borderRadius: 10,
+  border: `1px solid ${dark.danger}`,
+  background: dark.danger,
+  color: "#fff",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+/* ───────────────── Page ───────────────── */
 export default async function SettingsProfilePage({
   searchParams,
 }: {
@@ -133,11 +232,9 @@ export default async function SettingsProfilePage({
   }
 
   return (
-    <main style={{ maxWidth: 880, margin: "32px auto", padding: "0 16px" }}>
-      <h1 style={{ fontSize: 28, fontWeight: 800, marginBottom: 8 }}>Edit Profile</h1>
-      <p style={{ color: "#6b7280", marginBottom: 24 }}>
-        Update your personal information, profile photo, or delete your account.
-      </p>
+    <main style={mainStyle}>
+      <h1 style={h1Style}>Edit Profile</h1>
+      <p style={subStyle}>Update your personal information, profile photo, or delete your account.</p>
 
       <div style={{ display: "grid", gap: 24 }}>
         {/* Basic Info */}
@@ -181,8 +278,8 @@ export default async function SettingsProfilePage({
                 height: 80,
                 borderRadius: "50%",
                 overflow: "hidden",
-                background: "#f3f4f6",
-                border: "1px solid #e5e7eb",
+                background: dark.inputBg,
+                border: `1px solid ${dark.inputBorder}`,
               }}
             >
               {avatarSrc ? (
@@ -192,7 +289,7 @@ export default async function SettingsProfilePage({
                 <div style={{ width: 80, height: 80 }} />
               )}
             </div>
-            <div style={{ color: "#6b7280" }}>PNG or JPG up to 5MB.</div>
+            <div style={{ color: dark.subText }}>PNG or JPG up to 5MB.</div>
           </div>
 
           <form action={uploadAvatar}>
@@ -206,67 +303,36 @@ export default async function SettingsProfilePage({
         </section>
 
         {/* Danger Zone */}
-        <section style={{ ...card, border: "1px solid #fde68a", background: "#fffbeb" }}>
-          <h2 style={{ ...h2, color: "#92400e" }}>Danger Zone</h2>
-          <p style={{ color: "#92400e", marginBottom: 12 }}>
+        <section
+          style={{
+            ...card,
+            border: `1px solid ${dark.warnBorder}`,
+            background: dark.warnBg,
+          }}
+        >
+          <h2 style={{ ...h2, color: dark.warnText }}>Danger Zone</h2>
+          <p style={{ color: dark.warnText, marginBottom: 12 }}>
             This action is irreversible. Your data will be permanently removed.
           </p>
           <form action={deleteAccount}>
             <label style={label}>
-              <span style={labelTitle}>
+              <span style={{ ...labelTitle, color: dark.warnText }}>
                 Type <code>DELETE</code> to confirm
               </span>
               <input name="confirm" placeholder="DELETE" style={input} />
             </label>
-            <button type="submit" style={dangerBtn}>
+            <button type="submit" style={{ ...dangerBtn, marginTop: 12 }}>
               Delete my account
             </button>
           </form>
         </section>
       </div>
+
+      <style>{`
+        :root { background-color: ${dark.pageBg}; }
+        a, button { transition: transform 120ms ease, opacity 160ms ease; }
+        a:hover, button:hover { transform: translateY(-1px); }
+      `}</style>
     </main>
   );
 }
-
-const card: React.CSSProperties = {
-  border: "1px solid #e5e7eb",
-  borderRadius: 8,
-  padding: 16,
-  background: "#fff",
-};
-const h2: React.CSSProperties = { fontSize: 18, fontWeight: 700, marginBottom: 12 };
-const label: React.CSSProperties = { display: "grid", gap: 6 };
-const labelTitle: React.CSSProperties = { fontWeight: 600 };
-const input: React.CSSProperties = {
-  padding: "10px 12px",
-  border: "1px solid #e5e7eb",
-  borderRadius: 8,
-  fontSize: 14,
-};
-const primaryBtn: React.CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  border: "1px solid #2563eb",
-  background: "#2563eb",
-  color: "#fff",
-  fontWeight: 600,
-  cursor: "pointer",
-};
-const secondaryBtn: React.CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  border: "1px solid #e5e7eb",
-  background: "#fff",
-  color: "#111827",
-  fontWeight: 600,
-  cursor: "pointer",
-};
-const dangerBtn: React.CSSProperties = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  border: "1px solid #ef4444",
-  background: "#ef4444",
-  color: "#fff",
-  fontWeight: 700,
-  cursor: "pointer",
-};

@@ -1,3 +1,6 @@
+cd frontend
+npm install
+
 # Run Docker:
 docker compose -f docker-compose.dev.yml up -d --build
 

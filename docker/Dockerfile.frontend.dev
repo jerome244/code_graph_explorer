@@ -1,9 +1,13 @@
+# docker/Dockerfile.frontend.dev
 FROM node:20-alpine
 WORKDIR /app
 
-# Install deps (dev included)
-COPY frontend/package*.json ./
-RUN npm ci
+# Install deps (dev included) using the committed lockfile
+COPY frontend/package.json frontend/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 
-# Code mounts in via volume
+# Source is mounted via volume at runtime
 EXPOSE 3000
+
+# Compose overrides this with your "npm run dev ..." command
+CMD ["npm", "run", "dev", "--", "-p", "3000", "-H", "0.0.0.0"]

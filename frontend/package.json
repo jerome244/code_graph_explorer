@@ -17,11 +17,11 @@
     "cytoscape": "^3.33.1",
     "jszip": "^3.10.1",
     "monaco-editor": "^0.52.2",
-    "next": "14.2.5",
+    "next": "^14.2.33",
     "react": "18.3.1",
     "react-cytoscapejs": "^2.0.0",
     "react-dom": "18.3.1",
-    "react-syntax-highlighter": "^15.6.6",
+    "react-syntax-highlighter": "^16.1.0",
     "three": "0.160.0"
   },
   "type": "module",

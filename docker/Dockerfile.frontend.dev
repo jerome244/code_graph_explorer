@@ -2,12 +2,16 @@
 FROM node:20-alpine
 WORKDIR /app
 
-# Install deps (dev included) using the committed lockfile
-COPY frontend/package.json frontend/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+# (Optional but often helpful for Next.js native deps like sharp)
+RUN apk add --no-cache libc6-compat
 
-# Source is mounted via volume at runtime
+# Install deps (dev included) without a lockfile
+# - package*.json matches package.json and would also match a lock later if you add one
+COPY frontend/package*.json ./
+RUN --mount=type=cache,target=/root/.npm npm install --no-audit --no-fund
+
+# Source is mounted via volume at runtime (compose), so no COPY of the app here
 EXPOSE 3000
 
-# Compose overrides this with your "npm run dev ..." command
+# Compose typically overrides this with your dev command; keeping a sane default
 CMD ["npm", "run", "dev", "--", "-p", "3000", "-H", "0.0.0.0"]

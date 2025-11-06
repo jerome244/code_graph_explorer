@@ -1,9 +1,0 @@
-docker compose -f docker-compose.dev.yml exec backend sh -lc 'ls -1 /app/media/avatars || true'
-
-
-
-# List profile avatars
-docker compose -f docker-compose.dev.yml exec -e PGPASSWORD=postgres db \
-  psql -U postgres -d codegraph -c "SELECT user_id, avatar FROM users_profile ORDER BY user_id;"
-
-

@@ -1,0 +1,2702 @@
+// /frontend/app/graph/page.tsx
+"use client";
+
+import JSZip from "jszip";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as cytoscapeImport from "cytoscape";
+const cytoscape = (cytoscapeImport as any).default ?? (cytoscapeImport as any);
+import ShapeOverlay, { Shape } from "./ShapeOverlay";
+import { useSearchParams } from "next/navigation";
+
+// Parsing + path helpers moved to a separate module
+import {
+  ALLOWED_EXTS,
+  CANDIDATE_RESOLVE_EXTS,
+  TreeNode,
+  extname,
+  basename,
+  resolveRelative,
+  inferEdges,
+  buildFunctionIndex,
+  buildTree,
+} from "./parsing";
+
+import { Peer, ProjectDetail, Role } from "./types";
+import InlineEditor from "./InlineEditor";
+import TreeView from "./TreeView";
+import { htmlEscape, regexEscape, highlightWithFunctions } from "./utils";
+
+import Row from './Row';
+import Sidebar from "./Sidebar";
+
+
+// Prefer source files over headers when multiple declaring files are open
+const rankFile = (p: string) => {
+  const e = (p.split(".").pop() || "").toLowerCase();
+  if (e === "c" || e === "cc" || e === "cpp" || e === "cxx") return 0; // definitions first
+  if (e === "h" || e === "hh" || e === "hpp" || e === "hxx") return 2; // headers last
+  return 1;
+};
+
+// Build a non-looping mid-point cubic Bezier (prevents figure-8 crossings)
+const buildPath = (x1: number, y1: number, x2: number, y2: number) => {
+  const dx = x2 - x1, dy = y2 - y1;
+  if (Math.hypot(dx, dy) < 6) return null; // skip tiny lines
+  const mx = (x1 + x2) / 2;                 // shared x control point ⇒ smooth S
+  return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
+};
+
+
+
+// ------------------------------ Page ------------------------------
+
+export default function GraphPage() {
+  
+  const searchParams = useSearchParams();
+
+  // --- FULLSCREEN: start ---
+  const outerRef = useRef<HTMLDivElement>(null);
+  const [isFs, setIsFs] = useState(false);
+
+  useEffect(() => {
+    const onChange = () => setIsFs(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(async () => {
+    const el: any = outerRef.current ?? document.documentElement;
+    try {
+      if (!document.fullscreenElement) {
+        if (el.requestFullscreen) await el.requestFullscreen();
+        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen(); // Safari
+      } else {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else if ((document as any).webkitExitFullscreen) (document as any).webkitExitFullscreen(); // Safari
+      }
+    } catch {}
+  }, []);
+  // --- FULLSCREEN: end ---
+
+
+  // Graph state
+  const [elements, setElements] = useState<CyElement[]>([]);
+  const [tree, setTree] = useState<TreeNode | null>(null);
+  const [info, setInfo] = useState<string>("Upload a .zip to begin");
+  const [selected, setSelected] = useState<string | null>(null);
+
+  // File contents (editable) + ref (handlers see latest)
+  const [fileMap, setFileMap] = useState<Record<string, string>>({});
+  const [funcIndex, setFuncIndex] = useState<any>({ byFile: {}, index: {} });
+  const fileMapRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    fileMapRef.current = fileMap;
+  }, [fileMap]);
+
+  // phone call
+  const [callMenuOpen, setCallMenuOpen] = useState(false);
+
+  // Positions (+ hidden) persisted on save
+  const positionsRef = useRef<PositionsMap>({});
+
+  // Shapes persisted with the project
+  const [shapes, setShapes] = useState<Shape[]>([]);
+  const shapesRef = useRef<Shape[]>([]);
+  useEffect(() => { shapesRef.current = shapes; }, [shapes]);
+
+  // ---- realtime shapes sync helpers ----
+  const shapesClientId = useMemo(
+    () => ("randomUUID" in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2)),
+    []
+  );
+  const applyingRemoteShapesRef = useRef(false);
+
+  const sendShapeOps = useCallback((ops: any[]) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== 1 || !ops.length) return;
+    ws.send(JSON.stringify({ type: "shape_ops", ops, client_id: shapesClientId }));
+  }, [shapesClientId]);
+
+  // Wrap setShapes with a diff + broadcast (ignored while applying remote)
+  const setShapesWS: React.Dispatch<React.SetStateAction<Shape[]>> = useCallback((updater) => {
+    setShapes((prev) => {
+      const next = typeof updater === "function" ? (updater as (p: Shape[]) => Shape[])(prev) : updater;
+
+      if (!applyingRemoteShapesRef.current) {
+        const prevMap = new Map(prev.map((s) => [s.id, s]));
+        const nextMap = new Map(next.map((s) => [s.id, s]));
+        const ops: any[] = [];
+
+        // additions
+        for (const [id, s] of nextMap) if (!prevMap.has(id)) ops.push({ op: "add", shape: s });
+        // removals
+        for (const [id] of prevMap) if (!nextMap.has(id)) ops.push({ op: "remove", id });
+        // patches
+        for (const [id, s2] of nextMap) {
+          const s1 = prevMap.get(id);
+          if (!s1) continue;
+          const f: any = {};
+          if (s1.type === "rect" && s2.type === "rect") {
+            if (s1.x !== s2.x) f.x = s2.x;
+            if (s1.y !== s2.y) f.y = s2.y;
+            if (s1.w !== s2.w) f.w = s2.w;
+            if (s1.h !== s2.h) f.h = s2.h;
+            if (s1.color !== s2.color) f.color = s2.color;
+            if (s1.label !== s2.label) f.label = s2.label;
+          } else if (s1.type === "line" && s2.type === "line") {
+            if (s1.x1 !== s2.x1) f.x1 = s2.x1;
+            if (s1.y1 !== s2.y1) f.y1 = s2.y1;
+            if (s1.x2 !== s2.x2) f.x2 = s2.x2;
+            if (s1.y2 !== s2.y2) f.y2 = s2.y2;
+          }
+          if (Object.keys(f).length) ops.push({ op: "patch", id, fields: f });
+        }
+
+        if (ops.length) sendShapeOps(ops);
+      }
+
+      return next;
+    });
+  }, [sendShapeOps, setShapes]);
+
+
+
+  // Snapshot x/y + hidden per node
+  function snapshotPositions(): PositionsMap {
+    const cy = cyRef.current;
+    const out: PositionsMap = {};
+    if (!cy) return out;
+    cy.nodes().forEach((n) => {
+      const p = n.position();
+      out[n.id()] = { x: p.x, y: p.y, hidden: n.hidden() };
+    });
+    return out;
+  }
+
+  // Auth/persistence
+  const [authed, setAuthed] = useState(false);
+  const [projectId, setProjectId] = useState<number | null>(null);
+  const [projectName, setProjectName] = useState<string>("");
+  const [myProjects, setMyProjects] = useState<Array<{ id: number; name: string }>>([]);
+
+  // ------------------------------ SHARE ADDITIONS ------------------------------
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareErr, setShareErr] = useState<string | null>(null);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [projDetail, setProjDetail] = useState<ProjectDetail | null>(null);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<UserLite[]>([]);
+  const isOwner = projDetail?.my_role === "owner";
+
+  const collab = useMemo(() => {
+    if (!projDetail) return { editors: [] as UserLite[], viewers: [] as UserLite[] };
+    const editorIds = new Set(projDetail.editors.map((u) => u.id));
+    const viewersOnly = projDetail.shared_with.filter((u) => !editorIds.has(u.id));
+    return { editors: projDetail.editors, viewers: viewersOnly };
+  }, [projDetail]);
+
+  async function fetchProjectDetail() {
+    if (!projectId) return;
+    try {
+      setShareErr(null);
+      const r = await fetch(`/api/projects/${projectId}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(await r.text());
+      setProjDetail(await r.json());
+    } catch (e: any) {
+      setShareErr(e?.message || "Failed to load collaborators");
+    }
+  }
+
+  useEffect(() => {
+    if (shareOpen) fetchProjectDetail();
+  }, [shareOpen, projectId]);
+
+  // debounce user search
+  useEffect(() => {
+    const h = setTimeout(async () => {
+      if (!shareOpen) return;
+      const qq = q.trim();
+      if (!qq) return setResults([]);
+      try {
+        setShareErr(null);
+        const r = await fetch(`/api/auth/users/search/?q=${encodeURIComponent(qq)}`);
+        if (!r.ok) throw new Error(await r.text());
+        const list: UserLite[] = await r.json();
+        const skip = new Set<number>([
+          projDetail?.owner.id ?? -1,
+          ...(projDetail?.shared_with ?? []).map((u) => u.id),
+        ]);
+        setResults(list.filter((u) => !skip.has(u.id)));
+      } catch (e: any) {
+        setShareErr(e?.message || "Search failed");
+      }
+    }, 300);
+    return () => clearTimeout(h);
+  }, [q, shareOpen, projDetail]);
+
+  async function mutateShare(usernames: string[], mode: "add" | "remove" | "replace", role: "viewer" | "editor") {
+    if (!projectId) return;
+    setShareBusy(true);
+    try {
+      const r = await fetch(`/api/projects/${projectId}/share/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ usernames, mode, role }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      await fetchProjectDetail();
+      setQ(""); setResults([]);
+    } catch (e: any) {
+      try {
+        const obj = JSON.parse(e.message);
+        if (typeof obj?.detail === "string") setShareErr(obj.detail);
+        else if (Array.isArray(obj?.missing)) setShareErr(`Missing: ${obj.missing.join(", ")}`);
+        else setShareErr(e.message);
+      } catch { setShareErr(e.message); }
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  // multi-popups that follow nodes; editable
+  type Popup = { path: string; x: number; y: number; draft: string; dirty: boolean; w?: number; h?: number };
+  const [popups, setPopups] = useState<Popup[]>([]);
+  const popupsRef = useRef<Popup[]>([]);
+  useEffect(() => {
+    popupsRef.current = popups;
+  }, [popups]);
+
+  // Per-popup line toggles + global toggle
+  const [showLinesGlobal, setShowLinesGlobal] = useState(false);
+  const [popupLinesEnabled, setPopupLinesEnabled] = useState<Record<string, boolean>>({});
+  const anyPopupLineOn = Object.values(popupLinesEnabled).some(Boolean);
+  const overlayEnabled = showLinesGlobal || anyPopupLineOn;
+  const [colorizeFunctions, setColorizeFunctions] = useState(false);
+  
+  // Sidebar collapse
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
+
+  // --- GitHub import state ---
+  const [ghRepo, setGhRepo] = useState(""); // "owner/repo"
+  const [ghRef, setGhRef] = useState("");   // optional branch/tag/sha
+  const [ghToken, setGhToken] = useState(""); // optional (for private repos / rate limits)
+
+  // keep popupLinesEnabled keys pruned to open popups
+  useEffect(() => {
+    setPopupLinesEnabled((prev) => {
+      const open = new Set(popups.map((p) => p.path));
+      const next: Record<string, boolean> = {};
+      for (const k of Object.keys(prev)) if (open.has(k)) next[k] = prev[k];
+      return next;
+    });
+  }, [popups]);
+
+  // If global is ON and new popups open, ensure they are ON too
+  useEffect(() => {
+    if (!showLinesGlobal) return;
+    setPopupLinesEnabled((prev) => {
+      const next = { ...prev };
+      for (const p of popups) next[p.path] = true;
+      return next;
+    });
+  }, [showLinesGlobal, popups]);
+
+  // Cytoscape refs
+  const containerRef = useRef<HTMLDivElement>(null);
+  const cyRef = useRef<cytoscape.Core | null>(null);
+
+  // Styles: tiny nodes
+  const cyStylesheet = useMemo<cytoscape.Stylesheet[]>(
+    () => [
+      {
+        selector: "node",
+        style: {
+          label: "data(label)",
+          "font-size": 8,
+          "text-valign": "center",
+          "text-halign": "center",
+          width: 14,
+          height: 14,
+        },
+      },
+      { selector: "edge", style: { width: 1, "curve-style": "bezier", "target-arrow-shape": "triangle" } },
+      { selector: "node:selected", style: { "border-width": 2, "border-color": "#2563eb" } },
+      { selector: "node[?hidden]", style: { opacity: 0.2 } },
+    ],
+    []
+  );
+
+  // Load my projects list (guest-friendly, silent refresh)
+  useEffect(() => {
+    (async () => {
+      try {
+        let r = await fetch("/api/projects", { cache: "no-store" });
+        if (r.status === 401) {
+          const rr = await fetch("/api/auth/refresh", { method: "POST" });
+          if (rr.ok) r = await fetch("/api/projects", { cache: "no-store" });
+        }
+        if (r.ok) {
+          const items = await r.json();
+          setMyProjects(items.map((p: any) => ({ id: p.id, name: p.name })));
+          setAuthed(true);
+        } else {
+          setAuthed(false);
+        }
+      } catch {
+        setAuthed(false);
+      }
+    })();
+  }, []);
+
+  // ------------------------------ Realtime: state & connection ------------------------------
+  const [me, setMe] = useState<{ id: number; username: string } | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const wsReadyRef = useRef(false);
+  const applyingRemoteRef = useRef(false);
+  const applyingRemotePopupRef = useRef(false);
+  const applyingRemoteViewportRef = useRef(false);
+  const peersRef = useRef<Map<number, Peer>>(new Map());
+  const [peers, setPeers] = useState<Peer[]>([]);
+  const textTimersRef = useRef<Map<string, number>>(new Map());
+  const remoteDraftsRef = useRef<Record<string, string>>({});
+
+  // --- WebRTC audio call (1:1) ---
+  type CallStatus = "idle" | "calling" | "ringing" | "connected";
+  const [call, setCall] = useState<{
+    status: CallStatus;
+    peer?: Peer;
+    muted: boolean;
+    incomingOffer?: RTCSessionDescriptionInit | null;
+  }>({ status: "idle", muted: false, incomingOffer: null });
+
+  const closePC = () => {
+    try { pcRef.current?.close(); } catch {}
+    pcRef.current = null;
+  };
+
+  const endCall = (notify = true) => {
+    if (notify && call.peer) {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "rtc_hangup", to: call.peer.id, reason: "hangup" }));
+    }
+    closePC();
+    localStreamRef.current?.getTracks().forEach((t) => t.stop());
+    localStreamRef.current = null;
+    setCall({ status: "idle", muted: false, incomingOffer: null });
+  };
+
+  useEffect(() => {
+    return () => { // cleanup on unmount
+      try { pcRef.current?.close(); } catch {}
+      localStreamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  const ensureMedia = async () => {
+    if (localStreamRef.current) return localStreamRef.current;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    localStreamRef.current = stream;
+    return stream;
+  };
+
+  const createPC = (toId: number) => {
+    const pc = new RTCPeerConnection(rtcConfig);
+    pc.onicecandidate = (ev) => {
+      if (ev.candidate) {
+        const ws = wsRef.current;
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: "rtc_ice", to: toId, candidate: ev.candidate.toJSON() }));
+        }
+      }
+    };
+    pc.ontrack = (ev) => {
+      if (remoteAudioRef.current) remoteAudioRef.current.srcObject = ev.streams[0];
+    };
+    pcRef.current = pc;
+    return pc;
+  };
+
+  // startCall(peer)
+  const startCall = async (peer: Peer) => {
+    try {
+      const stream = await ensureMedia();
+      const pc = createPC(peer.id);
+
+      // attach tracks
+      stream.getTracks().forEach(t => pc.addTrack(t, stream));
+
+      // ensure initial state (unmuted)
+      setLocalAudioEnabled(true);
+
+      setCall({ status: "calling", peer, muted: false, incomingOffer: null });
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      wsRef.current?.readyState === 1 && wsRef.current.send(JSON.stringify({ type: "rtc_offer", to: peer.id, sdp: offer }));
+    } catch (err) {
+      console.error(err);
+      endCall(false);
+      alert("Could not start call. Check mic permission/device.");
+    }
+  };
+
+
+  // acceptCall()
+  const acceptCall = async () => {
+    const offer = call.incomingOffer;
+    const peer = call.peer;
+    if (!offer || !peer) return;
+    try {
+      const stream = await ensureMedia();
+      const pc = createPC(peer.id);
+
+      stream.getTracks().forEach(t => pc.addTrack(t, stream));
+
+      // ensure initial state (unmuted)
+      setLocalAudioEnabled(true);
+
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      wsRef.current?.readyState === 1 && wsRef.current.send(JSON.stringify({ type: "rtc_answer", to: peer.id, sdp: answer }));
+      setCall(v => ({ ...v, status: "connected", incomingOffer: null }));
+      pendingCandidatesRef.current.forEach(c => pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {}));
+      pendingCandidatesRef.current = [];
+    } catch (err) {
+      console.error(err);
+      endCall(true);
+    }
+  };
+
+
+  const declineCall = () => {
+    if (call.peer) {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "rtc_hangup", to: call.peer.id, reason: "decline" }));
+    }
+    setCall({ status: "idle", peer: undefined, muted: false, incomingOffer: null });
+  };
+
+  const toggleMute = () => {
+    const enabledNow = (localStreamRef.current?.getAudioTracks() ?? []).every(t => t.enabled);
+    setLocalAudioEnabled(!enabledNow);
+  };
+
+
+
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const rtcConfig = useMemo(
+    () => ({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] }),
+    []
+  );
+
+const setLocalAudioEnabled = (on: boolean) => {
+  const tracks = localStreamRef.current?.getAudioTracks() ?? [];
+  tracks.forEach(t => (t.enabled = on));
+  setCall(v => ({ ...v, muted: !on }));
+};
+
+
+  // --- Realtime chat ---
+  type ChatUser = { id: number; username: string; color: string };
+  type ChatMsg = { id: string; text: string; ts: string; user: ChatUser };
+
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatLog, setChatLog] = useState<ChatMsg[]>([]);
+  const [chatDraft, setChatDraft] = useState("");
+  const chatBodyRef = useRef<HTMLDivElement>(null);
+
+  const scrollChatToBottom = useCallback(() => {
+    const el = chatBodyRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+  useEffect(() => { scrollChatToBottom(); }, [chatLog, scrollChatToBottom]);
+
+  const sendChat = useCallback(() => {
+    const text = chatDraft.trim();
+    if (!text) return;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: "chat", text }));
+    setChatDraft("");
+  }, [chatDraft]);
+
+
+  // who am I (for ignoring echoes)
+  useEffect(() => {
+    (async () => {
+      if (!authed) { setMe(null); return; }
+      try {
+        const r = await fetch("/api/auth/me", { cache: "no-store" });
+        if (r.ok) {
+          const u = await r.json();
+          setMe({ id: u.id, username: u.username });
+        } else {
+          setMe(null);
+        }
+      } catch { setMe(null); }
+    })();
+  }, [authed]);
+
+  // Open WebSocket for this project
+  useEffect(() => {
+    if (!authed || !projectId) {
+      if (wsRef.current) try { wsRef.current.close(); } catch {};
+      wsRef.current = null; wsReadyRef.current = false;
+      peersRef.current.clear(); setPeers([]);
+      return;
+    }
+
+    const proto = (typeof location !== "undefined" && location.protocol === "https:") ? "wss" : "ws";
+    const base = (process.env.NEXT_PUBLIC_DJANGO_WS_BASE as string | undefined) || `${proto}://${location.host}`;
+    const url = `${base}/ws/projects/${projectId}/`;
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      wsReadyRef.current = true;
+      // ask backend for shapes snapshot (server may also push it automatically)
+      ws.send(JSON.stringify({ type: "shape_request_full", client_id: shapesClientId }));
+    };
+
+    ws.onclose = () => { wsReadyRef.current = false; peersRef.current.clear(); setPeers([]); };
+    ws.onerror = () => { /* noop */ };
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+
+        if (msg.type === "presence_state") {
+          const map = new Map<number, Peer>();
+          for (const p of msg.peers as Peer[]) map.set(p.id, p);
+          peersRef.current = map;
+          setPeers(Array.from(map.values()));
+        } else if (msg.type === "presence_join") {
+          const p: Peer = msg.peer;
+          peersRef.current.set(p.id, p);
+          setPeers(Array.from(peersRef.current.values()));
+        } else if (msg.type === "presence_leave") {
+          const id: number = msg.peer?.id;
+          peersRef.current.delete(id);
+          setPeers(Array.from(peersRef.current.values()));
+        } else if (msg.type === "cursor") {
+          const id: number | null = msg.peer_id ?? null;
+          const data = msg.data || {};
+          if (id != null) {
+            const prev = peersRef.current.get(id);
+            if (prev) {
+              peersRef.current.set(id, { ...prev, x: data.x, y: data.y });
+              setPeers(Array.from(peersRef.current.values()));
+            }
+          }
+        } else if (msg.type === "node_move") {
+          const { path, x, y, by } = msg.data || {};
+          if (!path || by === me?.id) return; // ignore own echoes
+          const cy = cyRef.current;
+          if (!cy) return;
+          const node = cy.getElementById(path);
+          if (node && (node as any).length) {
+            applyingRemoteRef.current = true;
+            node.position({ x, y });
+            applyingRemoteRef.current = false;
+          }
+        } else if (msg.type === "node_visibility") {
+          const { path, hidden, by } = msg.data || {};
+          if (!path || by === me?.id) return;
+          const cy = cyRef.current;
+          if (!cy) return;
+          const node = cy.$id(path);
+          if (!node.length) return;
+
+          if (hidden) {
+            node.hide();
+            node.connectedEdges().hide();
+            setPopups((cur) => cur.filter((pp) => pp.path !== path));
+            setSelected((sel) => (sel === path ? null : sel));
+            // clear per-popup toggle
+            setPopupLinesEnabled((prev) => {
+              if (!(path in prev)) return prev;
+              const n = { ...prev }; delete n[path]; return n;
+            });
+            // clear pending text broadcasts
+            const t = textTimersRef.current.get(path);
+            if (t) { window.clearTimeout(t); textTimersRef.current.delete(path); }
+          } else {
+            node.show();
+            node.connectedEdges().forEach((e) => {
+              if (!e.source().hidden() && !e.target().hidden()) e.show();
+            });
+          }
+          positionsRef.current[path] = { ...(positionsRef.current[path] || {}), hidden: !!hidden };
+        } else if (msg.type === "popup_open") {
+          const { path, by } = msg.data || {};
+          if (!path || by === me?.id) return;
+          const cy = cyRef.current;
+          if (!cy) return;
+          const node = cy.$id(path);
+          if (!node.length) return;
+          const rp = node.renderedPosition();
+          const code = (remoteDraftsRef.current[path] != null) ? remoteDraftsRef.current[path] : (fileMapRef.current[path] ?? "");
+          setPopups((cur) => (cur.some((p) => p.path === path) ? cur : [...cur, { path, x: rp.x, y: rp.y, draft: code, dirty: false }]));
+        } else if (msg.type === "popup_close") {
+          const { path, by } = msg.data || {};
+          if (!path || by === me?.id) return;
+          setPopups((cur) => cur.filter((p) => p.path !== path));
+          setSelected((sel) => (sel === path ? null : sel));
+          setPopupLinesEnabled((prev) => { if (!(path in prev)) return prev; const n = { ...prev }; delete n[path]; return n; });
+          const t = textTimersRef.current.get(path);
+          if (t) { window.clearTimeout(t); textTimersRef.current.delete(path); }
+        } else if (msg.type === "popup_resize") {
+          const { path, w, h, by } = msg.data || {};
+          if (!path || by === me?.id) return;
+          applyingRemotePopupRef.current = true;
+          setPopups((cur) =>
+            cur.map((p) => (p.path === path ? { ...p, w: Number(w) || undefined, h: Number(h) || undefined } : p))
+          );
+          // keep guard for two RAFs to avoid echo
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => { applyingRemotePopupRef.current = false; });
+          });
+        }
+        // --- NEW: per-popup lines toggle from peers
+        else if (msg.type === "popup_lines") {
+          const { path, enabled, by } = msg.data || {};
+          if (!path || by === me?.id) return;
+          setPopupLinesEnabled(prev => ({ ...prev, [path]: !!enabled }));
+        }
+        // --- NEW: global lines toggle from peers
+        else if (msg.type === "popup_lines_global") {
+          const { enabled, by } = msg.data || {};
+          if (by === me?.id) return;
+          const on = !!enabled;
+          setShowLinesGlobal(on);
+          setPopupLinesEnabled(() => {
+            if (!on) return {};
+            const m: Record<string, boolean> = {};
+            for (const p of popupsRef.current) m[p.path] = true;
+            return m;
+          });
+        }
+        // --- NEW: text edit broadcast from peers
+        else if (msg.type === "text_edit" || msg.type === "text_change" || msg.type === "text_update") {
+          const { path, content, by } = msg.data || {};
+          if (!path || by === me?.id) return;
+          remoteDraftsRef.current[path] = String(content ?? "");
+          setPopups((cur) => cur.map((p) => (p.path === path ? { ...p, draft: remoteDraftsRef.current[path], dirty: true } : p)));
+        }
+        // --- NEW: code coloration toggle from peers
+        else if (msg.type === "colorize_functions") {
+          const { enabled, by } = msg.data || {};
+          if (by === me?.id) return;
+          setColorizeFunctions(!!enabled);
+
+        // ======== SHAPES: realtime sync ========
+        } 
+        // ignore my own shape echoes (server relays as-is)
+        else if (msg.client_id && msg.client_id === shapesClientId) {
+          return;
+        }
+        // full snapshot
+        else if (msg.type === "shapes_full") {
+          applyingRemoteShapesRef.current = true;
+          setShapes(Array.isArray(msg.shapes) ? msg.shapes : []);
+          queueMicrotask(() => { applyingRemoteShapesRef.current = false; });
+          return;
+        }
+        // single op
+        else if (msg.type === "shape_op") {
+          applyingRemoteShapesRef.current = true;
+          const { op } = msg;
+          if (op === "add") {
+            setShapes((cur) => [...cur, msg.shape]);
+          } else if (op === "remove") {
+            setShapes((cur) => cur.filter((s) => s.id !== msg.id));
+          } else if (op === "patch") {
+            setShapes((cur) => cur.map((s) => (s.id === msg.id ? { ...s, ...msg.fields } : s)));
+          } else if (op === "replace_all") {
+            setShapes(Array.isArray(msg.shapes) ? msg.shapes : []);
+          }
+          applyingRemoteShapesRef.current = false;
+          return;
+        }
+        // batch ops
+        else if (msg.type === "shape_ops") {
+          const ops = Array.isArray(msg.ops) ? msg.ops : [];
+          applyingRemoteShapesRef.current = true;
+          setShapes((cur) => {
+            let next = cur;
+            for (const m of ops) {
+              if (m.op === "add") next = [...next, m.shape];
+              else if (m.op === "remove") next = next.filter((s) => s.id !== m.id);
+              else if (m.op === "patch") next = next.map((s) => (s.id === m.id ? { ...s, ...m.fields } : s));
+            }
+            return next;
+          });
+          applyingRemoteShapesRef.current = false;
+          return;
+        }
+        // ======== /SHAPES ========
+
+        else if (msg.type === "chat_history") {
+          setChatLog((msg.messages || []) as ChatMsg[]);
+        } else if (msg.type === "chat") {
+          const m = (msg.data || {}) as ChatMsg;
+          if (m && m.id) setChatLog((cur) => [...cur, m]);
+        }
+
+        // ---- WebRTC signaling ----
+        else if (msg.type === "rtc_offer") {
+          const to = msg.to, from = msg.from;
+          if (to !== me?.id) return;
+          // busy? auto-decline
+          if (call.status !== "idle") {
+            const ws = wsRef.current;
+            if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "rtc_hangup", to: from, reason: "busy" }));
+            return;
+          }
+          const peer = peersRef.current.get(from);
+          setCall({ status: "ringing", peer, muted: false, incomingOffer: msg.sdp });
+          setChatOpen(true); // optional: pop open chat on incoming call
+        }
+        else if (msg.type === "rtc_answer") {
+          const to = msg.to;
+          if (to !== me?.id) return;
+          if (!pcRef.current) return;
+          pcRef.current.setRemoteDescription(new RTCSessionDescription(msg.sdp)).catch(() => {});
+          setCall((v) => ({ ...v, status: "connected" }));
+          // apply queued ICE
+          pendingCandidatesRef.current.forEach((c) =>
+            pcRef.current?.addIceCandidate(new RTCIceCandidate(c)).catch(() => {})
+          );
+          pendingCandidatesRef.current = [];
+        }
+        else if (msg.type === "rtc_ice") {
+          const to = msg.to;
+          if (to !== me?.id) return;
+          const cand: RTCIceCandidateInit | undefined = msg.candidate;
+          if (!cand) return;
+          if (pcRef.current && pcRef.current.remoteDescription) {
+            pcRef.current.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+          } else {
+            pendingCandidatesRef.current.push(cand);
+          }
+        }
+        else if (msg.type === "rtc_hangup") {
+          const to = msg.to, from = msg.from;
+          if (to !== me?.id) return;
+          endCall(false);
+          const r = msg.reason;
+          if (r === "decline") setInfo(`${peersRef.current.get(from)?.username ?? "Peer"} declined the call`);
+          if (r === "busy") setInfo(`${peersRef.current.get(from)?.username ?? "Peer"} is busy`);
+        }
+
+        // --- Viewport sync: apply peers' zoom/pan (and initial state from server) ---
+        else if (msg.type === "viewport") {
+          const { zoom, pan, by } = msg.data || {};
+          if (by === me?.id) return; // ignore our own echoes
+          const cy = cyRef.current;
+          if (!cy) return;
+          applyingRemoteViewportRef.current = true;
+          if (typeof zoom === "number") cy.zoom(zoom);
+          if (pan && typeof pan.x === "number" && typeof pan.y === "number") {
+            cy.pan({ x: Number(pan.x), y: Number(pan.y) });
+          }
+          // let Cytoscape settle before re-enabling local broadcasts
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => { applyingRemoteViewportRef.current = false; });
+          });
+        }
+        
+
+      } catch (err) { /* ignore parse/socket errors */ }
+    };
+
+
+
+    return () => { try { ws.close(); } catch {}; wsRef.current = null; wsReadyRef.current = false; };
+  }, [authed, projectId, me?.id]);
+
+  // Create cy once (strict-mode safe)
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    if (cyRef.current) {
+      try {
+        cyRef.current.stop();
+        cyRef.current.destroy();
+      } catch {}
+      cyRef.current = null;
+    }
+
+    const cy = cytoscape({
+      container,
+      elements: [],
+      style: cyStylesheet as any,
+      wheelSensitivity: 0.2,
+    });
+    cyRef.current = cy;
+
+    // Node click → toggle popup (+ broadcast)
+    const onTapNode = (evt: any) => {
+      const id: string = evt.target.id();
+      const node = cy.$id(id);
+      if (!node.length) return;
+
+      const ws = wsRef.current;
+      const existing = popupsRef.current.find((p) => p.path === id);
+
+      if (existing) {
+        if (existing.dirty) savePopup(id);
+        setPopups((cur) => cur.filter((p) => p.path !== id));
+        setPopupLinesEnabled((prev) => { if (!(id in prev)) return prev; const n = { ...prev }; delete n[id]; return n; });
+        const t = textTimersRef.current.get(id);
+        if (t) { window.clearTimeout(t); textTimersRef.current.delete(id); }
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_close", path: id }));
+        return;
+      }
+
+      const rp = node.renderedPosition();
+      const code = (remoteDraftsRef.current[id] != null) ? remoteDraftsRef.current[id] : (fileMapRef.current[id] ?? "");
+      setPopups((cur) => [...cur, { path: id, x: rp.x, y: rp.y, draft: code, dirty: false }]);
+      setSelected(id);
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_open", path: id }));
+    };
+    cy.on("tap", "node", onTapNode);
+
+    // Popups follow nodes on pan/zoom/move
+    let raf = 0;
+    const scheduleFollow = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const next: Popup[] = [];
+        const byPath = new Map(popupsRef.current.map((p) => [p.path, p]));
+        for (const p of popupsRef.current) {
+          const n = cy.$id(p.path);
+          if (!n.length) continue;
+          const rp = n.renderedPosition();
+          const prev = byPath.get(p.path)!;
+          next.push({ ...prev, x: rp.x, y: rp.y });
+        }
+        setPopups((prev) => {
+          if (prev.length !== next.length) return next;
+          for (let i = 0; i < prev.length; i++) {
+            const a = prev[i], b = next[i];
+            if (a.path !== b.path || a.x !== b.x || a.y !== b.y || a.draft !== b.draft || a.dirty !== b.dirty || a.w !== b.w || a.h !== b.h) return next;
+          }
+          return prev;
+        });
+      });
+    };
+
+    const ro = new ResizeObserver(() => {
+      cy.resize();
+      cy.fit(undefined, 20);
+      scheduleFollow();
+    });
+    ro.observe(container);
+
+    cy.on("pan zoom", scheduleFollow);
+    cy.on("position", "node", scheduleFollow);
+
+    return () => {
+      try {
+        ro.disconnect();
+        cy.off("tap", "node", onTapNode);
+        cy.off("pan zoom", scheduleFollow);
+        cy.off("position", "node", scheduleFollow);
+        cy.stop();
+        cy.destroy();
+      } catch {}
+      cancelAnimationFrame(raf);
+      cyRef.current = null;
+    };
+  }, [cyStylesheet]);
+
+  // Apply elements (only relayout here)
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+
+    cy.startBatch();
+    try {
+      cy.elements().remove();
+      if (elements.length) cy.add(elements);
+    } finally {
+      cy.endBatch();
+    }
+
+    if (elements.length) {
+      const hasAnyPositions = elements.some((el: any) => (el as any).position);
+      if (hasAnyPositions) {
+        cy.fit(undefined, 20);
+      } else {
+        cy.layout({ name: "cose" }).run();
+        cy.fit(undefined, 20);
+      }
+    }
+
+    // Apply hidden/show from persisted positions
+    Object.entries(positionsRef.current).forEach(([id, st]) => {
+      if (!st) return;
+      const n = cy.$id(id);
+      if (!n.length) return;
+      if (st.hidden) n.hide();
+      else n.show();
+    });
+
+    // prune popups for removed nodes
+    setPopups((cur) => cur.filter((p) => cy.$id(p.path).length > 0));
+  }, [elements]);
+
+  // Outside clicks: save any dirty popup that didn't receive the click
+  useEffect(() => {
+    const onDownCapture = (ev: MouseEvent) => {
+      const target = ev.target as HTMLElement | null;
+      const roots = Array.from(document.querySelectorAll<HTMLElement>("[data-popup-path]"));
+      const dirties = popupsRef.current.filter((p) => p.dirty);
+      if (!dirties.length) return;
+
+      for (const p of dirties) {
+        const root = roots.find((el) => el.dataset.popupPath === p.path);
+        if (root && target && root.contains(target)) continue; // clicked inside
+        savePopup(p.path);
+      }
+    };
+    document.addEventListener("mousedown", onDownCapture, true);
+    return () => document.removeEventListener("mousedown", onDownCapture, true);
+  }, []);
+
+  // ------------------------------ Persistence helpers ------------------------------
+
+  async function saveAsNewProject() {
+    const files = Object.entries(fileMapRef.current).map(([path, content]) => ({ path, content }));
+    if (!projectName.trim()) {
+      alert("Give your project a name first");
+      return;
+    }
+    const positions = snapshotPositions(); // includes hidden
+    const r = await fetch("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: projectName.trim(),
+        files,
+        positions,
+        shapes: shapesRef.current,      // ← NEW
+      }),
+    });
+
+    if (!r.ok) {
+      alert("Failed to create project");
+      return;
+    }
+    const data = await r.json();
+    setProjectId(data.id);
+    setMyProjects((cur) => [{ id: data.id, name: data.name }, ...cur.filter((p) => p.id !== data.id)]);
+    setInfo(`Saved as project #${data.id} (layout included)`);
+  }
+
+  async function saveAllToExisting() {
+    if (!projectId) return saveAsNewProject();
+    const files = Object.entries(fileMapRef.current).map(([path, content]) => ({ path, content }));
+
+    // Save files
+    const r = await fetch(`/api/projects/${projectId}/files/bulk`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ files }),
+    });
+
+    // Save current node positions (+ hidden) on the project
+    const rp = await fetch(`/api/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        positions: snapshotPositions(),
+        shapes: shapesRef.current,      // ← NEW
+      }),
+    });
+
+
+    setInfo(r.ok && rp.ok ? "All changes & layout saved" : "Save failed (files or layout)");
+  }
+
+  async function loadProject(id: number) {
+    const r = await fetch(`/api/projects/${id}`);
+    if (!r.ok) {
+      alert("Failed to load project");
+      return;
+    }
+    const proj = await r.json();
+    setProjectId(proj.id);
+    setProjectName(proj.name);
+
+    // restore positions (+ hidden)
+    positionsRef.current = (proj.positions ?? {}) as PositionsMap;
+
+    // NEW: restore shapes
+    setShapes((proj.shapes ?? []) as Shape[]);
+    
+    const newMap: Record<string, string> = {};
+    for (const f of proj.files || []) newMap[f.path] = f.content ?? "";
+    fileMapRef.current = newMap;
+    setFileMap(newMap);
+
+    const files = Object.entries(newMap).map(([path, content]) => ({ path, content }));
+
+    // compute function facts/index for loaded project
+    const built = buildFunctionIndex(files);
+
+    // nodes: attach saved x/y if present (hidden applied after render) + declared/called
+    const nodes: CyElement[] = files.map(({ path }) => {
+      const pos = positionsRef.current[path];
+      const facts = built.byFile[path] || { declared: [], called: [] };
+      const el: any = {
+        data: { id: path, label: basename(path), ext: extname(path), declared: facts.declared, called: facts.called },
+        group: "nodes" as const,
+      };
+      if (pos && typeof pos.x === "number" && typeof pos.y === "number") el.position = { x: pos.x, y: pos.y };
+      return el;
+    });
+
+    setElements(nodes);
+
+    setTree(buildTree(files.map((f) => f.path)));
+    setFuncIndex(built); // keep both byFile + index
+    setInfo(`Loaded project "${proj.name}" (${files.length} files${Object.keys(positionsRef.current).length ? ", layout restored" : ""})`);
+    setPopups([]);
+    setSelected(null);
+    setPopupLinesEnabled({}); // clear per-popup toggles when switching projects
+    setShowLinesGlobal(false);
+    setColorizeFunctions(false); // reset coloration to default OFF on load
+  }
+
+ useEffect(() => {
+   const pid = searchParams.get("projectId") || searchParams.get("id"); // accept both
+   if (!pid) return;
+   const id = Number(pid);
+   if (!Number.isFinite(id) || id <= 0) return;
+   if (projectId === id) return; // already loaded
+   (async () => {
+     // Try to refresh cookies once; ignore errors.
+     try { await fetch("/api/auth/refresh", { method: "POST" }); } catch {}
+     await loadProject(id);
+   })();
+ }, [projectId, searchParams]);
+
+  // Save popup contents: update fileMap + surgically update edges and function facts in cy (no relayout)
+  const savePopup = useCallback(
+    (path: string) => {
+      const cy = cyRef.current;
+      const popup = popupsRef.current.find((pp) => pp.path === path);
+      if (!popup) return;
+
+      const draft = popup.draft;
+      if (draft !== fileMapRef.current[path]) {
+        // update file map
+        const newMap = { ...fileMapRef.current, [path]: draft };
+        fileMapRef.current = newMap;
+        setFileMap(newMap);
+
+        // --- recompute function index across all files (so colors stay correct)
+        const filesAll = Object.entries(newMap).map(([p, content]) => ({ path: p, content }));
+        const built = buildFunctionIndex(filesAll);
+        setFuncIndex(built);
+
+        // update node data for declared/called
+        if (cy) {
+          cy.nodes().forEach((n) => {
+            const pth = n.id();
+            const facts = built.byFile[pth] || { declared: [], called: [] };
+            n.data("declared", facts.declared);
+            n.data("called", facts.called);
+          });
+        }
+
+        // recompute edges from this file
+        const refs = inferEdges(path, draft);
+        const newEdges: CyElement[] = [];
+
+        if (cy) {
+          const nodeIds = new Set<string>(cy.nodes().map((n) => n.id()));
+          for (const r of refs) {
+            const resolved = resolveRelative(path, r);
+            if (!resolved) continue;
+
+            let target: string | null = null;
+            if (nodeIds.has(resolved)) {
+              target = resolved;
+            } else {
+              for (const ext of CANDIDATE_RESOLVE_EXTS) {
+                const cand = `${resolved}${ext}`;
+                if (nodeIds.has(cand)) {
+                  target = cand;
+                  break;
+                }
+              }
+            }
+
+            if (target) {
+              newEdges.push({ data: { id: `${path}=>${target}`, source: path, target } });
+            }
+          }
+
+          // update edges for this source only
+          cy.startBatch();
+          try {
+            cy.edges().filter((e) => e.data("source") === path).remove();
+            if (newEdges.length) cy.add(newEdges);
+          } finally {
+            cy.endBatch();
+          }
+        }
+
+        // Persist to backend if project loaded AND authed
+        if (projectId && authed) {
+          fetch(`/api/projects/${projectId}/file`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path, content: draft }),
+          }).catch(() => {});
+        }
+      }
+
+      // mark popup as saved
+      setPopups((cur) => cur.map((pp) => (pp.path === path ? { ...pp, dirty: false } : pp)));
+    },
+    [projectId, authed]
+  );
+
+  // Toggle node visibility from the tree (no zoom jump) + broadcast
+  const toggleVisibilityFromTree = (id: string) => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    const node = cy.$id(id);
+    if (!node.length) return;
+
+    const isHidden = (node as any).hidden ? (node as any).hidden() : node.style("display") === "none";
+    const ws = wsRef.current;
+
+      if (isHidden) {
+        // SHOW
+        node.show();
+        node.connectedEdges().forEach((e) => {
+          if (!e.source().hidden() && !e.target().hidden()) e.show();
+        });
+        positionsRef.current[id] = { ...(positionsRef.current[id] || {}), hidden: false };
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "node_visibility", path: id, hidden: false }));
+        // no recenter
+        setSelected(id);
+      } else {
+      // HIDE
+      node.hide();
+      node.connectedEdges().hide();
+      positionsRef.current[id] = { ...(positionsRef.current[id] || {}), hidden: true };
+
+      const popped = popupsRef.current.find((pp) => pp.path === id);
+      if (popped && popped.dirty) savePopup(id);
+      setPopups((cur) => cur.filter((pp) => pp.path !== id));
+      setPopupLinesEnabled((prev) => { if (!(id in prev)) return prev; const n = { ...prev }; delete n[id]; return n; });
+      const t = textTimersRef.current.get(id); if (t) { window.clearTimeout(t); textTimersRef.current.delete(id); }
+      if (selected === id) setSelected(null);
+
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "node_visibility", path: id, hidden: true }));
+    }
+  };
+
+  // Parse a zip, build files → nodes/edges
+  const onFile = useCallback(async (file: File) => {
+    setInfo("Parsing zip…");
+    const zip = await JSZip.loadAsync(file);
+
+    const files: { path: string; content: string }[] = [];
+    await Promise.all(
+      Object.values(zip.files).map(async (entry: any) => {
+        if (entry.dir) return;
+        const path = entry.name.replace(/\\/g, "/");
+        const ext = extname(path);
+        if (!ALLOWED_EXTS.has(ext)) return;
+        const text = await entry.async("string");
+        files.push({ path, content: text });
+      })
+    );
+
+    // content map
+    const map: Record<string, string> = {};
+    for (const f of files) map[f.path] = f.content;
+    fileMapRef.current = map;
+    setFileMap(map);
+
+    // reset positions for a fresh upload (not a saved project)
+    positionsRef.current = {};
+
+    // build function index
+    const built = buildFunctionIndex(files);
+    setFuncIndex(built);
+
+    // nodes with declared/called
+    const nodes: CyElement[] = files.map(({ path }) => {
+      const facts = built.byFile[path] || { declared: [], called: [] };
+      return {
+        data: { id: path, label: basename(path), ext: extname(path), declared: facts.declared, called: facts.called },
+        group: "nodes",
+      };
+    });
+
+    // edges
+    const pathSet = new Set(files.map((f) => f.path));
+    const edges: CyElement[] = [];
+    for (const f of files) {
+      const refs = inferEdges(f.path, f.content || "");
+      for (const r of refs) {
+        const resolved = resolveRelative(f.path, r);
+        if (!resolved) continue;
+        if (pathSet.has(resolved)) {
+          edges.push({ data: { id: `${f.path}=>${resolved}`, source: f.path, target: resolved }, group: "edges" });
+        } else {
+          for (const ext of CANDIDATE_RESOLVE_EXTS) {
+            const cand = `${resolved}${ext}`;
+            if (pathSet.has(cand)) {
+              edges.push({ data: { id: `${f.path}=>${cand}`, source: f.path, target: cand }, group: "edges" });
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    setElements([...nodes, ...edges]);
+    setTree(buildTree(files.map((f) => f.path)));
+    setInfo(`${files.length} files, ${edges.length} relations`);
+    setSelected(null);
+    setPopups([]); // clear old popups
+    setProjectId(null);
+    setProjectName(file.name.replace(/\.zip$/i, "") || "My Project");
+    setPopupLinesEnabled({});
+    setShowLinesGlobal(false);
+    setColorizeFunctions(false); // reset coloration to default OFF on new upload
+  }, []);
+
+  const importFromGitHub = useCallback(async () => {
+    const repo = ghRepo.trim();
+    const ref = ghRef.trim() || undefined;
+    const token = ghToken.trim() || undefined;
+
+    if (!repo) {
+      setInfo("Enter GitHub repo as owner/name");
+      return;
+    }
+
+    try {
+      setInfo("Downloading from GitHub…");
+      const r = await fetch("/api/github/archive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo, ref, token }),
+      });
+
+      if (!r.ok) {
+        const { error } = await r.json().catch(() => ({}));
+        setInfo(error || `GitHub download failed (${r.status})`);
+        return;
+      }
+
+      const buf = await r.arrayBuffer();
+      const blob = new Blob([buf], { type: "application/zip" });
+      const name = `${repo.replace("/", "-")}${ref ? "-" + ref : ""}.zip`;
+      const file = new File([blob], name, { type: "application/zip" });
+
+      await onFile(file); // ← reuse the same ZIP parsing pipeline
+    } catch (e: any) {
+      setInfo(e?.message || "GitHub import failed");
+    }
+  }, [ghRepo, ghRef, ghToken, onFile]);
+
+  // ------------------------------ Realtime: broadcast drags + cursors ------------------------------
+  // Hook node drag events to broadcast positions (attach regardless of WS timing)
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+
+    let raf = 0;
+    const send = (id: string, pos: {x:number; y:number}) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify({ type: "node_move", path: id, x: pos.x, y: pos.y }));
+    };
+
+    const onDrag = (evt: any) => {
+      if (applyingRemoteRef.current) return;
+      const id = evt.target.id();
+      const p = evt.target.position();
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; send(id, p); });
+    };
+    const onDragfree = (evt: any) => {
+      if (applyingRemoteRef.current) return;
+      const id = evt.target.id();
+      const p = evt.target.position();
+      send(id, p);
+    };
+
+    cy.on("drag", "node", onDrag);
+    cy.on("dragfree", "node", onDragfree);
+
+    return () => {
+      try {
+        cy.off("drag", "node", onDrag);
+        cy.off("dragfree", "node", onDragfree);
+      } catch {}
+      cancelAnimationFrame(raf);
+    };
+  }, [projectId]);
+
+  // Send cursor positions over WS (attach regardless of WS timing)
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root) return;
+
+    let raf = 0;
+    let last = { x: 0, y: 0 };
+    const onMove = (e: MouseEvent) => {
+      const rect = root.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      last = { x, y };
+      if (!raf) {
+        raf = requestAnimationFrame(() => {
+          raf = 0;
+          const ws = wsRef.current;
+          if (ws && ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: "cursor", x: last.x, y: last.y }));
+          }
+        });
+      }
+    };
+
+    root.addEventListener("mousemove", onMove);
+    return () => { root.removeEventListener("mousemove", onMove); cancelAnimationFrame(raf); };
+  }, [projectId]);
+
+  // ------------------------------ Realtime: broadcast viewport (pan/zoom) ------------------
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+
+    let raf = 0;
+    const onViewport = () => {
+      if (applyingRemoteViewportRef.current) return; // avoid echo loops
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const ws = wsRef.current;
+        if (!ws || ws.readyState !== 1) return;
+        const z = cy.zoom();
+        const p = cy.pan();
+        ws.send(JSON.stringify({ type: "viewport", zoom: z, pan: { x: p.x, y: p.y } }));
+      });
+    };
+
+    cy.on("pan zoom", onViewport);
+    return () => {
+      try { cy.off("pan zoom", onViewport); } catch {}
+      cancelAnimationFrame(raf);
+    };
+  }, [projectId]);
+
+  // ------------------------------ Popup Resize Sync ------------------------------
+  const resizeObserversRef = useRef<Map<string, ResizeObserver>>(new Map());
+  const resizeRAFRef = useRef<Map<string, number>>(new Map());
+
+  // small helper for attribute selectors (paths)
+  function cssAttrEscape(v: string) {
+    return v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  }
+
+  useEffect(() => {
+    // Detach observers for closed popups
+    for (const [path, obs] of resizeObserversRef.current) {
+      if (!popupsRef.current.some((p) => p.path === path)) {
+        obs.disconnect();
+        resizeObserversRef.current.delete(path);
+      }
+    }
+
+    // Attach observers for open popups
+    for (const p of popupsRef.current) {
+      if (resizeObserversRef.current.has(p.path)) continue;
+      const el = document.querySelector<HTMLElement>(`[data-popup-path="${cssAttrEscape(p.path)}"]`);
+      if (!el) continue;
+
+      const obs = new ResizeObserver(() => {
+        if (applyingRemotePopupRef.current) return; // don't echo remote changes
+
+        const rect = el.getBoundingClientRect(); // border-box size
+        const w = Math.round(rect.width);
+        const h = Math.round(rect.height);
+
+        const cur = popupsRef.current.find((x) => x.path === p.path);
+        if (!cur) return;
+
+        const dw = Math.abs((cur.w ?? 0) - w);
+        const dh = Math.abs((cur.h ?? 0) - h);
+        if ((cur.w != null && dw < 1) && (cur.h != null && dh < 1)) return; // ignore jitter
+
+        const prevId = resizeRAFRef.current.get(p.path);
+        if (prevId) cancelAnimationFrame(prevId);
+        const rafId = requestAnimationFrame(() => {
+          setPopups((list) => list.map((x) => (x.path === p.path ? { ...x, w, h } : x)));
+          const ws = wsRef.current;
+          if (ws && ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: "popup_resize", path: p.path, w, h }));
+          }
+        });
+        resizeRAFRef.current.set(p.path, rafId);
+      });
+
+      obs.observe(el);
+      resizeObserversRef.current.set(p.path, obs);
+    }
+
+    return () => {
+      for (const [, obs] of resizeObserversRef.current) obs.disconnect();
+      resizeObserversRef.current.clear();
+      for (const [, id] of resizeRAFRef.current) cancelAnimationFrame(id);
+      resizeRAFRef.current.clear();
+    };
+  }, [popups]);
+
+  // ------------------------------ CALLER⇢DECLARER POPUP LINK OVERLAY ------------------------------
+
+  // portal mount guard
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
+  // Robust CSS.escape fallback for [data-func="<name>"]
+  const cssEscape = (val: string) => {
+    // @ts-ignore
+    return (window as any).CSS?.escape ? (window as any).CSS.escape(val) : val.replace(/"/g, '\\"');
+  };
+
+  type PopupLink = { x1: number; y1: number; x2: number; y2: number; label: string; color: string; d?: string };
+  const [popupLinks, setPopupLinks] = useState<PopupLink[]>([]);
+
+  useEffect(() => {
+    if (!overlayEnabled) { setPopupLinks([]); return; }
+
+    let raf = 0;
+
+    // Build the single-line string of the span's row and check for imports
+    const lineTextAroundSpan = (span: HTMLElement, pre: HTMLElement) => {
+      try {
+        const before = document.createRange();
+        before.setStart(pre, 0);
+        before.setEnd(span, 0);
+        const beforeText = before.toString();
+
+        const after = document.createRange();
+        after.setStartAfter(span);
+        after.setEnd(pre, pre.childNodes.length);
+        const afterText = after.toString();
+
+        const start = beforeText.lastIndexOf("\n") + 1;
+        const endRel = afterText.indexOf("\n");
+        const line =
+          beforeText.slice(start) +
+          (span.textContent ?? "") +
+          (endRel >= 0 ? afterText.slice(0, endRel) : afterText);
+        return line;
+      } catch {
+        return "";
+      }
+    };
+
+    // find the "best" span for a function inside a popup, preferring role-specific, then any,
+    // and skipping import/from lines (Python).
+    const findFuncPoint = (popupPath: string, funcName: string, role: "call" | "decl"): { x: number; y: number } | null => {
+      const root = document.querySelector<HTMLElement>(`[data-popup-path="${cssAttrEscape(popupPath)}"]`);
+      if (!root) return null;
+      const pre = root.querySelector<HTMLElement>("pre");
+      if (!pre) return null;
+
+      const nameEsc = cssEscape(funcName);
+      const selectors = [
+        `[data-func="${nameEsc}"][data-role="${role}"]`,
+        `[data-func="${nameEsc}"]`,
+      ];
+
+      for (const sel of selectors) {
+        const spans = Array.from(root.querySelectorAll<HTMLElement>(sel));
+        for (const span of spans) {
+          const line = lineTextAroundSpan(span, pre).trim();
+          if (/^(import|from)\b/.test(line)) continue; // skip python import lines
+          const r = span.getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
+      }
+      return null;
+    };
+
+    const tick = () => {
+      try {
+        const links: PopupLink[] = [];
+        if (!popupsRef.current.length) { setPopupLinks(links); return; }
+
+        const byFile: Record<string, { declared: string[]; called: string[] }> = funcIndex?.byFile || {};
+        const paletteByName: Record<string, { color?: string }> = funcIndex?.index || {};
+
+        // STEP 2 — choose one open declaring file per function (prefer .c/.cc/.cpp over headers)
+        const byName: Record<string, { color?: string; declaredIn?: string[]; calledIn?: string[] }> =
+          (funcIndex?.index as any) || {};
+
+        const openSet = new Set(popupsRef.current.map(p => p.path));
+
+        const preferredOpenDecl: Record<string, string> = {};
+        for (const [name, meta] of Object.entries(byName)) {
+          const decls = (meta.declaredIn || []);
+          const openDecls = decls.filter(p => openSet.has(p));
+          if (openDecls.length) {
+            // rankFile() was added in Step 1 (outside the component)
+            preferredOpenDecl[name] = openDecls.sort((a, b) => rankFile(a) - rankFile(b))[0];
+          }
+        }
+
+
+        // fallback anchors on popup edges
+        const rects = new Map<string, DOMRect>();
+        for (const p of popupsRef.current) {
+          const el = document.querySelector<HTMLElement>(`[data-popup-path="${cssAttrEscape(p.path)}"]`);
+          if (!el) continue;
+          rects.set(p.path, el.getBoundingClientRect());
+        }
+        const anchorRight = (r: DOMRect) => ({ x: r.left + r.width - 8, y: r.top + r.height / 2 });
+        const anchorLeft  = (r: DOMRect) => ({ x: r.left + 8,           y: r.top + r.height / 2 });
+
+        const isOn = (path: string) => !!popupLinesEnabled[path];
+
+        // for each ordered pair (A calls → B declares)
+        for (let i = 0; i < popupsRef.current.length; i++) {
+          const A = popupsRef.current[i];
+          const factsA = byFile[A.path] || { declared: [], called: [] };
+          const rectA = rects.get(A.path);
+          if (!rectA) continue;
+
+          for (let j = 0; j < popupsRef.current.length; j++) {
+            if (i === j) continue;
+            const B = popupsRef.current[j];
+            const rectB = rects.get(B.path);
+            if (!rectB) continue;
+            const factsB = byFile[B.path] || { declared: [], called: [] };
+
+            // respect toggles: include pair only if global OR either popup is toggled on
+            if (!showLinesGlobal && !isOn(A.path) && !isOn(B.path)) continue;
+
+            const match = new Set(factsA.called.filter((n) => factsB.declared.includes(n)));
+            if (match.size === 0) continue;
+
+            const names = Array.from(match).sort((a, b) => a.localeCompare(b));
+
+            // draw to B only if B is the chosen declaring popup for that function
+            const filtered = names.filter((name) => {
+              const pref = preferredOpenDecl[name];
+              return !pref || pref === B.path;
+            });
+            if (filtered.length === 0) continue;
+
+            filtered.forEach((name, k) => {
+              const color =
+                (funcIndex?.index as any)?.[name]?.color ||
+                paletteByName[name]?.color ||
+                "#111827";
+
+              const src = findFuncPoint(A.path, name, "call") || anchorRight(rectA);
+              const dst = findFuncPoint(B.path, name, "decl") || anchorLeft(rectB);
+
+              const yOffset = (k - (filtered.length - 1) / 2) * 8;
+
+              const d = buildPath(src.x, src.y + yOffset, dst.x, dst.y + yOffset);
+              if (!d) return;
+
+              links.push({
+                x1: src.x, y1: src.y + yOffset,
+                x2: dst.x, y2: dst.y + yOffset,
+                d,                 // <— prebuilt non-looping path
+                label: name,
+                color,
+              } as any);
+            });
+
+          }
+        }
+
+        setPopupLinks(links);
+      } finally {
+        raf = requestAnimationFrame(tick);
+      }
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [funcIndex, popups, showLinesGlobal, popupLinesEnabled, overlayEnabled]);
+
+  // ------------------------------ Text edit broadcasting (debounced) ------------------------------
+  const scheduleTextSend = useCallback((path: string, content: string) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== 1) return;
+    const timers = textTimersRef.current;
+    const existing = timers.get(path);
+    if (existing) window.clearTimeout(existing);
+    const id = window.setTimeout(() => {
+      try {
+        ws.send(JSON.stringify({ type: "text_edit", path, content }));
+      } finally {
+        timers.delete(path);
+      }
+    }, 150);
+    timers.set(path, id);
+  }, []);
+
+  // ------------------------------ Render ------------------------------
+
+  // helper to broadcast per-popup toggle
+  const sendPopupLines = (path: string, enabled: boolean) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: "popup_lines", path, enabled }));
+    }
+  };
+
+  return (
+      <div
+        ref={outerRef}
+        style={{
+          display: "grid",
+          gridTemplateColumns: sidebarOpen
+            ? "minmax(220px, 28vw) minmax(0,1fr)"
+            : "0 minmax(0,1fr)",
+          height: "100vh",
+          width: "100vw",
+          overflow: "hidden",
+          background: "#fff",
+          transition: "grid-template-columns 200ms ease",
+        }}
+      >
+
+      {/* Sidebar */}
+        <aside
+          id="sidebar"
+          style={{
+            borderRight: sidebarOpen ? "2px solid #e5e7eb" : "0",
+            padding: sidebarOpen ? 20 : 0,
+            overflow: sidebarOpen ? "auto" : "hidden",
+            width: "100%",              // let the grid column control width
+            backgroundColor: "#f9fafb",
+            transition: "padding 200ms ease, border-color 200ms ease",
+            pointerEvents: sidebarOpen ? "auto" : "none", // disable clicks when hidden
+          }}
+        >
+
+        <h2 style={{ marginTop: 0, fontSize: 20, fontWeight: 600, color: "#333" }}>Project</h2>
+        
+        <input
+          type="file"
+          accept=".zip"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onFile(f);
+          }}
+          style={{
+            fontSize: 14,
+            padding: "8px 12px",
+            marginBottom: 16,  // Add space below the file input
+            width: "100%",
+            borderRadius: 8,
+            border: "1px solid #ddd",
+          }}
+        />
+
+        {/* Import from GitHub */}
+        <div style={{ marginTop: 16, padding: 12, border: "1px solid #e5e7eb", borderRadius: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Import from GitHub</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            <input
+              placeholder='owner/repo (e.g. "vercel/next.js")'
+              value={ghRepo}
+              onChange={(e) => setGhRepo(e.target.value)}
+              style={{ fontSize: 14, padding: "8px 12px", border: "1px solid #ddd", borderRadius: 8 }}
+            />
+            <input
+              placeholder="ref (branch/tag/commit) — optional"
+              value={ghRef}
+              onChange={(e) => setGhRef(e.target.value)}
+              style={{ fontSize: 14, padding: "8px 12px", border: "1px solid #ddd", borderRadius: 8 }}
+            />
+            <input
+              placeholder="GitHub token (optional; required for private repos)"
+              type="password"
+              value={ghToken}
+              onChange={(e) => setGhToken(e.target.value)}
+              style={{ fontSize: 14, padding: "8px 12px", border: "1px solid #ddd", borderRadius: 8 }}
+            />
+            <button
+              onClick={importFromGitHub}
+              style={{
+                fontSize: 14,
+                padding: "8px 12px",
+                borderRadius: 8,
+                background: "#111827",
+                color: "white",
+                border: "1px solid #0f172a",
+                cursor: "pointer",
+              }}
+            >
+              Import repo
+            </button>
+            <div style={{ fontSize: 12, color: "#6b7280" }}>
+              Leave ref blank to use the default branch. Use a token for private repos or to avoid rate limits.
+            </div>
+          </div>
+        </div>
+
+        <p style={{ fontSize: 14, color: "#4b5563", marginBottom: 16 }}>{info}</p>
+
+        {/* Load existing */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16 }}>
+          <select
+            value={projectId ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) {
+                setProjectId(null);
+                return;
+              }
+              loadProject(Number(v));
+            }}
+            style={{
+              fontSize: 14,
+              padding: "8px 12px",
+              borderRadius: 8,
+              width: "100%",
+              border: "1px solid #ddd",
+            }}
+            title={authed ? "Load project" : "Sign in to load projects"}
+            disabled={!authed}
+          >
+            <option value="">{authed ? "Load project…" : "Sign in to load…"}</option>
+            {myProjects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Name + Save buttons + Share */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
+          <input
+            placeholder="Project name"
+            value={projectName}
+            onChange={(e) => setProjectName(e.target.value)}
+            style={{
+              fontSize: 14,
+              padding: "8px 12px",
+              width: "200px",
+              borderRadius: 8,
+              border: "1px solid #ddd",
+              marginBottom: 8,
+            }}
+            title="Project name"
+            disabled={!authed}
+          />
+          <button
+            onClick={saveAsNewProject}
+            style={{
+              fontSize: 14,
+              padding: "8px 12px",
+              borderRadius: 8,
+              background: "#2563eb",
+              color: "#fff",
+              border: "1px solid #ddd",
+            }}
+            title={authed ? "Save as new project" : "Sign in to save"}
+            disabled={!authed}
+          >
+            Save as new
+          </button>
+          <button
+            onClick={saveAllToExisting}
+            style={{
+              fontSize: 14,
+              padding: "8px 12px",
+              borderRadius: 8,
+              background: "#2563eb",
+              color: "#fff",
+              border: "1px solid #ddd",
+            }}
+            title={authed ? "Save all changes" : "Sign in to save"}
+            disabled={!authed}
+          >
+            Save all
+          </button>
+
+          {/* Share button */}
+          <button
+            onClick={() => setShareOpen((o) => !o)}
+            disabled={!authed || !projectId}
+            style={{
+              fontSize: 14,
+              padding: "8px 12px",
+              borderRadius: 8,
+              background: "#f3f4f6",
+              color: "#333",
+              border: "1px solid #ddd",
+              cursor: "pointer",
+            }}
+            title={projectId ? "Share this project" : "Save or load a project to share"}
+          >
+            {shareOpen ? "Close sharing" : "Share…"}
+          </button>
+        </div>
+
+        {!authed && (
+          <p style={{ fontSize: 14, color: "#6b7280", marginTop: 6 }}>
+            <a href="/login">Sign in</a> to enable saving/loading projects.
+          </p>
+        )}
+
+        {/* Share panel */}
+        {shareOpen && projectId && (
+          <div style={{ marginTop: 16, border: "1px solid #e5e7eb", borderRadius: 12, padding: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 14, color: "#6b7280" }}>Sharing for</div>
+                <div style={{ fontWeight: 600, fontSize: 16 }}>
+                  {projDetail?.name ?? `Project #${projectId}`}
+                </div>
+              </div>
+              <div
+                style={{
+                  fontSize: 14,
+                  textTransform: "capitalize",
+                  background: "#f3f4f6",
+                  borderRadius: 999,
+                  padding: "4px 12px",
+                }}
+              >
+                {projDetail?.my_role ?? "—"}
+              </div>
+            </div>
+
+            {shareErr && (
+              <div style={{ marginTop: 8, color: "#b91c1c", fontSize: 14 }}>{shareErr}</div>
+            )}
+
+            {/* Search */}
+            <div style={{ marginTop: 16 }}>
+              <label
+                htmlFor="userSearch"
+                style={{
+                  display: "block",
+                  fontSize: 14,
+                  color: "#6b7280",
+                  marginBottom: 6,
+                }}
+              >
+                Add people by username
+              </label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  id="userSearch"
+                  placeholder="Search usernames…"
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  disabled={!isOwner || shareBusy}
+                  style={{
+                    flex: 1,
+                    border: "1px solid #ddd",
+                    borderRadius: 8,
+                    padding: "10px 12px",
+                    fontSize: 14,
+                  }}
+                />
+              </div>
+              {!!results.length && (
+                <div
+                  style={{
+                    border: "1px solid #eee",
+                    borderRadius: 8,
+                    marginTop: 8,
+                    maxHeight: 200,
+                    overflow: "auto",
+                  }}
+                >
+                  {results.map((u) => (
+                    <div
+                      key={u.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        padding: "10px 12px",
+                        borderTop: "1px solid #eee",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div
+                          style={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: 999,
+                            background: "#eee",
+                            display: "grid",
+                            placeItems: "center",
+                            fontSize: 14,
+                          }}
+                        >
+                          {u.username[0]?.toUpperCase()}
+                        </div>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>{u.username}</div>
+                      </div>
+                      <div style={{ display: "flex", gap: 12 }}>
+                        <button
+                          onClick={() => mutateShare([u.username], "add", "viewer")}
+                          disabled={!isOwner || shareBusy}
+                          style={{
+                            border: "1px solid #ddd",
+                            background: "white",
+                            padding: "8px 14px",
+                            borderRadius: 6,
+                            fontSize: 14,
+                          }}
+                        >
+                          Add as viewer
+                        </button>
+                        <button
+                          onClick={() => mutateShare([u.username], "add", "editor")}
+                          disabled={!isOwner || shareBusy}
+                          style={{
+                            border: "1px solid #ddd",
+                            background: "white",
+                            padding: "8px 14px",
+                            borderRadius: 6,
+                            fontSize: 14,
+                          }}
+                        >
+                          Add as editor
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Editors */}
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 600, fontSize: 16 }}>Editors</div>
+              <div style={{ border: "1px solid #eee", borderRadius: 8, marginTop: 8 }}>
+                {!collab.editors.length && (
+                  <div style={{ padding: 12, color: "#6b7280", fontSize: 14 }}>
+                    No editors yet.
+                  </div>
+                )}
+                {collab.editors.map((u) => (
+                  <Row
+                    key={u.id}
+                    u={u}
+                    role="editor"
+                    canEdit={!!isOwner && !shareBusy}
+                    onRemove={() => mutateShare([u.username], "remove", "editor")}
+                    onRoleChange={(newRole) => {
+                      if (newRole === "viewer") mutateShare([u.username], "remove", "editor"); // demote
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Viewers */}
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 600, fontSize: 16 }}>Viewers</div>
+              <div style={{ border: "1px solid #eee", borderRadius: 8, marginTop: 8 }}>
+                {!collab.viewers.length && (
+                  <div style={{ padding: 12, color: "#6b7280", fontSize: 14 }}>
+                    No viewers yet.
+                  </div>
+                )}
+                {collab.viewers.map((u) => (
+                  <Row
+                    key={u.id}
+                    u={u}
+                    role="viewer"
+                    canEdit={!!isOwner && !shareBusy}
+                    onRemove={() => mutateShare([u.username], "remove", "viewer")}
+                    onRoleChange={(newRole) => {
+                      if (newRole === "editor") mutateShare([u.username], "add", "editor"); // promote
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <button
+          onClick={toggleFullscreen}
+          style={{
+            fontSize: 14,
+            padding: "8px 12px",
+            borderRadius: 8,
+            background: "#111827",
+            color: "white",
+            border: "1px solid #0f172a",
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+          }}
+          title={isFs ? "Exit fullscreen" : "Enter fullscreen"}
+        >
+          {isFs ? "Exit Fullscreen" : "Fullscreen"}
+        </button>
+
+
+        {/* Tree */}
+        {tree ? (
+          <div style={{ marginTop: 16 }}>
+            <TreeView node={tree} onSelect={toggleVisibilityFromTree} />
+          </div>
+        ) : (
+          <p style={{ fontSize: 14, color: "#6b7280" }}>No files yet.</p>
+        )}
+      </aside>
+
+
+{/* Graph area */}
+<section style={{ position: "relative", overflow: "hidden", background: "#fff" }}>
+  {/* Selection + global toggles */}
+  <div
+    style={{
+      position: "absolute",
+      top: 8,
+      left: 8,
+      zIndex: 50,
+      background: "white",
+      padding: "4px 8px",
+      borderRadius: 8,
+      border: "1px solid #e5e7eb",
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+    }}
+  >
+    {selected ? <strong>{selected}</strong> : <span>Select a file from the tree or graph</span>}
+
+    {/* NEW: code coloration toggle (now synced via WS) */}
+    <button
+      onClick={() => {
+        const next = !colorizeFunctions;
+        setColorizeFunctions(next);
+        const ws = wsRef.current;
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: "colorize_functions", enabled: next }));
+        }
+      }}
+      title={colorizeFunctions ? "Turn code coloration off" : "Colorize function calls & declarations"}
+      style={{
+        fontSize: 11,
+        padding: "4px 6px",
+        borderRadius: 6,
+        border: "1px solid #e5e7eb",
+        background: colorizeFunctions ? "#ecfeff" : "white",
+        cursor: "pointer",
+      }}
+    >
+      {colorizeFunctions ? "Code coloration: on" : "Code coloration: off"}
+    </button>
+
+    {/* Global lines toggle */}
+    <button
+      onClick={() => {
+        if (popups.length < 2) return;
+        const next = !showLinesGlobal;
+        setShowLinesGlobal(next);
+        setPopupLinesEnabled(() => {
+          if (!next) return {};
+          const m: Record<string, boolean> = {};
+          for (const p of popupsRef.current) m[p.path] = true;
+          return m;
+        });
+        const ws = wsRef.current;
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: "popup_lines_global", enabled: next }));
+        }
+      }}
+      disabled={popups.length < 2}
+      title={
+        popups.length < 2
+          ? "Open two popups to link calls to declarations"
+          : showLinesGlobal
+          ? "Turn ALL lines off"
+          : "Turn ALL lines on"
+      }
+      style={{
+        fontSize: 11,
+        padding: "4px 6px",
+        borderRadius: 6,
+        border: "1px solid #e5e7eb",
+        background: showLinesGlobal ? "#eef2ff" : "white",
+        cursor: popups.length < 2 ? "not-allowed" : "pointer",
+      }}
+    >
+      {showLinesGlobal ? "All lines: on" : "All lines: off"}
+    </button>
+
+    <button
+      onClick={() => setSidebarOpen(v => !v)}
+      aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+      aria-expanded={sidebarOpen}
+      aria-controls="sidebar"
+      title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+      style={{
+        display: "grid",
+        placeItems: "center",
+        width: 28,
+        height: 28,
+        borderRadius: 6,
+        border: "1px solid #e5e7eb",
+        background: "white",
+        cursor: "pointer",
+      }}
+    >
+      <span aria-hidden="true" style={{ fontSize: 14, lineHeight: 1 }}>
+        {sidebarOpen ? "⟨" : "⟩"}
+      </span>
+    </button>
+  </div>
+
+  {/* ------- Project Chat (realtime) ------- */}
+  <button
+    onClick={() => setChatOpen(o => !o)}
+    type="button"
+    aria-controls="project-chat"
+    aria-expanded={chatOpen}
+    style={{
+      position: "fixed",
+      right: 16,
+      bottom: 16,        // keep pinned to corner
+      zIndex: 65,        // above chat panel & overlays
+      borderRadius: 999,
+      padding: "10px 14px",
+      border: "1px solid #e5e7eb",
+      background: "white",
+      boxShadow: "0 8px 20px rgba(0,0,0,0.10)",
+      fontSize: 14,
+      fontWeight: 600,
+      cursor: "pointer",
+    }}
+    title={chatOpen ? "Hide chat" : "Show chat"}
+  >
+    💬 {chatOpen ? "Hide chat" : "Project chat"}
+  </button>
+
+  {chatOpen && (
+    <div
+      id="project-chat"
+      role="region"
+      aria-label="Project chat"
+      style={{
+        position: "fixed",
+        right: 16,
+        bottom: 16,
+        width: 360,
+        maxHeight: "60vh",
+        display: "flex",
+        flexDirection: "column",
+        background: "white",
+        border: "1px solid #e5e7eb",
+        borderRadius: 12,
+        boxShadow: "0 14px 34px rgba(0,0,0,0.18)",
+        overflow: "hidden",
+        zIndex: 60,   // below the floating toggle
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "10px 12px",
+          borderBottom: "1px solid #e5e7eb",
+          background: "#f9fafb",
+          fontSize: 13,
+          fontWeight: 700,
+          gap: 8,
+        }}
+      >
+        <div>Project chat</div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div title="Online collaborators" style={{ fontWeight: 600, opacity: 0.8 }}>
+            {peers.length} online
+          </div>
+
+          {/* Incoming → Accept/Decline */}
+          {call.status === "ringing" && call.peer ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 12 }}>
+                Incoming call from <b>{call.peer.username}</b>
+              </span>
+              <button
+                onClick={acceptCall}
+                type="button"
+                title="Accept call"
+                style={{ border: "1px solid #16a34a", background: "#16a34a", color: "white", padding: "4px 8px", borderRadius: 6, fontSize: 12 }}
+              >
+                Accept
+              </button>
+              <button
+                onClick={declineCall}
+                type="button"
+                title="Decline"
+                style={{ border: "1px solid #ef4444", background: "white", color: "#ef4444", padding: "4px 8px", borderRadius: 6, fontSize: 12 }}
+              >
+                Decline
+              </button>
+            </div>
+          ) : call.status !== "idle" && call.peer ? (
+            // Calling/Connected
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 12, color: "#6b7280" }}>
+                {call.status === "connected" ? (call.muted ? "Muted" : "Live") : "Calling…"}
+              </span>
+              <button
+                onClick={toggleMute}
+                type="button"
+                title={call.muted ? "Unmute mic" : "Mute mic"}
+                style={{ border: "1px solid #e5e7eb", background: "white", padding: "4px 6px", borderRadius: 6, fontSize: 12 }}
+              >
+                {call.muted ? "Unmute" : "Mute"}
+              </button>
+              <button
+                onClick={() => endCall(true)}
+                type="button"
+                title="Hang up"
+                style={{ border: "1px solid #ef4444", background: "#ef4444", color: "white", padding: "4px 6px", borderRadius: 6, fontSize: 12 }}
+              >
+                Hang up
+              </button>
+            </div>
+          ) : (
+            // No active call → launcher
+            <div style={{ position: "relative" }}>
+              <button
+                onClick={() => setCallMenuOpen(o => !o)}
+                type="button"
+                title="Start a voice call"
+                style={{ border: "1px solid #e5e7eb", background: "white", padding: "6px 8px", borderRadius: 6, fontSize: 12, cursor: "pointer" }}
+              >
+                📞 Call…
+              </button>
+              {callMenuOpen && (
+                <div
+                  style={{
+                    position: "absolute",
+                    right: 0,
+                    top: 36,
+                    zIndex: 1000,
+                    background: "white",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 8,
+                    boxShadow: "0 8px 18px rgba(0,0,0,.08)",
+                    minWidth: 220,
+                    overflow: "hidden",
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  {peers.filter(p => p.id !== me?.id).length === 0 ? (
+                    <div style={{ padding: 10, fontSize: 13, color: "#6b7280" }}>No peers online</div>
+                  ) : peers.filter(p => p.id !== me?.id).map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => { setCallMenuOpen(false); startCall(p); }}
+                      type="button"
+                      style={{
+                        display: "flex",
+                        gap: 8,
+                        alignItems: "center",
+                        padding: "10px 12px",
+                        width: "100%",
+                        background: "white",
+                        border: 0,
+                        borderTop: "1px solid #f3f4f6",
+                        cursor: "pointer",
+                        fontSize: 13
+                      }}
+                    >
+                      <span style={{ width: 10, height: 10, background: p.color, borderRadius: 999 }} />
+                      <span>{p.username}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Header close (always present) */}
+          <button
+            onClick={() => setChatOpen(false)}
+            type="button"
+            title="Hide chat"
+            style={{
+              border: "1px solid #e5e7eb",
+              background: "white",
+              padding: "6px 8px",
+              borderRadius: 6,
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            ×
+          </button>
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div
+        ref={chatBodyRef}
+        style={{
+          flex: "1 1 auto",
+          overflowY: "auto",
+          padding: 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        {chatLog.map(m => (
+          <div key={m.id} style={{ display: "grid", gridTemplateColumns: "28px 1fr", gap: 8 }}>
+            <div
+              title={m.user.username}
+              style={{
+                width: 28, height: 28, borderRadius: 999, background: m.user.color,
+                display: "grid", placeItems: "center", color: "white", fontSize: 12, fontWeight: 700,
+              }}
+            >
+              {m.user.username[0]?.toUpperCase()}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <span style={{ fontWeight: 700, fontSize: 13 }}>{m.user.username}</span>
+                <time
+                  dateTime={m.ts}
+                  style={{ fontSize: 11, color: "#6b7280", whiteSpace: "nowrap" }}
+                  title={new Date(m.ts).toLocaleString()}
+                >
+                  {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </time>
+              </div>
+              <div style={{ fontSize: 13, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {m.text}
+              </div>
+            </div>
+          </div>
+        ))}
+        {chatLog.length === 0 && (
+          <div style={{ color: "#6b7280", fontSize: 13, textAlign: "center", padding: "12px 0" }}>
+            No messages yet — say hi 👋
+          </div>
+        )}
+      </div>
+
+      {/* Composer */}
+      <form
+        onSubmit={(e) => { e.preventDefault(); sendChat(); }}
+        style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid #e5e7eb" }}
+      >
+        <input
+          value={chatDraft}
+          onChange={e => setChatDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              sendChat();
+            }
+          }}
+          placeholder={authed ? "Message project…" : "Sign in to chat"}
+          disabled={!authed}
+          aria-label="Type a message"
+          style={{
+            flex: 1,
+            fontSize: 14,
+            padding: "10px 12px",
+            border: "1px solid #e5e7eb",
+            borderRadius: 8,
+            outline: "none",
+          }}
+        />
+        <button
+          type="submit"
+          disabled={!authed || !chatDraft.trim()}
+          style={{
+            fontSize: 14,
+            padding: "10px 12px",
+            borderRadius: 8,
+            background: "#2563eb",
+            color: "white",
+            border: "1px solid #1d4ed8",
+            opacity: (!authed || !chatDraft.trim()) ? 0.5 : 1,
+            cursor: (!authed || !chatDraft.trim()) ? "not-allowed" : "pointer",
+          }}
+          title={authed ? "Send message" : "Sign in to chat"}
+        >
+          Send
+        </button>
+      </form>
+    </div>
+  )}
+
+  {/* Remote audio output (once, outside the chat panel) */}
+  <audio ref={remoteAudioRef} autoPlay playsInline />
+
+  {/* Tiny floating call pill when chat is closed */}
+  {!chatOpen && call.status !== "idle" && call.peer && (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        position: "fixed",
+        right: 16,
+        bottom: 60, // sits above the chat toggle
+        zIndex: 55,
+        background: "white",
+        border: "1px solid #e5e7eb",
+        borderRadius: 9999,
+        padding: "6px 10px",
+        boxShadow: "0 8px 20px rgba(0,0,0,0.10)",
+        display: "flex",
+        alignItems: "center",
+        gap: 8
+      }}
+    >
+      <span style={{ width: 8, height: 8, borderRadius: 9999, background: call.muted ? "#9ca3af" : "#16a34a" }} />
+      <span style={{ fontSize: 12, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }}>
+        {call.peer.username}
+      </span>
+      <button
+        onClick={toggleMute}
+        type="button"
+        title={call.muted ? "Unmute mic" : "Mute mic"}
+        style={{ border: "1px solid #e5e7eb", background: "white", borderRadius: 6, padding: "2px 6px", fontSize: 12 }}
+      >
+        {call.muted ? "Unmute" : "Mute"}
+      </button>
+      <button
+        onClick={() => endCall(true)}
+        type="button"
+        title="Hang up"
+        style={{ border: "1px solid #ef4444", background: "#ef4444", color: "white", borderRadius: 6, padding: "2px 6px", fontSize: 12 }}
+      >
+        ✕
+      </button>
+    </div>
+  )}
+
+  {/* Cytoscape canvas */}
+  <div
+    ref={containerRef}
+    style={{
+      position: "relative",
+      width: "100%",
+      height: "100%",
+      background: "transparent",
+      zIndex: 10,
+    }}
+  />
+
+  {/* Drawing overlay (double-click background to add; right-click for menu; dbl-click rect to edit) */}
+  <ShapeOverlay containerRef={containerRef} shapes={shapes} onChange={setShapesWS} />
+
+  {/* Presence avatars */}
+  {peers.length > 0 && (
+    <div style={{ position: "absolute", right: 12, top: 12, display: "flex", gap: 6, zIndex: 30 }}>
+      {peers.map(p => (
+        <div
+          key={p.id}
+          title={p.username}
+          style={{
+            width: 24, height: 24, borderRadius: 9999, background: p.color, color: "white",
+            display: "grid", placeItems: "center", fontSize: 12, boxShadow: "0 0 0 2px white"
+          }}
+        >
+          {p.username[0]?.toUpperCase()}
+        </div>
+      ))}
+    </div>
+  )}
+
+  {/* Remote cursors */}
+  <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 25 }}>
+    {peers.filter(p => p.x != null && p.y != null).map(p => (
+      <div key={"cursor-"+p.id} style={{ position:"absolute", left: (p.x||0) + "px", top: (p.y||0)+"px", transform:"translate(-50%, -50%)" }}>
+        <div style={{ width: 8, height: 8, borderRadius: 9999, background: p.color }} />
+        <div style={{ position: "absolute", top: 10, left: 8, background: "rgba(255,255,255,0.9)", border: "1px solid #e5e7eb", borderRadius: 6, padding: "2px 6px", fontSize: 10 }}>
+          {p.username}
+        </div>
+      </div>
+    ))}
+  </div>
+
+  {/* Editable popups (resizable + synced) with per-popup line toggle */}
+  {popups.map((pp) => {
+    const linesOn = !!popupLinesEnabled[pp.path];
+    return (
+      <div
+        key={pp.path}
+        data-popup-path={pp.path}
+        style={{
+          position: "absolute",
+          left: Math.max(8, pp.x) + "px",
+          top: Math.max(8, pp.y) + "px",
+          transform: "translate(-50%, -110%)",
+          background: "white",
+          border: "1px solid #e5e7eb",
+          borderRadius: 8,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
+          width: pp.w ? pp.w : "clamp(240px, 26vw, 520px)",
+          height: pp.h ? pp.h : undefined,
+          minHeight: 140,
+          maxHeight: pp.h ? undefined : "40vh",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          zIndex: 20,
+          resize: "both",
+          boxSizing: "border-box",
+        }}
+        onWheel={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            padding: "6px 10px",
+            borderBottom: "1px solid #e5e7eb",
+            background: "#f9fafb",
+            borderTopLeftRadius: 8,
+            borderTopRightRadius: 8,
+            fontSize: 12,
+            flex: "0 0 auto",
+            gap: 8,
+          }}
+        >
+          <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "30vw" }}>
+            {basename(pp.path)}
+          </strong>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              onClick={() => {
+                if (popups.length < 2) return;
+                const next = !popupLinesEnabled[pp.path];
+                setPopupLinesEnabled(prev => ({ ...prev, [pp.path]: next }));
+                sendPopupLines(pp.path, next);
+              }}
+              disabled={popups.length < 2}
+              title={
+                popups.length < 2
+                  ? "Open another popup to link"
+                  : linesOn
+                  ? "Hide lines for this popup"
+                  : "Show lines for this popup"
+              }
+              style={{
+                border: "1px solid #ddd",
+                background: linesOn ? "#eef2ff" : "white",
+                padding: "4px 6px",
+                borderRadius: 6,
+                fontSize: 11,
+                cursor: popups.length < 2 ? "not-allowed" : "pointer",
+              }}
+            >
+              {linesOn ? "Lines: on" : "Lines: off"}
+            </button>
+            {pp.dirty && <span style={{ fontSize: 11, color: "#9a3412" }}>● unsaved</span>}
+            <button
+              onClick={() => {
+                if (pp.dirty) savePopup(pp.path);
+                setPopups((cur) => cur.filter((p) => p.path !== pp.path));
+                setPopupLinesEnabled((prev) => { if (!(pp.path in prev)) return prev; const n = { ...prev }; delete n[pp.path]; return n; });
+                const ws = wsRef.current;
+                const t = textTimersRef.current.get(pp.path);
+                if (t) { window.clearTimeout(t); textTimersRef.current.delete(pp.path); }
+                if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "popup_close", path: pp.path }));
+              }}
+              style={{ background: "none", border: 0, cursor: "pointer", fontSize: 16, lineHeight: 1 }}
+              aria-label="Close"
+              title="Close"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+
+        {/* Inline colorized code editor */}
+        <div style={{ display: "block", width: "100%", flex: "1 1 auto", height: "auto" }}>
+          <InlineEditor
+            path={pp.path}
+            value={pp.draft}
+            funcIndex={funcIndex}
+            colorize={colorizeFunctions}
+            onChange={(v) => {
+              setPopups((cur) => cur.map((p) => (p.path === pp.path ? { ...p, draft: v, dirty: true } : p)));
+              scheduleTextSend(pp.path, v);
+            }}
+            onBlur={() => savePopup(pp.path)}
+          />
+        </div>
+      </div>
+    );
+  })}
+
+  {/* Link overlay (caller → declarer) — inline so it works in fullscreen */}
+  {overlayEnabled && (
+    <svg
+      style={{
+        position: "fixed",
+        inset: 0,
+        width: "100vw",
+        height: "100vh",
+        zIndex: 9999,
+        pointerEvents: "none",
+      }}
+    >
+      {popupLinks.map((l, i) => (
+        <path
+          key={i}
+          d={
+            (l as any).d ??
+            `M ${l.x1} ${l.y1} C ${(l.x1 + l.x2) / 2} ${l.y1}, ${(l.x1 + l.x2) / 2} ${l.y2}, ${l.x2} ${l.y2}`
+          }
+          fill="none"
+          stroke={l.color}
+          strokeWidth={2.25}
+          strokeOpacity={1}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+          shapeRendering="geometricPrecision"
+        />
+      ))}
+    </svg>
+  )}
+</section>
+
+    </div>
+  );
+}

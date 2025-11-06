@@ -1,0 +1,31 @@
+# list volumes
+docker volume ls
+
+# inspect the Postgres volume (shows host path Mountpoint)
+docker volume inspect code_graph_explorer_db-data
+
+# remove volumes (⚠️ deletes DB data)
+docker compose -f docker-compose.dev.yml down -v
+
+
+
+
+
+
+# backup to a file on your host
+docker compose -f docker-compose.dev.yml exec -T db \
+  pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc > db.backup
+
+# restore later
+docker compose -f docker-compose.dev.yml exec -T db \
+  pg_restore -U "$DB_USER" -d "$DB_NAME" --clean < db.backup
+
+
+
+
+
+
+# persist db across github repo :
+volumes:
+  - ./dbdata:/var/lib/postgresql/data
+

@@ -1,0 +1,32 @@
+# docker/Dockerfile.backend
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Add bash (script uses bash features) + deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash build-essential gcc libpq-dev curl \
+  && rm -rf /var/lib/apt/lists/*
+
+# Install Python deps
+COPY backend/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# App code
+COPY backend /app
+
+# Copy entrypoint, fix line endings, set exec bit
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
+
+# Non-root (optional)
+RUN useradd -m appuser
+USER appuser
+
+ENV DJANGO_SETTINGS_MODULE=config.settings
+EXPOSE 8000
+
+ENTRYPOINT ["bash","/entrypoint.sh"]

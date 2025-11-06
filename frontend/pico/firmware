@@ -1,0 +1,1063 @@
+/*
+  Pico W — LED · RFID · Relay (non-blocking pulse) · Thermistor · Buzzer · DHT11 · LCD1602 · Dual LEDs · BMP180 (HTTP API)
+
+  Endpoints (GET):
+    /api/status                    -> {state:"off|on|blinking"}
+
+    /api/led?state=on|off          -> {state:"on|off"}
+    /api/blink?hz=1..20            -> {state:"blinking"}
+
+    /api/rfid/status               -> {uid,present,at_ms,age_ms,empty_ms,autoclear_ms}
+    /api/rfid/last                 -> {uid,at_ms,age_ms}
+    /api/rfid/scan[?ms=100..5000]  -> {uid,at_ms,age_ms}
+    /api/rfid/clear                -> {ok:true}
+    /api/rfid/autoclear?ms=0..5000 -> {autoclear_ms}
+    /api/rfid/debug                -> {version_reg,antenna_on,status2,error,selftest}
+    /api/rfid/reinit               -> {reinit:true,version_reg:"0x.."}
+
+    /api/relay/status              -> {state:"on|off"}
+    /api/relay?state=on|off        -> {state:"on|off"}
+    /api/relay/pulse?ms=10..10000  -> {state:"pulsing",ms:N}
+
+    /api/thermistor/read           -> {raw,raw_bits,voltage,resistance_ohm,temp_c,ntc_to_3v3}
+
+    /api/buzzer/status             -> {state:"on|off",alarm:true|false}
+    /api/buzzer?state=on|off       -> {state:"on|off"}
+    /api/buzzer/beep?ms=10..5000   -> {state:"beeping",ms:N}
+    /api/buzzer/alarm?cmd=start|stop&on_ms=10..5000&off_ms=10..5000
+
+    /api/dht11/read[?settle_ms=0..1000]
+                                   -> {valid,humidity,temp_c,temp_f,heat_index_c,heat_index_f,err?}
+
+    /api/lcd/init?addr=0x27&cols=16&rows=2[&sdapin=4&sclpin=5]
+                                   -> {ready,addr,cols,rows,backlight}
+    /api/lcd/status                -> {ready,addr,cols,rows,backlight}
+    /api/lcd/clear                 -> {ok:true}
+    /api/lcd/home                  -> {ok:true}
+    /api/lcd/backlight?state=on|off-> {backlight:true|false}
+    /api/lcd/set?row=0|1&align=left|center|right&text=...
+    /api/lcd/print?row=R&col=C&text=...
+    /api/lcd/scroll?dir=left|right&steps=1..40
+
+    // Dual external LEDs on GP10 (red) & GP11 (green)
+    /api/leds/status               -> {red:{state},green:{state}}
+    /api/leds/set?red=on|off&green=on|off
+    /api/leds/red?state=on|off
+    /api/leds/green?state=on|off
+    /api/leds/blink?color=red|green|both&hz=1..20
+
+    // NEW: BMP180 barometer
+    /api/bmp180/status             -> {ready,addr,oss}
+    /api/bmp180/read[?oss=0..3&slp=1013.25]
+                                   -> {ok,temp_c,pressure_pa,pressure_hpa,altitude_m,oss}
+
+  Pins (defaults):
+    LED_BUILTIN
+    RELAY_PIN      GP15
+    BUZZER_PIN     GP14
+    DHT11_PIN      GP13
+    LCD1602 I2C    SDA=GP4, SCL=GP5 (PCF8574 @ 0x27 by default)
+    RFID (SPI0)    SS->GP17, SCK->GP18, MOSI->GP19, MISO->GP16, RST->GP22
+    THERMISTOR ADC GP26 (ADC0), divider selectable with NTC_TO_3V3
+
+    LED_RED_PIN    GP10 (series resistor)
+    LED_GREEN_PIN  GP11 (series resistor)
+*/
+
+#include <WiFi.h>
+#include <WebServer.h>
+#include <SPI.h>
+
+// RFID
+#define MFRC522_SPICLOCK 4000000
+#include <MFRC522.h>
+#include <math.h>
+
+// DHT11
+#include <DHT.h>
+#define DHT11_PIN 13
+#define DHTTYPE   DHT11
+DHT dht(DHT11_PIN, DHTTYPE);
+
+// LCD1602 (I²C)
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#define LCD_I2C_DEFAULT_ADDR 0x27
+#define LCD_I2C_SDA 4
+#define LCD_I2C_SCL 5
+LiquidCrystal_I2C *lcd = nullptr;
+uint8_t lcdAddr = LCD_I2C_DEFAULT_ADDR;
+uint8_t lcdCols = 16, lcdRows = 2;
+bool lcdReady = false;
+bool lcdBacklightOn = true;
+
+// BMP180 (I²C)
+#include <Adafruit_BMP085.h>   // Adafruit BMP085/BMP180
+Adafruit_BMP085 bmp;
+bool bmpReady = false;
+uint8_t bmpOSS = 3; // 0..3
+
+// ================= WIFI =================
+const char* SSID     = "";
+const char* PASSWORD = "";
+
+// ================= LED (built-in) ==================
+enum LedMode { MODE_OFF, MODE_ON, MODE_BLINK };
+volatile LedMode currentMode = MODE_OFF;
+volatile uint32_t blinkIntervalMs = 500;  // toggle interval (ms)
+unsigned long lastToggle = 0;
+bool ledLevel = false;
+
+// ================ RELAY =================
+#define RELAY_PIN 15
+volatile bool relayOn = false;
+volatile bool relayPulseActive = false;
+unsigned long relayPulseUntil = 0;
+
+// ================ BUZZER ================
+#define BUZZER_PIN 14
+volatile bool buzzerOn = false;
+volatile bool buzzerPulseActive = false;
+unsigned long buzzerPulseUntil = 0;
+
+volatile bool buzzerAlarmActive = false;
+unsigned long buzzerNextTransition = 0;
+uint32_t buzzerOnMs = 200, buzzerOffMs = 200;
+bool buzzerLevel = false;
+
+void setBuzzer(bool on) {
+  buzzerOn = on;
+  buzzerLevel = on;
+  digitalWrite(BUZZER_PIN, on ? HIGH : LOW);
+}
+
+// ================ RFID (RC522 on SPI0) ================
+#define RFID_SS_PIN   17
+#define RFID_RST_PIN  22
+MFRC522 mfrc522(RFID_SS_PIN, RFID_RST_PIN);
+String lastUID = "";
+unsigned long lastSeenMs = 0;
+
+// Presence/auto-clear state
+volatile bool     rfidPresent = false;
+unsigned long     rfidNoCardSince = 0;
+uint32_t          RFID_AUTOCLEAR_MS = 600;  // 0 disables auto-clear
+
+// ================ THERMISTOR (NTC 10k) =================
+#define NTC_TO_3V3 0
+#define THERM_ADC_PIN 26
+const float VREF            = 3.3f;
+const float FIXED_RESISTOR  = 10000.0f;
+const float THERMISTOR_R0   = 10000.0f;
+const float THERMISTOR_BETA = 3950.0f;
+const float T0_K            = 273.15f + 25.0f;
+
+// ================= NEW: Dual External LEDs ==============
+#define LED_RED_PIN   10   // GP10
+#define LED_GREEN_PIN 11   // GP11
+
+enum Led2Mode { L2_OFF, L2_ON, L2_BLINK };
+volatile Led2Mode redMode   = L2_OFF;
+volatile Led2Mode greenMode = L2_OFF;
+
+volatile uint32_t redBlinkIntervalMs   = 250;
+volatile uint32_t greenBlinkIntervalMs = 250;
+
+unsigned long redLastToggle   = 0;
+unsigned long greenLastToggle = 0;
+
+bool redLevel = false;
+bool greenLevel = false;
+
+inline void setRed(bool on)   { redLevel = on;   digitalWrite(LED_RED_PIN,   on ? HIGH : LOW); }
+inline void setGreen(bool on) { greenLevel = on; digitalWrite(LED_GREEN_PIN, on ? HIGH : LOW); }
+
+// ================= HTTP SERVER =================
+WebServer server(80);
+
+// ----------------- Helpers -----------------
+void enableCORS() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  server.sendHeader("Connection", "close");
+  server.sendHeader("Cache-Control", "no-store");
+}
+
+String uidToString(MFRC522::Uid *uid) {
+  String s;
+  for (byte i = 0; i < uid->size; i++) {
+    if (i) s += ":";
+    if (uid->uidByte[i] < 0x10) s += "0";
+    s += String(uid->uidByte[i], HEX);
+  }
+  s.toUpperCase();
+  return s;
+}
+
+void setRelay(bool on) {
+  relayOn = on;
+  digitalWrite(RELAY_PIN, on ? HIGH : LOW);
+}
+
+// ----------------- LCD helpers -----------------
+#if defined(ARDUINO_ARCH_ESP32)
+  void LCD_BeginWire(int sda = LCD_I2C_SDA, int scl = LCD_I2C_SCL) { Wire.begin(sda, scl); }
+#elif defined(ARDUINO_ARCH_RP2040)
+  void LCD_BeginWire(int sda = LCD_I2C_SDA, int scl = LCD_I2C_SCL) {
+    Wire.setSDA(sda); Wire.setSCL(scl); Wire.begin();
+  }
+#else
+  void LCD_BeginWire(int sda = LCD_I2C_SDA, int scl = LCD_I2C_SCL) { (void)sda; (void)scl; Wire.begin(); }
+#endif
+
+void LCD_Destroy() {
+  if (lcd) { delete lcd; lcd = nullptr; }
+  lcdReady = false;
+}
+
+void LCD_Create(uint8_t addr, uint8_t cols, uint8_t rows) {
+  LCD_Destroy();
+  lcdAddr = addr; lcdCols = cols; lcdRows = rows;
+  lcd = new LiquidCrystal_I2C(lcdAddr, lcdCols, lcdRows);
+  lcd->init();
+  lcd->backlight();
+  lcd->noAutoscroll();
+  lcd->leftToRight();
+  lcd->clear();
+  lcdBacklightOn = true;
+  lcdReady = true;
+}
+
+// Fill entire logical row (40 cols) with spaces, then set cursor back to 0
+void lcdClearRow40(uint8_t row) {
+  if (!lcdReady) return;
+  lcd->setCursor(0, row);
+  for (int i = 0; i < 16; i++) lcd->print(' ');
+  lcd->setCursor(16, row);
+  for (int i = 0; i < 24; i++) lcd->print(' ');
+  lcd->setCursor(0, row);
+}
+void lcdScrubOffscreen() {
+  if (!lcdReady) return;
+  for (uint8_t r = 0; r < lcdRows; r++) {
+    lcd->setCursor(16, r);
+    for (int i = 0; i < 24; i++) lcd->print(' ');
+  }
+}
+
+// ----------------- RFID init / reinit / watchdog / polling -----------------
+void RFID_Reinit() {
+  mfrc522.PCD_Reset();
+  delay(30);
+  mfrc522.PCD_Init();
+  mfrc522.PCD_SetAntennaGain(mfrc522.RxGain_max);
+  mfrc522.PCD_AntennaOn();
+}
+
+void RFID_Init() {
+  pinMode(RFID_SS_PIN, OUTPUT);
+  digitalWrite(RFID_SS_PIN, HIGH);
+  pinMode(RFID_RST_PIN, OUTPUT);
+  digitalWrite(RFID_RST_PIN, HIGH);
+
+  SPI.setSCK(18);
+  SPI.setTX(19);
+  SPI.setRX(16);
+  SPI.begin();
+
+  RFID_Reinit();
+
+  byte ver = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+  Serial.print("RC522 VersionReg: 0x");
+  Serial.println(ver, HEX);
+}
+
+void RFID_Watchdog() {
+  static unsigned long lastCheck = 0;
+  unsigned long now = millis();
+  if (now - lastCheck < 2000) return;
+  lastCheck = now;
+
+  byte ver = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+  byte tx  = mfrc522.PCD_ReadRegister(MFRC522::TxControlReg);
+  bool antennaOn = (tx & 0x03) == 0x03;
+
+  if (ver == 0x00 || ver == 0xFF || !antennaOn) {
+    RFID_Reinit();
+    return;
+  }
+
+  if (now - lastSeenMs > 30000) {
+    RFID_Reinit();
+  }
+}
+
+void RFID_BackgroundPoll() {
+  bool found = false;
+  if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
+    found = true;
+  } else {
+    if (mfrc522.PICC_ReadCardSerial()) found = true;
+  }
+
+  if (found) {
+    rfidPresent = true;
+    rfidNoCardSince = 0;
+    lastUID    = uidToString(&mfrc522.uid);
+    lastSeenMs = millis();
+    mfrc522.PICC_HaltA();
+    mfrc522.PCD_StopCrypto1();
+  } else {
+    if (rfidPresent) {
+      rfidPresent = false;
+      rfidNoCardSince = millis();
+    } else if (rfidNoCardSince && RFID_AUTOCLEAR_MS > 0) {
+      if ((millis() - rfidNoCardSince) > RFID_AUTOCLEAR_MS) {
+        lastUID = "";
+        lastSeenMs = 0;
+        rfidNoCardSince = 0;
+      }
+    }
+  }
+}
+
+// ----------------- Thermistor helpers -----------------
+int adcReadAveraged(int pin, int samples = 8) {
+  long acc = 0;
+  for (int i = 0; i < samples; i++) { acc += analogRead(pin); delay(2); }
+  return (int)(acc / samples);
+}
+float computeRT_fromV(float v) {
+  if (v < 0.001f) v = 0.001f;
+  if (v > (VREF - 0.001f)) v = VREF - 0.001f;
+#if NTC_TO_3V3
+  return FIXED_RESISTOR * (VREF / v - 1.0f);
+#else
+  return FIXED_RESISTOR * (v / (VREF - v));
+#endif
+}
+float thermistorCelsiusFromRaw(int raw, int maxAdc = 4095) {
+  float v = (float)raw * (VREF / (float)maxAdc);
+  float rt = computeRT_fromV(v);
+  if (rt < 1.0f) rt = 1.0f;
+  float invT = (1.0f / T0_K) + (logf(rt / THERMISTOR_R0) / THERMISTOR_BETA);
+  float tK = 1.0f / invT;
+  return tK - 273.15f;
+}
+
+// ----------------- HTTP Handlers: LED (builtin) -----------------
+void handleStatus() {
+  enableCORS();
+  const char* state = "unknown";
+  switch (currentMode) {
+    case MODE_OFF:  state = "off"; break;
+    case MODE_ON:   state = "on"; break;
+    case MODE_BLINK:state = "blinking"; break;
+  }
+  server.send(200, "application/json", String("{\"state\":\"") + state + "\"}");
+}
+void handleLed() {
+  enableCORS();
+  String st = server.arg("state");
+  st.toLowerCase();
+  if (st == "on") {
+    currentMode = MODE_ON;
+    digitalWrite(LED_BUILTIN, HIGH);
+    ledLevel = true;
+    server.send(200, "application/json", "{\"state\":\"on\"}");
+  } else if (st == "off") {
+    currentMode = MODE_OFF;
+    digitalWrite(LED_BUILTIN, LOW);
+    ledLevel = false;
+    server.send(200, "application/json", "{\"state\":\"off\"}");
+  } else {
+    server.send(400, "application/json", "{\"error\":\"state must be on|off\"}");
+  }
+}
+void handleBlink() {
+  enableCORS();
+  int hz = server.hasArg("hz") ? server.arg("hz").toInt() : 2;
+  if (hz < 1) hz = 1;
+  if (hz > 20) hz = 20;
+  blinkIntervalMs = (uint32_t)(500.0 / (double)hz); // toggle period
+  currentMode = MODE_BLINK;
+  server.send(200, "application/json", "{\"state\":\"blinking\"}");
+}
+
+// ----------------- HTTP Handlers: RFID -----------------
+void handleRfidStatus() {
+  enableCORS();
+  unsigned long empty_ms = (rfidPresent || !rfidNoCardSince) ? 0 : (millis() - rfidNoCardSince);
+  String json = "{";
+  json += "\"uid\":";
+  json += lastUID.length() ? ("\"" + lastUID + "\"") : String("null");
+  json += ",\"present\":" + String(rfidPresent ? "true" : "false");
+  json += ",\"at_ms\":" + String(lastSeenMs);
+  json += ",\"age_ms\":" + String(lastUID.length() ? (millis() - lastSeenMs) : 0);
+  json += ",\"empty_ms\":" + String(empty_ms);
+  json += ",\"autoclear_ms\":" + String(RFID_AUTOCLEAR_MS);
+  json += "}";
+  server.send(200, "application/json", json);
+}
+void handleRfidLast() {
+  enableCORS();
+  unsigned long age = lastUID.length() ? (millis() - lastSeenMs) : 0;
+  String json = "{\"uid\":";
+  json += lastUID.length() ? ("\"" + lastUID + "\"") : String("null");
+  json += ",\"at_ms\":" + String(lastSeenMs);
+  json += ",\"age_ms\":" + String(age);
+  json += "}";
+  server.send(200, "application/json", json);
+}
+void handleRfidClear() {
+  enableCORS();
+  lastUID = "";
+  lastSeenMs = 0;
+  rfidNoCardSince = 0;
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+void handleRfidAutoClear() {
+  enableCORS();
+  uint32_t ms = server.hasArg("ms") ? (uint32_t)server.arg("ms").toInt() : RFID_AUTOCLEAR_MS;
+  if (ms > 5000) ms = 5000;
+  RFID_AUTOCLEAR_MS = ms;
+  String json = String("{\"autoclear_ms\":") + String(RFID_AUTOCLEAR_MS) + "}";
+  server.send(200, "application/json", json);
+}
+void handleRfidScan() {
+  enableCORS();
+  unsigned long window = server.hasArg("ms") ? server.arg("ms").toInt() : 1200;
+  if (window < 100)  window = 100;
+  if (window > 5000) window = 5000;
+
+  mfrc522.PCD_StopCrypto1();
+  mfrc522.PCD_ClearRegisterBitMask(MFRC522::Status2Reg, 0x08);
+
+  String uid = "null";
+  bool found = false;
+  unsigned long until = millis() + window;
+
+  while (millis() < until) {
+    if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
+      found = true;
+    } else {
+      byte atqa[2]; byte atqaSize = 2;
+      MFRC522::StatusCode s = mfrc522.PICC_RequestA(atqa, &atqaSize);
+      if (s != MFRC522::STATUS_OK) s = mfrc522.PICC_WakeupA(atqa, &atqaSize);
+      if (s == MFRC522::STATUS_OK && mfrc522.PICC_ReadCardSerial()) {
+        found = true;
+      }
+    }
+
+    if (found) {
+      rfidPresent = true;
+      rfidNoCardSince = 0;
+      lastUID    = uidToString(&mfrc522.uid);
+      lastSeenMs = millis();
+      uid        = "\"" + lastUID + "\"";
+      mfrc522.PICC_HaltA();
+      mfrc522.PCD_StopCrypto1();
+      break;
+    }
+    delay(5);
+  }
+
+  String json = "{\"uid\":" + uid +
+                ",\"at_ms\":" + String(lastSeenMs) +
+                ",\"age_ms\":" + String(found ? 0 : (lastUID.length() ? millis() - lastSeenMs : 0)) +
+                "}";
+  server.send(200, "application/json", json);
+}
+void handleRfidDebug() {
+  enableCORS();
+  byte ver     = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+  byte tx      = mfrc522.PCD_ReadRegister(MFRC522::TxControlReg);
+  byte status2 = mfrc522.PCD_ReadRegister(MFRC522::Status2Reg);
+  byte error   = mfrc522.PCD_ReadRegister(MFRC522::ErrorReg);
+  bool selfok  = mfrc522.PCD_PerformSelfTest();
+
+  bool antennaOn = (tx & 0x03) == 0x03;
+  String json = "{";
+  json += "\"version_reg\":\"0x" + String(ver, HEX) + "\"";
+  json += ",\"antenna_on\":" + String(antennaOn ? "true" : "false");
+  json += ",\"status2\":\"0x" + String(status2, HEX) + "\"";
+  json += ",\"error\":\"0x" + String(error, HEX) + "\"";
+  json += ",\"selftest\":" + String(selfok ? "true" : "false");
+  json += "}";
+  server.send(200, "application/json", json);
+}
+void handleRfidReinit() {
+  enableCORS();
+  RFID_Reinit();
+  byte ver = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+  server.send(200, "application/json",
+              String("{\"reinit\":true,\"version_reg\":\"0x") + String(ver, HEX) + "\"}");
+}
+
+// ----------------- HTTP Handlers: RELAY -----------------
+void handleRelayStatus() {
+  enableCORS();
+  server.send(200, "application/json",
+              String("{\"state\":\"") + (relayOn ? "on" : "off") + "\"}");
+}
+void handleRelay() {
+  enableCORS();
+  String st = server.arg("state");
+  st.toLowerCase();
+  if (st == "on") {
+    setRelay(true);
+    server.send(200, "application/json", "{\"state\":\"on\"}");
+  } else if (st == "off") {
+    setRelay(false);
+    relayPulseActive = false;
+    server.send(200, "application/json", "{\"state\":\"off\"}");
+  } else {
+    server.send(400, "application/json", "{\"error\":\"state must be on|off\"}");
+  }
+}
+void handleRelayPulse() {
+  enableCORS();
+  int ms = server.hasArg("ms") ? server.arg("ms").toInt() : 200;
+  if (ms < 10) ms = 10;
+  if (ms > 10000) ms = 10000;
+  setRelay(true);
+  relayPulseActive = true;
+  relayPulseUntil = millis() + (unsigned long)ms;
+  String json = String("{\"state\":\"pulsing\",\"ms\":") + String(ms) + "}";
+  server.send(200, "application/json", json);
+}
+
+// ----------------- HTTP Handlers: THERMISTOR -----------
+void handleThermistorRead() {
+  enableCORS();
+  const int MAXADC = 4095;
+  int raw = adcReadAveraged(THERM_ADC_PIN, 10);
+  float v  = (float)raw * (VREF / (float)MAXADC);
+  float rt = computeRT_fromV(v);
+  if (rt < 1.0f) rt = 1.0f;
+  float tc = thermistorCelsiusFromRaw(raw, MAXADC);
+
+  String json = "{";
+  json += "\"raw\":" + String(raw);
+  json += ",\"raw_bits\":12";
+  json += ",\"voltage\":" + String(v, 4);
+  json += ",\"resistance_ohm\":" + String(rt, 1);
+  json += ",\"temp_c\":" + String(tc, 2);
+  json += ",\"ntc_to_3v3\":" + String((int)NTC_TO_3V3);
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+// ----------------- HTTP Handlers: BUZZER ---------------
+void handleBuzzerStatus() {
+  enableCORS();
+  String json = String("{\"state\":\"") + (buzzerOn ? "on" : "off") + "\""
+              + ",\"alarm\":" + (buzzerAlarmActive ? "true" : "false") + "}";
+  server.send(200, "application/json", json);
+}
+void handleBuzzer() {
+  enableCORS();
+  String st = server.arg("state"); st.toLowerCase();
+  if (st == "on") {
+    buzzerAlarmActive = false; buzzerPulseActive = false;
+    setBuzzer(true);
+    server.send(200, "application/json", "{\"state\":\"on\"}");
+  } else if (st == "off") {
+    buzzerAlarmActive = false; buzzerPulseActive = false;
+    setBuzzer(false);
+    server.send(200, "application/json", "{\"state\":\"off\"}");
+  } else {
+    server.send(400, "application/json", "{\"error\":\"state must be on|off\"}");
+  }
+}
+void handleBuzzerBeep() {
+  enableCORS();
+  int ms = server.hasArg("ms") ? server.arg("ms").toInt() : 200;
+  if (ms < 10) ms = 10; if (ms > 5000) ms = 5000;
+  buzzerAlarmActive = false;
+  setBuzzer(true);
+  buzzerPulseActive = true;
+  buzzerPulseUntil = millis() + (unsigned long)ms;
+  String json = String("{\"state\":\"beeping\",\"ms\":") + String(ms) + "}";
+  server.send(200, "application/json", json);
+}
+void handleBuzzerAlarm() {
+  enableCORS();
+  String cmd = server.arg("cmd"); cmd.toLowerCase();
+  if (cmd == "start") {
+    buzzerOnMs  = server.hasArg("on_ms")  ? server.arg("on_ms").toInt()  : 200;
+    buzzerOffMs = server.hasArg("off_ms") ? server.arg("off_ms").toInt() : 200;
+    if (buzzerOnMs < 10) buzzerOnMs = 10; if (buzzerOnMs > 5000) buzzerOnMs = 5000;
+    if (buzzerOffMs < 10) buzzerOffMs = 10; if (buzzerOffMs > 5000) buzzerOffMs = 5000;
+
+    buzzerPulseActive = false;
+    buzzerAlarmActive = true;
+    setBuzzer(true);
+    buzzerNextTransition = millis() + buzzerOnMs;
+
+    String json = String("{\"state\":\"alarm\",\"on_ms\":") + String(buzzerOnMs) +
+                  ",\"off_ms\":" + String(buzzerOffMs) + "}";
+    server.send(200, "application/json", json);
+  } else if (cmd == "stop") {
+    buzzerAlarmActive = false;
+    buzzerPulseActive = false;
+    setBuzzer(false);
+    server.send(200, "application/json", "{\"state\":\"stopped\"}");
+  } else {
+    server.send(400, "application/json", "{\"error\":\"cmd must be start|stop\"}");
+  }
+}
+
+// ----------------- HTTP Handlers: DHT11 ----------------
+void handleDht11Read() {
+  enableCORS();
+
+  int settle = server.hasArg("settle_ms") ? server.arg("settle_ms").toInt() : 0;
+  if (settle < 0) settle = 0;
+  if (settle > 1000) settle = 1000;
+  if (settle) delay(settle);
+
+  float h  = dht.readHumidity();
+  float tc = dht.readTemperature();
+  float tf = dht.readTemperature(true);
+
+  String json = "{";
+  if (isnan(h) || isnan(tc) || isnan(tf)) {
+    json += "\"valid\":false,\"err\":\"nan\"}";
+    server.send(200, "application/json", json);
+    return;
+  }
+
+  float hic = dht.computeHeatIndex(tc, h, false);
+  float hif = dht.computeHeatIndex(tf, h, true);
+
+  json += "\"valid\":true";
+  json += ",\"humidity\":" + String(h, 1);
+  json += ",\"temp_c\":" + String(tc, 1);
+  json += ",\"temp_f\":" + String(tf, 1);
+  json += ",\"heat_index_c\":" + String(hic, 1);
+  json += ",\"heat_index_f\":" + String(hif, 1);
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+// ----------------- HTTP Handlers: LCD1602 ---------------
+static uint8_t parseAddr(const String& s) {
+  if (s.startsWith("0x") || s.startsWith("0X")) return (uint8_t) strtol(s.c_str(), nullptr, 16);
+  return (uint8_t) s.toInt();
+}
+void handleLcdInit() {
+  enableCORS();
+  uint8_t addr = server.hasArg("addr") ? parseAddr(server.arg("addr")) : lcdAddr;
+  uint8_t cols = server.hasArg("cols") ? (uint8_t)server.arg("cols").toInt() : lcdCols;
+  uint8_t rows = server.hasArg("rows") ? (uint8_t)server.arg("rows").toInt() : lcdRows;
+  int sda = server.hasArg("sdapin") ? server.arg("sdapin").toInt() : LCD_I2C_SDA;
+  int scl = server.hasArg("sclpin") ? server.arg("sclpin").toInt() : LCD_I2C_SCL;
+
+  if (cols == 0) cols = 16;
+  if (rows == 0) rows = 2;
+
+  LCD_BeginWire(sda, scl);
+  LCD_Create(addr, cols, rows);
+
+  String json = "{";
+  json += "\"ready\":true";
+  json += ",\"addr\":\"0x" + String(addr, HEX) + "\"";
+  json += ",\"cols\":" + String(cols);
+  json += ",\"rows\":" + String(rows);
+  json += ",\"backlight\":" + String(lcdBacklightOn ? "true" : "false");
+  json += "}";
+  server.send(200, "application/json", json);
+}
+void handleLcdStatus() {
+  enableCORS();
+  String json = "{";
+  json += "\"ready\":" + String(lcdReady ? "true" : "false");
+  json += ",\"addr\":\"0x" + String(lcdAddr, HEX) + "\"";
+  json += ",\"cols\":" + String(lcdCols);
+  json += ",\"rows\":" + String(lcdRows);
+  json += ",\"backlight\":" + String(lcdBacklightOn ? "true" : "false");
+  json += "}";
+  server.send(200, "application/json", json);
+}
+void handleLcdClear() {
+  enableCORS();
+  if (!lcdReady) { server.send(400, "application/json", "{\"error\":\"lcd not initialized\"}"); return; }
+  lcd->clear();
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+void handleLcdHome() {
+  enableCORS();
+  if (lcdReady) lcd->home();
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+void handleLcdBacklight() {
+  enableCORS();
+  if (!lcdReady) { server.send(400, "application/json", "{\"error\":\"lcd not initialized\"}"); return; }
+  String st = server.arg("state"); st.toLowerCase();
+  if (st == "on") { lcd->backlight(); lcdBacklightOn = true; }
+  else if (st == "off") { lcd->noBacklight(); lcdBacklightOn = false; }
+  else { server.send(400, "application/json", "{\"error\":\"state must be on|off\"}"); return; }
+  server.send(200, "application/json", String("{\"backlight\":") + (lcdBacklightOn ? "true" : "false") + "}");
+}
+void handleLcdSet() {
+  enableCORS();
+  if (!lcdReady) { server.send(400,"application/json","{\"error\":\"lcd not initialized\"}"); return; }
+  int row = server.hasArg("row") ? server.arg("row").toInt() : 0;
+  String text = server.arg("text");
+  String align = server.hasArg("align") ? server.arg("align") : "left";
+  if (row < 0) row = 0;
+  if (row >= (int)lcdRows) row = lcdRows - 1;
+
+  text.replace("\r",""); text.replace("\n"," ");
+  if ((int)text.length() > (int)lcdCols) text = text.substring(0, lcdCols);
+
+  int col = 0;
+  if (align == "center")      col = max(0, (int)(lcdCols - text.length()) / 2);
+  else if (align == "right")  col = max(0, (int)lcdCols - (int)text.length());
+
+  lcdClearRow40(row);
+  lcd->setCursor(col, row);
+  lcd->print(text);
+
+  String json = String("{\"row\":")+row+",\"text\":\""+text+"\",\"align\":\""+align+"\"}";
+  server.send(200, "application/json", json);
+}
+void handleLcdPrint() {
+  enableCORS();
+  if (!lcdReady) { server.send(400, "application/json", "{\"error\":\"lcd not initialized\"}"); return; }
+  int row = server.hasArg("row") ? server.arg("row").toInt() : 0;
+  int col = server.hasArg("col") ? server.arg("col").toInt() : 0;
+  String text = server.arg("text");
+  if (row < 0) row = 0; if (row >= (int)lcdRows) row = lcdRows - 1;
+  if (col < 0) col = 0; if (col >= (int)lcdCols) col = lcdCols - 1;
+  int maxLen = lcdCols - col;
+  if ((int)text.length() > maxLen) text = text.substring(0, maxLen);
+  lcd->setCursor(col, row);
+  lcd->print(text);
+  String json = "{";
+  json += "\"row\":" + String(row);
+  json += ",\"col\":" + String(col);
+  json += ",\"text\":\"" + text + "\"";
+  json += "}";
+  server.send(200, "application/json", json);
+}
+void handleLcdScroll() {
+  enableCORS();
+  if (!lcdReady) { server.send(400,"application/json","{\"error\":\"lcd not initialized\"}"); return; }
+  String dir = server.hasArg("dir") ? server.arg("dir") : "left";
+  int steps = server.hasArg("steps") ? server.arg("steps").toInt() : 1;
+  if (steps < 1) steps = 1;
+  if (steps > 40) steps = 40;
+
+  lcd->noAutoscroll();
+  lcdScrubOffscreen();
+
+  for (int i = 0; i < steps; i++) {
+    if (dir == "right") lcd->scrollDisplayRight();
+    else                lcd->scrollDisplayLeft();
+    delay(80);
+  }
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+// ----------------- NEW: Dual LEDs Handlers -----------------
+void handleLedsStatus() {
+  enableCORS();
+  auto modeName = [](Led2Mode m)->const char* {
+    switch (m) { case L2_OFF: return "off"; case L2_ON: return "on"; default: return "blinking"; }
+  };
+  String json = "{";
+  json += "\"red\":{\"state\":\""   + String(modeName(redMode))   + "\"}";
+  json += ",\"green\":{\"state\":\""+ String(modeName(greenMode)) + "\"}";
+  json += "}";
+  server.send(200, "application/json", json);
+}
+void handleLedsSet() {
+  enableCORS();
+  if (server.hasArg("red")) {
+    String v = server.arg("red"); v.toLowerCase();
+    if (v == "on")  { redMode = L2_ON;  setRed(true); }
+    if (v == "off") { redMode = L2_OFF; setRed(false); }
+  }
+  if (server.hasArg("green")) {
+    String v = server.arg("green"); v.toLowerCase();
+    if (v == "on")  { greenMode = L2_ON;  setGreen(true); }
+    if (v == "off") { greenMode = L2_OFF; setGreen(false); }
+  }
+  handleLedsStatus();
+}
+void handleLedRed() {
+  enableCORS();
+  String st = server.arg("state"); st.toLowerCase();
+  if (st == "on")  { redMode = L2_ON;  setRed(true);  handleLedsStatus(); }
+  else if (st == "off"){ redMode = L2_OFF; setRed(false); handleLedsStatus(); }
+  else server.send(400,"application/json","{\"error\":\"state must be on|off\"}");
+}
+void handleLedGreen() {
+  enableCORS();
+  String st = server.arg("state"); st.toLowerCase();
+  if (st == "on")  { greenMode = L2_ON;  setGreen(true);  handleLedsStatus(); }
+  else if (st == "off"){ greenMode = L2_OFF; setGreen(false); handleLedsStatus(); }
+  else server.send(400,"application/json","{\"error\":\"state must be on|off\"}");
+}
+void handleLedsBlink() {
+  enableCORS();
+  String color = server.hasArg("color") ? server.arg("color") : "both";
+  int hz = server.hasArg("hz") ? server.arg("hz").toInt() : 2;
+  if (hz < 1) hz = 1; if (hz > 20) hz = 20;
+  uint32_t interval = (uint32_t)(500.0 / (double)hz); // toggle period
+
+  if (color == "red" || color == "both") {
+    redBlinkIntervalMs = interval; redMode = L2_BLINK;
+    redLastToggle = millis();
+  }
+  if (color == "green" || color == "both") {
+    greenBlinkIntervalMs = interval; greenMode = L2_BLINK;
+    greenLastToggle = millis();
+  }
+  String json = String("{\"state\":\"blinking\",\"color\":\"") + color + "\",\"hz\":" + String(hz) + "}";
+  server.send(200, "application/json", json);
+}
+
+// ----------------- BMP180 Handlers -----------------
+static uint8_t ossToMode(uint8_t oss) {
+  switch (oss) {
+    case 0: return BMP085_ULTRALOWPOWER;
+    case 1: return BMP085_STANDARD;
+    case 2: return BMP085_HIGHRES;
+    default: return BMP085_ULTRAHIGHRES;
+  }
+}
+static bool ensureBMP(uint8_t oss) {
+  if (!bmpReady || oss != bmpOSS) {
+    bmpOSS = oss;
+    bmpReady = bmp.begin(ossToMode(oss));
+  }
+  return bmpReady;
+}
+void handleBmpStatus() {
+  enableCORS();
+  String json = "{";
+  json += "\"ready\":" + String(bmpReady ? "true" : "false");
+  json += ",\"addr\":\"0x77\"";
+  json += ",\"oss\":" + String((int)bmpOSS);
+  json += "}";
+  server.send(200, "application/json", json);
+}
+void handleBmpRead() {
+  enableCORS();
+  uint8_t oss = server.hasArg("oss") ? (uint8_t) constrain(server.arg("oss").toInt(), 0, 3) : bmpOSS;
+  if (!ensureBMP(oss)) {
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"bmp not found\"}");
+    return;
+  }
+  float slp_hpa = server.hasArg("slp") ? server.arg("slp").toFloat() : 1013.25f;
+  if (slp_hpa < 300.0f || slp_hpa > 1100.0f) slp_hpa = 1013.25f;
+
+  float tC = bmp.readTemperature();          // °C
+  long  pPa = bmp.readPressure();            // Pa
+  float alt = bmp.readAltitude(slp_hpa * 100.0f); // m
+
+  String json = "{";
+  json += "\"ok\":true";
+  json += ",\"temp_c\":" + String(tC, 2);
+  json += ",\"pressure_pa\":" + String((long)pPa);
+  json += ",\"pressure_hpa\":" + String((float)pPa / 100.0f, 2);
+  json += ",\"altitude_m\":" + String(alt, 1);
+  json += ",\"oss\":" + String((int)oss);
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+// ----------------- Misc -----------------
+void handleOptions() { enableCORS(); server.send(204); }
+void handleNotFound() { enableCORS(); server.send(404, "text/plain", "Not found"); }
+
+// ================== SETUP ==================
+void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  // dual LEDs pins
+  pinMode(LED_RED_PIN, OUTPUT);   digitalWrite(LED_RED_PIN, LOW);
+  pinMode(LED_GREEN_PIN, OUTPUT); digitalWrite(LED_GREEN_PIN, LOW);
+
+  analogReadResolution(12);
+  pinMode(THERM_ADC_PIN, INPUT);
+
+  Serial.begin(115200);
+  delay(500);
+  Serial.println("Booting...");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(SSID, PASSWORD);
+  Serial.print("Connecting");
+  while (WiFi.status() != WL_CONNECTED) { delay(400); Serial.print("."); }
+  Serial.println();
+  Serial.print("IP: "); Serial.println(WiFi.localIP());
+
+  RFID_Init();
+  dht.begin();
+
+  // I2C for LCD + auto-init
+  LCD_BeginWire();
+  LCD_Create(LCD_I2C_DEFAULT_ADDR, 16, 2);
+
+  // Try BMP180
+  bmpReady = bmp.begin(ossToMode(bmpOSS));
+
+  // Routes
+  server.on("/api/status",          HTTP_GET, handleStatus);
+  server.on("/api/led",             HTTP_GET, handleLed);
+  server.on("/api/blink",           HTTP_GET, handleBlink);
+
+  server.on("/api/rfid/status",     HTTP_GET, handleRfidStatus);
+  server.on("/api/rfid/last",       HTTP_GET, handleRfidLast);
+  server.on("/api/rfid/clear",      HTTP_GET, handleRfidClear);
+  server.on("/api/rfid/autoclear",  HTTP_GET, handleRfidAutoClear);
+  server.on("/api/rfid/scan",       HTTP_GET, handleRfidScan);
+  server.on("/api/rfid/debug",      HTTP_GET, handleRfidDebug);
+  server.on("/api/rfid/reinit",     HTTP_GET, handleRfidReinit);
+
+  server.on("/api/relay/status",    HTTP_GET, handleRelayStatus);
+  server.on("/api/relay",           HTTP_GET, handleRelay);
+  server.on("/api/relay/pulse",     HTTP_GET, handleRelayPulse);
+
+  server.on("/api/thermistor/read", HTTP_GET, handleThermistorRead);
+
+  server.on("/api/buzzer/status",   HTTP_GET, handleBuzzerStatus);
+  server.on("/api/buzzer",          HTTP_GET, handleBuzzer);
+  server.on("/api/buzzer/beep",     HTTP_GET, handleBuzzerBeep);
+  server.on("/api/buzzer/alarm",    HTTP_GET, handleBuzzerAlarm);
+
+  server.on("/api/dht11/read",      HTTP_GET, handleDht11Read);
+
+  server.on("/api/lcd/init",        HTTP_GET, handleLcdInit);
+  server.on("/api/lcd/status",      HTTP_GET, handleLcdStatus);
+  server.on("/api/lcd/clear",       HTTP_GET, handleLcdClear);
+  server.on("/api/lcd/home",        HTTP_GET, handleLcdHome);
+  server.on("/api/lcd/backlight",   HTTP_GET, handleLcdBacklight);
+  server.on("/api/lcd/set",         HTTP_GET, handleLcdSet);
+  server.on("/api/lcd/print",       HTTP_GET, handleLcdPrint);
+  server.on("/api/lcd/scroll",      HTTP_GET, handleLcdScroll);
+
+  // Dual LEDs routes
+  server.on("/api/leds/status",     HTTP_GET, handleLedsStatus);
+  server.on("/api/leds/set",        HTTP_GET, handleLedsSet);
+  server.on("/api/leds/red",        HTTP_GET, handleLedRed);
+  server.on("/api/leds/green",      HTTP_GET, handleLedGreen);
+  server.on("/api/leds/blink",      HTTP_GET, handleLedsBlink);
+
+  // BMP180 routes
+  server.on("/api/bmp180/status",   HTTP_GET, handleBmpStatus);
+  server.on("/api/bmp180/read",     HTTP_GET, handleBmpRead);
+
+  // CORS preflight
+  server.on("/",                    HTTP_OPTIONS, handleOptions);
+  server.on("/api/status",          HTTP_OPTIONS, handleOptions);
+  server.on("/api/led",             HTTP_OPTIONS, handleOptions);
+  server.on("/api/blink",           HTTP_OPTIONS, handleOptions);
+
+  server.on("/api/rfid/status",     HTTP_OPTIONS, handleOptions);
+  server.on("/api/rfid/last",       HTTP_OPTIONS, handleOptions);
+  server.on("/api/rfid/clear",      HTTP_OPTIONS, handleOptions);
+  server.on("/api/rfid/autoclear",  HTTP_OPTIONS, handleOptions);
+  server.on("/api/rfid/scan",       HTTP_OPTIONS, handleOptions);
+  server.on("/api/rfid/debug",      HTTP_OPTIONS, handleOptions);
+  server.on("/api/rfid/reinit",     HTTP_OPTIONS, handleOptions);
+
+  server.on("/api/relay/status",    HTTP_OPTIONS, handleOptions);
+  server.on("/api/relay",           HTTP_OPTIONS, handleOptions);
+  server.on("/api/relay/pulse",     HTTP_OPTIONS, handleOptions);
+
+  server.on("/api/thermistor/read", HTTP_OPTIONS, handleOptions);
+
+  server.on("/api/buzzer/status",   HTTP_OPTIONS, handleOptions);
+  server.on("/api/buzzer",          HTTP_OPTIONS, handleOptions);
+  server.on("/api/buzzer/beep",     HTTP_OPTIONS, handleOptions);
+  server.on("/api/buzzer/alarm",    HTTP_OPTIONS, handleOptions);
+
+  server.on("/api/dht11/read",      HTTP_OPTIONS, handleOptions);
+
+  server.on("/api/lcd/init",        HTTP_OPTIONS, handleOptions);
+  server.on("/api/lcd/status",      HTTP_OPTIONS, handleOptions);
+  server.on("/api/lcd/clear",       HTTP_OPTIONS, handleOptions);
+  server.on("/api/lcd/home",        HTTP_OPTIONS, handleOptions);
+  server.on("/api/lcd/backlight",   HTTP_OPTIONS, handleOptions);
+  server.on("/api/lcd/set",         HTTP_OPTIONS, handleOptions);
+  server.on("/api/lcd/print",       HTTP_OPTIONS, handleOptions);
+  server.on("/api/lcd/scroll",      HTTP_OPTIONS, handleOptions);
+
+  // Dual LEDs CORS
+  server.on("/api/leds/status",     HTTP_OPTIONS, handleOptions);
+  server.on("/api/leds/set",        HTTP_OPTIONS, handleOptions);
+  server.on("/api/leds/red",        HTTP_OPTIONS, handleOptions);
+  server.on("/api/leds/green",      HTTP_OPTIONS, handleOptions);
+  server.on("/api/leds/blink",      HTTP_OPTIONS, handleOptions);
+
+  // BMP180 CORS
+  server.on("/api/bmp180/status",   HTTP_OPTIONS, handleOptions);
+  server.on("/api/bmp180/read",     HTTP_OPTIONS, handleOptions);
+
+  server.onNotFound(handleNotFound);
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+// ================== LOOP ===================
+void loop() {
+  server.handleClient();
+
+  // Built-in LED blink
+  if (currentMode == MODE_BLINK) {
+    unsigned long now = millis();
+    if (now - lastToggle >= blinkIntervalMs) {
+      ledLevel = !ledLevel;
+      digitalWrite(LED_BUILTIN, ledLevel ? HIGH : LOW);
+      lastToggle = now;
+    }
+  }
+
+  // RFID housekeeping
+  RFID_BackgroundPoll();
+  RFID_Watchdog();
+
+  // Finish non-blocking relay pulse
+  if (relayPulseActive && (long)(millis() - relayPulseUntil) >= 0) {
+    setRelay(false);
+    relayPulseActive = false;
+  }
+
+  // Finish non-blocking buzzer beep
+  if (buzzerPulseActive && (long)(millis() - buzzerPulseUntil) >= 0) {
+    setBuzzer(false);
+    buzzerPulseActive = false;
+  }
+
+  // Alarm state machine
+  if (buzzerAlarmActive) {
+    unsigned long now = millis();
+    if ((long)(now - buzzerNextTransition) >= 0) {
+      buzzerLevel = !buzzerLevel;
+      digitalWrite(BUZZER_PIN, buzzerLevel ? HIGH : LOW);
+      buzzerNextTransition = now + (buzzerLevel ? buzzerOnMs : buzzerOffMs);
+    }
+  }
+
+  // Dual LEDs non-blocking blink
+  unsigned long _now = millis();
+  if (redMode == L2_BLINK && (_now - redLastToggle) >= redBlinkIntervalMs) {
+    redLevel = !redLevel; digitalWrite(LED_RED_PIN, redLevel ? HIGH : LOW); redLastToggle = _now;
+  }
+  if (greenMode == L2_BLINK && (_now - greenLastToggle) >= greenBlinkIntervalMs) {
+    greenLevel = !greenLevel; digitalWrite(LED_GREEN_PIN, greenLevel ? HIGH : LOW); greenLastToggle = _now;
+  }
+}

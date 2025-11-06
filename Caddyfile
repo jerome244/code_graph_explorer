@@ -1,0 +1,18 @@
+:8080 {
+    encode zstd gzip
+    respond /health 200
+
+    # Django: websockets, admin, static/media
+    @django path /ws/* /admin* /static/* /media/*
+    handle @django {
+        reverse_proxy backend:8000
+    }
+
+    # Next.js: everything else (incl. /api/*)
+    handle {
+        @next_static path /_next/*
+        header @next_static Cache-Control "public, max-age=31536000, immutable"
+
+        reverse_proxy frontend:3000
+    }
+}

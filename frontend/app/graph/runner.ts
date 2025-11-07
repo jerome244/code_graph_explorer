@@ -22,7 +22,6 @@ declare global {
   interface Window {
     loadPyodide?: (opts: { indexURL: string }) => Promise<any>;
     JSCPP?: {
-      // Minimal surface we use; JSCPP supports lots more.
       run(
         code: string,
         input?: string,
@@ -31,12 +30,11 @@ declare global {
             write?: (s: string) => void;
             read?: () => string;
           };
-          // accept/ignore unknown fields for forward-compat
           [k: string]: any;
         }
       ): any;
     };
-    __JSCPP_URL__?: string; // optional override
+    __JSCPP_URL__?: string;
   }
 }
 
@@ -83,11 +81,7 @@ async function ensurePyodide(): Promise<any> {
 }
 
 function joinPath(...parts: string[]): string {
-  return parts
-    .join("/")
-    .replace(/\/+/g, "/")
-    .replace(/\/\.\//g, "/")
-    .replace(/\/$/, "");
+  return parts.join("/").replace(/\/+/g, "/").replace(/\/\.\//g, "/").replace(/\/$/, "");
 }
 
 function dirname(p: string): string {
@@ -124,6 +118,7 @@ importlib.invalidate_caches()
 }
 
 /* -------------------- JSCPP (C/C++) -------------------- */
+
 let jscppReady: Promise<typeof window.JSCPP> | null = null;
 let jscppScriptAdded = false;
 
@@ -160,38 +155,27 @@ async function ensureJSCPP(): Promise<typeof window.JSCPP> {
   if (window.JSCPP) return window.JSCPP;
   if (!jscppReady) {
     jscppReady = (async () => {
-      // 1) allow env override (self-host)
       const override =
         (typeof process !== "undefined" && (process as any).env?.NEXT_PUBLIC_JSCPP_URL) ||
         (typeof window !== "undefined" && (window as any).__JSCPP_URL__);
 
-      // 2) local copy (put file at /public/vendor/jscpp.min.js)
       const local = "/vendor/jscpp.min.js";
-
-      // 3) known CDNs (try a few)
       const cdnCandidates = [
-        // pinned first
         "https://cdn.jsdelivr.net/npm/jscpp@2.0.0/dist/jscpp.min.js",
-        // latest as fallback
         "https://cdn.jsdelivr.net/npm/jscpp/dist/jscpp.min.js",
-        // unpkg mirrors
         "https://unpkg.com/jscpp@2.0.0/dist/jscpp.min.js",
         "https://unpkg.com/jscpp/dist/jscpp.min.js",
       ];
 
       const attempts = [...(override ? [override] : []), local, ...cdnCandidates];
-
       let lastErr: unknown = null;
       for (const url of attempts) {
         try {
           await loadScriptWithTimeout(url, 12000);
-          if (!window.JSCPP) {
-            throw new Error(`Loaded ${url} but window.JSCPP is undefined`);
-          }
+          if (!window.JSCPP) throw new Error(`Loaded ${url} but window.JSCPP is undefined`);
           return window.JSCPP;
         } catch (e) {
           lastErr = e;
-          // try next
         }
       }
       const hint = `Tried: ${attempts.join("  |  ")}`;
@@ -276,6 +260,31 @@ importlib.invalidate_caches()
 `;
       pyodide.runPython(injectPathsPy);
 
+      // Bridge Python stdout/stderr to our JS loggers
+      ;(window as any)._py_stdout = (s: any) => log(String(s));
+      ;(window as any)._py_stderr = (s: any) => logErr(String(s));
+      pyodide.runPython(`
+import sys, js
+class _StdOut:
+    def write(self, s):
+        try:
+            js._py_stdout(s)
+        except Exception as _e:
+            pass
+    def flush(self): pass
+
+class _StdErr:
+    def write(self, s):
+        try:
+            js._py_stderr(s)
+        except Exception as _e:
+            pass
+    def flush(self): pass
+
+sys.stdout = _StdOut()
+sys.stderr = _StdErr()
+`);
+
       const res = await pyodide.runPythonAsync(req.code, { filename });
       if (typeof res !== "undefined") log(String(res));
       return { ok: true, stdout: lines.join("\n") };
@@ -296,18 +305,12 @@ importlib.invalidate_caches()
   if (req.language === "c") {
     try {
       const JSCPP = await ensureJSCPP();
-
-      // JSCPP lets us provide stdio hooks
-      let stdinBuf = ""; // optional; could be extended to accept req.stdin
+      let stdinBuf = "";
       const stdoutChunks: string[] = [];
-      // const stderrChunks: string[] = []; // not all builds separate stderr
 
       JSCPP.run(req.code, "", {
         stdio: {
-          write: (s: string) => {
-            // JSCPP uses one stream; treat as stdout by default
-            stdoutChunks.push(s);
-          },
+          write: (s: string) => stdoutChunks.push(s),
           read: () => {
             const out = stdinBuf;
             stdinBuf = "";

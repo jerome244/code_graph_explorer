@@ -36,6 +36,7 @@ declare global {
         }
       ): any;
     };
+    __JSCPP_URL__?: string; // optional override
   }
 }
 
@@ -82,7 +83,11 @@ async function ensurePyodide(): Promise<any> {
 }
 
 function joinPath(...parts: string[]): string {
-  return parts.join("/").replace(/\/+/g, "/").replace(/\/\.\//g, "/").replace(/\/$/, "");
+  return parts
+    .join("/")
+    .replace(/\/+/g, "/")
+    .replace(/\/\.\//g, "/")
+    .replace(/\/$/, "");
 }
 
 function dirname(p: string): string {
@@ -118,9 +123,7 @@ importlib.invalidate_caches()
   `);
 }
 
-// ---- replace the current JSCPP block in runner.ts with this ----
-
-// -------------------- JSCPP (C/C++) --------------------
+/* -------------------- JSCPP (C/C++) -------------------- */
 let jscppReady: Promise<typeof window.JSCPP> | null = null;
 let jscppScriptAdded = false;
 
@@ -130,7 +133,9 @@ function loadScriptWithTimeout(src: string, timeoutMs = 12000): Promise<void> {
     const id = setTimeout(() => {
       s.onerror = null;
       s.onload = null;
-      try { s.remove(); } catch {}
+      try {
+        s.remove();
+      } catch {}
       reject(new Error(`Timeout loading ${src}`));
     }, timeoutMs);
 
@@ -174,11 +179,7 @@ async function ensureJSCPP(): Promise<typeof window.JSCPP> {
         "https://unpkg.com/jscpp/dist/jscpp.min.js",
       ];
 
-      const attempts = [
-        ...(override ? [override] : []),
-        local,
-        ...cdnCandidates,
-      ];
+      const attempts = [...(override ? [override] : []), local, ...cdnCandidates];
 
       let lastErr: unknown = null;
       for (const url of attempts) {
@@ -196,24 +197,28 @@ async function ensureJSCPP(): Promise<typeof window.JSCPP> {
       const hint = `Tried: ${attempts.join("  |  ")}`;
       throw new Error(
         `JSCPP not available. ${hint}\n` +
-        `Tip: self-host it by downloading jscpp.min.js into /public/vendor and/or set NEXT_PUBLIC_JSCPP_URL.`
+          `Tip: self-host it by downloading jscpp.min.js into /public/vendor and/or set NEXT_PUBLIC_JSCPP_URL.`
       );
     })();
   }
   return jscppReady;
 }
 
-
 /* -------------------- Public API -------------------- */
 
-export async function runInBrowser(req: RunRequest): Promise[RunResult] {
+export async function runInBrowser(req: RunRequest): Promise<RunResult> {
   const lines: string[] = [];
   const errLines: string[] = [];
   const log = (...args: any[]) => lines.push(args.map(String).join(" "));
   const logErr = (...args: any[]) => errLines.push(args.map(String).join(" "));
 
   if (!inBrowser()) {
-    return { ok: false, stdout: "", stderr: "Runner can only execute in the browser", failingPath: req.path };
+    return {
+      ok: false,
+      stdout: "",
+      stderr: "Runner can only execute in the browser",
+      failingPath: req.path,
+    };
   }
 
   /* ---------- JavaScript ---------- */
@@ -230,7 +235,8 @@ export async function runInBrowser(req: RunRequest): Promise[RunResult] {
       return { ok: true, stdout: lines.join("\n") };
     } catch (e: any) {
       const msg = e?.stack ? String(e.stack) : String(e);
-      const match = msg.match(/\(([^)]+):(\d+):(\d+)\)/) || msg.match(/at ([^\s]+):(\d+):(\d+)/);
+      const match =
+        msg.match(/\(([^)]+):(\d+):(\d+)\)/) || msg.match(/at ([^\s]+):(\d+):(\d+)/);
       const failingPath = match ? match[1] : req.path;
       return { ok: false, stdout: lines.join("\n"), stderr: msg, failingPath };
     } finally {
@@ -294,9 +300,8 @@ importlib.invalidate_caches()
       // JSCPP lets us provide stdio hooks
       let stdinBuf = ""; // optional; could be extended to accept req.stdin
       const stdoutChunks: string[] = [];
-      const stderrChunks: string[] = [];
+      // const stderrChunks: string[] = []; // not all builds separate stderr
 
-      // Some versions of JSCPP print via options.stdio.write
       JSCPP.run(req.code, "", {
         stdio: {
           write: (s: string) => {
@@ -313,7 +318,6 @@ importlib.invalidate_caches()
 
       return { ok: true, stdout: stdoutChunks.join("") };
     } catch (e: any) {
-      // Normalize message and attempt to extract a file-ish name if present
       const msg = String(e?.message || e);
       return { ok: false, stdout: "", stderr: msg, failingPath: req.path };
     }

@@ -1,3 +1,4 @@
+cd ~/holberton/code_graph_explorer/
 # Run Docker:
 docker compose -f docker-compose.dev.yml up -d --build
 

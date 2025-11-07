@@ -6,7 +6,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import * as cytoscapeImport from "cytoscape";
 const cytoscape = (cytoscapeImport as any).default ?? (cytoscapeImport as any);
 import ShapeOverlay, { Shape } from "./ShapeOverlay";
+import TerminalPanel, { LogLine } from "./TerminalPanel";
+import { runInBrowser } from "./runner";
 import { useSearchParams } from "next/navigation";
+import PreviewPanel from "./PreviewPanel";
 
 // Parsing + path helpers moved to a separate module
 import {
@@ -103,6 +106,12 @@ export default function GraphPage() {
   const [shapes, setShapes] = useState<Shape[]>([]);
   const shapesRef = useRef<Shape[]>([]);
   useEffect(() => { shapesRef.current = shapes; }, [shapes]);
+
+  // ---- terminal state ----
+  const [terminalLines, setTerminalLines] = useState<LogLine[]>([]);
+  const appendLine = (l: LogLine) => setTerminalLines(prev => [...prev, l]);
+
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
 
   // ---- realtime shapes sync helpers ----
   const shapesClientId = useMemo(
@@ -2153,6 +2162,134 @@ const setLocalAudioEnabled = (on: boolean) => {
     >
       {showLinesGlobal ? "All lines: on" : "All lines: off"}
     </button>
+    
+{/* Run / Test button */}
+<button
+onClick={async () => {
+  const allFiles = Object.entries(fileMap).map(([path, content]) => ({ path, content }));
+  const extOf = (p: string) => (p.split(".").pop() || "").toLowerCase();
+  const isJS = (e: string) => ["js","mjs","cjs"].includes(e);
+  const isPY = (e: string) => e === "py";
+  const isHTML = (e: string) => e === "html" || e === "htm";
+  const isCSS = (e: string) => e === "css";
+  const isCsrc = (e: string) => ["c","cpp","cc","cxx"].includes(e);
+  const isHeader = (e: string) => ["h","hpp","hh","hxx"].includes(e);
+
+  // pick file: prefer last opened; else common entry points
+  const popupPath = popups[popups.length - 1]?.path;
+  const byPriority = [
+    /(^|\/)(main|app)\.py$/i,
+    /(^|\/)main\.(c|cpp|cc|cxx)$/i,
+    /(^|\/)index\.(html?|js|mjs|cjs)$/i,
+    /\.py$/i,
+    /\.(c|cpp|cc|cxx)$/i,
+    /\.(html?|js|mjs|cjs|css)$/i,
+  ];
+  let active = popupPath || undefined;
+  if (!active) {
+    for (const re of byPriority) {
+      const hit = allFiles.find(f => re.test(f.path));
+      if (hit) { active = hit.path; break; }
+    }
+  }
+  if (!active) { setTerminalLines([{ type: "info", text: "No files loaded." }]); return; }
+
+  const ext = extOf(active);
+
+  // code source
+  const opened = popups.find(p => p.path === active);
+  const codeText = opened ? opened.draft : (fileMap[active] ?? "");
+
+  // reset panels
+  setTerminalLines([]);
+  setPreviewHtml?.(null); // if you added PreviewPanel
+
+  // headers: suggest a .c/.cpp instead
+  if (isHeader(ext)) {
+    appendLine({ type: "info", text: `Header selected: ${active}` });
+    appendLine({ type: "info", text: `Open a .c/.cpp file (with main) to run.` });
+    return;
+  }
+
+  // HTML preview
+  if (isHTML(ext)) {
+    const activeDir = active.split("/").slice(0,-1).join("/");
+    const cssLinks = allFiles
+      .filter(f => isCSS(extOf(f.path)) && (activeDir === "" || f.path.startsWith(activeDir)))
+      .map(f => `<style data-path="${f.path}">\n${fileMap[f.path] ?? ""}\n</style>`)
+      .join("\n");
+    const html = codeText.includes("</head>")
+      ? codeText.replace("</head>", `${cssLinks}\n</head>`)
+      : `<!doctype html><meta charset="utf-8"><title>Preview</title>${cssLinks}\n${codeText}`;
+    setPreviewHtml?.(html);
+    appendLine({ type: "info", text: `🖼️ Previewing ${active}` });
+    return;
+  }
+
+  // CSS preview
+  if (isCSS(ext)) {
+    const html = `<!doctype html><meta charset="utf-8"><title>CSS Preview</title>
+<style>${codeText}</style>
+<div style="padding:16px;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+  <h1>CSS Preview</h1><p>Edit CSS and press Run.</p>
+  <button>Button</button>
+  <div class="card" style="margin-top:12px;padding:12px;border:1px solid #e5e7eb;border-radius:8px;">Sample card</div>
+</div>`;
+    setPreviewHtml?.(html);
+    appendLine({ type: "info", text: `🖼️ Previewing ${active}` });
+    return;
+  }
+
+  // JS / PY / C run in terminal
+  if (isPY(ext) || isJS(ext) || isCsrc(ext)) {
+    const language: "js" | "py" | "c" = isPY(ext) ? "py" : isJS(ext) ? "js" : "c";
+    appendLine({ type: "info", text: `▶ Running ${active} (${language})...` });
+
+    const res = await runInBrowser({
+      language,
+      code: codeText,
+      path: active,
+      project: isPY(ext) ? allFiles : undefined, // pass project only for Python
+    });
+
+    if (res.ok) {
+      if (res.stdout) appendLine({ type: "out", text: res.stdout });
+      appendLine({ type: "info", text: "✓ Finished." });
+    } else {
+      if (res.stdout) appendLine({ type: "out", text: res.stdout });
+      if (res.stderr) appendLine({ type: "err", text: res.stderr });
+      try {
+        const cy = cyRef.current;
+        const id = res.failingPath || active;
+        const node = cy?.$id(id);
+        if (node && node.length) {
+          cy?.animate({ center: { eles: node } });
+          node.addClass("error-pulse");
+          setTimeout(() => node.removeClass("error-pulse"), 3000);
+        }
+      } catch {}
+    }
+    return;
+  }
+
+  appendLine({ type: "info", text: `File type not supported yet: ${active}` });
+}}
+
+
+  style={{
+    fontSize: 11,
+    padding: "4px 8px",
+    borderRadius: 6,
+    border: "1px solid #e5e7eb",
+    background: "#111827",
+    color: "white",
+    cursor: "pointer",
+  }}
+  title="Run the active file (JS or Python)"
+>
+  ▶ Run
+</button>
+
 
     <button
       onClick={() => setSidebarOpen(v => !v)}
@@ -2694,7 +2831,14 @@ const setLocalAudioEnabled = (on: boolean) => {
         />
       ))}
     </svg>
-  )}
+        )}
+        
+        <TerminalPanel
+  lines={terminalLines}
+  onClear={() => setTerminalLines([])}
+/>
+<PreviewPanel html={previewHtml} onClose={() => setPreviewHtml(null)} />
+
 </section>
 
     </div>

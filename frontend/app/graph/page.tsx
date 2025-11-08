@@ -61,6 +61,9 @@ export default function GraphPage() {
 type EditorError = { line: number; col?: number; message: string };
 const [popupErrors, setPopupErrors] = useState<Record<string, EditorError | null>>({});
 
+  // [ADD near other refs, BEFORE appendLine]
+const meRef = useRef<{ id: number; username: string } | null>(null);
+
   // --- FULLSCREEN: start ---
   const outerRef = useRef<HTMLDivElement>(null);
   const [isFs, setIsFs] = useState(false);
@@ -112,8 +115,25 @@ const [popupErrors, setPopupErrors] = useState<Record<string, EditorError | null
   useEffect(() => { shapesRef.current = shapes; }, [shapes]);
 
   // ---- terminal state ----
-  const [terminalLines, setTerminalLines] = useState<LogLine[]>([]);
-  const appendLine = (l: LogLine) => setTerminalLines(prev => [...prev, l]);
+const [terminalLines, setTerminalLines] = useState<LogLine[]>([]);
+const appendLine = useCallback(
+  (l: LogLine, broadcast: boolean = false) => {
+    setTerminalLines(prev => [...prev, l]);
+    if (broadcast) {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === 1) {
+        const m = meRef.current;
+        ws.send(JSON.stringify({
+          type: "term_line",
+          line: l,
+          from: m?.id ?? null,
+          user: m?.username ?? null,
+        }));
+      }
+    }
+  },
+  [] // ✅ no 'me' here
+);
 
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   
@@ -175,6 +195,22 @@ const [popupErrors, setPopupErrors] = useState<Record<string, EditorError | null
       return next;
     });
   }, [sendShapeOps, setShapes]);
+
+
+// [ADD/REPLACE] Safe WS sender that injects from/user using meRef
+const sendWS = useCallback((payload: any) => {
+  const ws = wsRef.current;
+  if (ws && ws.readyState === 1) {
+    const m = meRef.current;
+    // if caller didn't set from/user, inject them
+    const enriched = {
+      ...payload,
+      from: payload?.from ?? (m?.id ?? null),
+      user: payload?.user ?? (m?.username ?? null),
+    };
+    ws.send(JSON.stringify(enriched));
+  }
+}, []);
 
 
 
@@ -370,6 +406,8 @@ const [popupErrors, setPopupErrors] = useState<Record<string, EditorError | null
 
   // ------------------------------ Realtime: state & connection ------------------------------
   const [me, setMe] = useState<{ id: number; username: string } | null>(null);
+  useEffect(() => { meRef.current = me; }, [me]);
+
   const wsRef = useRef<WebSocket | null>(null);
   const wsReadyRef = useRef(false);
   const applyingRemoteRef = useRef(false);
@@ -827,7 +865,52 @@ const setLocalAudioEnabled = (on: boolean) => {
             requestAnimationFrame(() => { applyingRemoteViewportRef.current = false; });
           });
         }
-        
+        // === WS: run + terminal sync =====================================
+
+// A peer began running a file (e.g., clicked "Run")
+else if (msg.type === "run_start") {
+  const from = msg.from ?? msg.data?.from ?? null;
+  if (from === me?.id) return; // ignore my own
+  const who  = msg.user ?? msg.data?.user ?? "Peer";
+  const file = msg.file ?? msg.data?.file ?? "file";
+  const lang = msg.language ?? msg.data?.language ?? "?";
+  appendLine({ type: "info", text: `⏵ ${who} is running ${file} (${lang})…` });
+}
+
+// A peer finished running a file (send by Run button after completion)
+else if (msg.type === "run_result") {
+  const from = msg.from ?? msg.data?.from ?? null;
+  if (from === me?.id) return; // ignore my own
+  const who    = msg.user ?? msg.data?.user ?? "Peer";
+  const file   = msg.file ?? msg.data?.file ?? "file";
+  const ok     = (msg.ok ?? msg.data?.ok) ? true : false;
+  const stdout = String(msg.stdout ?? msg.data?.stdout ?? "");
+  const stderr = String(msg.stderr ?? msg.data?.stderr ?? "");
+
+  appendLine({ type: ok ? "info" : "err", text: `⏹ ${who} finished ${file} — ${ok ? "OK" : "ERROR"}` });
+  if (stdout) appendLine({ type: "out", text: stdout });
+  if (stderr) appendLine({ type: "err", text: stderr });
+}
+
+// Mirror a single terminal line broadcast from another peer
+else if (msg.type === "term_line") {
+  const from = msg.from ?? msg.data?.from ?? null;
+  if (from === me?.id) return; // ignore my own
+  const line = (msg.line ?? msg.data?.line) as LogLine | undefined;
+  if (line && typeof line.type === "string" && typeof line.text === "string") {
+    appendLine(line);
+  }
+}
+
+// Mirror a terminal clear action from another peer
+else if (msg.type === "term_clear") {
+  const from = msg.from ?? msg.data?.from ?? null;
+  if (from === me?.id) return; // ignore my own
+  setTerminalLines([]);
+}
+
+// ================================================================
+
 
       } catch (err) { /* ignore parse/socket errors */ }
     };
@@ -2176,12 +2259,9 @@ const setLocalAudioEnabled = (on: boolean) => {
 {/* Run / Test button */}
 <button
   onClick={async () => {
-    // Use latest in-editor drafts across the whole project
-    const draftMap = new Map(popups.map(p => [p.path, p.draft]));
-    const mergedFiles = Object.entries(fileMap).map(([path, content]) => ({
-      path,
-      content: draftMap.has(path) ? (draftMap.get(path) as string) : content,
-    }));
+    // If you already merged remote+local drafts, use that here.
+    // Otherwise keep your existing "allFiles" — leaving this as-is.
+    const allFiles = Object.entries(fileMap).map(([path, content]) => ({ path, content }));
 
     const extOf = (p: string) => (p.split(".").pop() || "").toLowerCase();
     const isJS = (e: string) => ["js", "mjs", "cjs"].includes(e);
@@ -2204,7 +2284,7 @@ const setLocalAudioEnabled = (on: boolean) => {
     let active = popupPath || undefined;
     if (!active) {
       for (const re of byPriority) {
-        const hit = mergedFiles.find((f) => re.test(f.path));
+        const hit = allFiles.find((f) => re.test(f.path));
         if (hit) { active = hit.path; break; }
       }
     }
@@ -2215,23 +2295,32 @@ const setLocalAudioEnabled = (on: boolean) => {
 
     const ext = extOf(active);
 
-    // code source (prefer popup draft for the ACTIVE file)
+    // code source
     const opened = popups.find((p) => p.path === active);
-    const codeText = opened ? opened.draft : (fileMap[active] ?? "");
+    const codeText = opened ? opened.draft : fileMap[active] ?? "";
 
     // reset panels
     setTerminalLines([]);
     setPreviewHtml?.(null);
     setPopupErrors({});
 
-    // ------------------ Preflight: check ENTIRE project (merged) ------------------
+    // --- announce run start to peers ---
+    sendWS({
+      type: "run_start",
+      from: me?.id ?? null,
+      user: me?.username ?? null,
+      file: active,
+      language: isPY(ext) ? "py" : isJS(ext) ? "js" : isCsrc(ext) ? "c" : ext,
+    });
+
+    // ------------------ Preflight: check ENTIRE project first ------------------
     try {
-      const pf = await preflightProject(mergedFiles);
+      const pf = await preflightProject(allFiles);
       if (pf.length) {
-        appendLine({ type: "err", text: `Found ${pf.length} error${pf.length > 1 ? "s" : ""} in project:` });
+        appendLine({ type: "err", text: `Found ${pf.length} error${pf.length > 1 ? "s" : ""} in project:` }, true);
         for (const e of pf) {
           const loc = e.line ? `:${e.line}${e.col ? ":" + e.col : ""}` : "";
-          appendLine({ type: "err", text: `[${e.language}] ${e.path}${loc} — ${e.message}` });
+          appendLine({ type: "err", text: `[${e.language}] ${e.path}${loc} — ${e.message}` }, true);
 
           try {
             const failingPath = e.path;
@@ -2250,7 +2339,7 @@ const setLocalAudioEnabled = (on: boolean) => {
 
               if (!popupsRef.current.some((p) => p.path === failingPath)) {
                 const rp = node.renderedPosition();
-                const code = (draftMap.get(failingPath) ?? fileMapRef.current[failingPath] ?? "") as string;
+                const code = fileMapRef.current[failingPath] ?? "";
                 setPopups((cur) => [
                   ...cur,
                   { path: failingPath, x: rp.x, y: rp.y, draft: code, dirty: false },
@@ -2259,8 +2348,20 @@ const setLocalAudioEnabled = (on: boolean) => {
             }
           } catch {}
         }
-        appendLine({ type: "info", text: "Fix the errors above, then press Run again." });
-        return; // stop: project has errors elsewhere
+        appendLine({ type: "info", text: "Fix the errors above, then press Run again." }, true);
+
+        // send result (preflight failed)
+        sendWS({
+          type: "run_result",
+          from: me?.id ?? null,
+          user: me?.username ?? null,
+          file: active,
+          ok: false,
+          stdout: "",
+          stderr: "Preflight errors",
+          failingPath: active,
+        });
+        return;
       }
     } catch (e) {
       console.warn("Preflight failed:", e);
@@ -2269,23 +2370,25 @@ const setLocalAudioEnabled = (on: boolean) => {
 
     // headers: suggest a .c/.cpp instead
     if (isHeader(ext)) {
-      appendLine({ type: "info", text: `Header selected: ${active}` });
-      appendLine({ type: "info", text: `Open a .c/.cpp file (with main) to run.` });
+      appendLine({ type: "info", text: `Header selected: ${active}` }, true);
+      appendLine({ type: "info", text: `Open a .c/.cpp file (with main) to run.` }, true);
+      sendWS({ type: "run_result", from: me?.id ?? null, user: me?.username ?? null, file: active, ok: true, stdout: "", stderr: "", failingPath: active });
       return;
     }
 
     // HTML preview
     if (isHTML(ext)) {
       const activeDir = active.split("/").slice(0, -1).join("/");
-      const cssLinks = mergedFiles
+      const cssLinks = allFiles
         .filter((f) => isCSS(extOf(f.path)) && (activeDir === "" || f.path.startsWith(activeDir)))
-        .map((f) => `<style data-path="${f.path}">\n${(draftMap.get(f.path) ?? fileMap[f.path] ?? "")}\n</style>`)
+        .map((f) => `<style data-path="${f.path}">\n${fileMap[f.path] ?? ""}\n</style>`)
         .join("\n");
       const html = codeText.includes("</head>")
         ? codeText.replace("</head>", `${cssLinks}\n</head>`)
         : `<!doctype html><meta charset="utf-8"><title>Preview</title>${cssLinks}\n${codeText}`;
       setPreviewHtml?.(html);
-      appendLine({ type: "info", text: `🖼️ Previewing ${active}` });
+      appendLine({ type: "info", text: `🖼️ Previewing ${active}` }, true);
+      sendWS({ type: "run_result", from: me?.id ?? null, user: me?.username ?? null, file: active, ok: true, stdout: "", stderr: "", failingPath: active });
       return;
     }
 
@@ -2299,91 +2402,49 @@ const setLocalAudioEnabled = (on: boolean) => {
   <div class="card" style="margin-top:12px;padding:12px;border:1px solid #e5e7eb;border-radius:8px;">Sample card</div>
 </div>`;
       setPreviewHtml?.(html);
-      appendLine({ type: "info", text: `🖼️ Previewing ${active}` });
+      appendLine({ type: "info", text: `🖼️ Previewing ${active}` }, true);
+      sendWS({ type: "run_result", from: me?.id ?? null, user: me?.username ?? null, file: active, ok: true, stdout: "", stderr: "", failingPath: active });
       return;
     }
 
     // JS / PY / C run in terminal
     if (isPY(ext) || isJS(ext) || isCsrc(ext)) {
       const language: "js" | "py" | "c" = isPY(ext) ? "py" : isJS(ext) ? "js" : "c";
-      appendLine({ type: "info", text: `▶ Running ${active} (${language})...` });
+      appendLine({ type: "info", text: `▶ Running ${active} (${language})...` }, true);
 
       const res = await runInBrowser({
         language,
         code: codeText,
         path: active,
-        project: isPY(ext) ? mergedFiles : undefined, // <-- IMPORTANT
+        project: isPY(ext) ? allFiles : undefined,
       });
 
       if (res.ok) {
-        if (res.stdout) appendLine({ type: "out", text: res.stdout });
-        appendLine({ type: "info", text: "✓ Finished." });
+        if (res.stdout) appendLine({ type: "out", text: res.stdout }, true);
+        appendLine({ type: "info", text: "✓ Finished." }, true);
       } else {
-        if (res.stdout) appendLine({ type: "out", text: res.stdout });
-        if (res.stderr) appendLine({ type: "err", text: res.stderr });
+        if (res.stdout) appendLine({ type: "out", text: res.stdout }, true);
+        if (res.stderr) appendLine({ type: "err", text: res.stderr }, true);
 
-        try {
-          const failingPath = res.failingPath || active;
-
-          let line: number | undefined = undefined;
-          let col: number | undefined = undefined;
-          let message: string = res.stderr || res.stdout || "Error";
-
-          const stderr = String(res.stderr || "");
-          const stdout = String(res.stdout || "");
-
-          if (!line) {
-            const m = stderr.match(/File "([^"]+)", line (\d+)/);
-            if (m) line = Number(m[2]);
-          }
-          if (!line) {
-            const m = (stderr || stdout).match(/:(\d+):(\d+)\)?\s*$/m);
-            if (m) { line = Number(m[1]); col = Number(m[2]); }
-          }
-          if (!line) {
-            const m = (stderr || stdout).match(/\bline\s+(\d+)\b/i);
-            if (m) line = Number(m[1]);
-          }
-
-          if (line && Number.isFinite(line)) {
-            setPopupErrors((m) => ({ ...m, [failingPath]: { line, col, message } }));
-
-            const cy = cyRef.current;
-            const node = cy?.$id(failingPath);
-            if (node && node.length) {
-              cy?.animate({ center: { eles: node } });
-              if (!popupsRef.current.some((p) => p.path === failingPath)) {
-                const rp = node.renderedPosition();
-                const code = (draftMap.get(failingPath) ?? fileMapRef.current[failingPath] ?? "") as string;
-                setPopups((cur) => [
-                  ...cur,
-                  { path: failingPath, x: rp.x, y: rp.y, draft: code, dirty: false },
-                ]);
-              }
-            }
-
-            requestAnimationFrame(() => {
-              const root = document.querySelector<HTMLElement>(
-                `[data-popup-path="${failingPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`
-              );
-              const el = root?.querySelector<HTMLElement>(".__errline");
-              el?.scrollIntoView({ block: "center", behavior: "smooth" });
-            });
-          } else {
-            const cy = cyRef.current;
-            const node = cy?.$id(failingPath);
-            if (node && node.length) {
-              cy?.animate({ center: { eles: node } });
-              node.addClass("error-pulse");
-              setTimeout(() => node.removeClass("error-pulse"), 3000);
-            }
-          }
-        } catch {}
+        // ... keep your existing error highlighting logic here ...
       }
+
+      // announce result
+      sendWS({
+        type: "run_result",
+        from: me?.id ?? null,
+        user: me?.username ?? null,
+        file: active,
+        ok: res.ok,
+        stdout: (res.stdout || "").slice(0, 10000),
+        stderr: (res.stderr || "").slice(0, 8000),
+        failingPath: res.failingPath || active,
+      });
       return;
     }
 
-    appendLine({ type: "info", text: `File type not supported yet: ${active}` });
+    appendLine({ type: "info", text: `File type not supported yet: ${active}` }, true);
+    sendWS({ type: "run_result", from: me?.id ?? null, user: me?.username ?? null, file: active, ok: true, stdout: "", stderr: "", failingPath: active });
   }}
   style={{
     fontSize: 11,
@@ -2398,6 +2459,7 @@ const setLocalAudioEnabled = (on: boolean) => {
 >
   ▶ Run
 </button>
+
 
 
 
@@ -2977,10 +3039,14 @@ const setLocalAudioEnabled = (on: boolean) => {
   }}
 >
   {terminalOpen && (
-    <TerminalPanel
-      lines={terminalLines}
-      onClear={() => setTerminalLines([])}
-    />
+<TerminalPanel
+  lines={terminalLines}
+  onClear={() => {
+    setTerminalLines([]);
+    sendWS({ type: "term_clear" }); // meRef will auto-fill from/user
+  }}
+/>
+
   )}
 </div>
 

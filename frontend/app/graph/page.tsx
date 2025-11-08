@@ -7,9 +7,9 @@ import * as cytoscapeImport from "cytoscape";
 const cytoscape = (cytoscapeImport as any).default ?? (cytoscapeImport as any);
 import ShapeOverlay, { Shape } from "./ShapeOverlay";
 import TerminalPanel, { LogLine } from "./TerminalPanel";
-import { runInBrowser } from "./runner";
 import { useSearchParams } from "next/navigation";
 import PreviewPanel from "./PreviewPanel";
+import { runInBrowser, preflightProject, type PreflightError } from "./runner";
 
 // Parsing + path helpers moved to a separate module
 import {
@@ -116,6 +116,10 @@ const [popupErrors, setPopupErrors] = useState<Record<string, EditorError | null
   const appendLine = (l: LogLine) => setTerminalLines(prev => [...prev, l]);
 
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  
+  // Collapsible terminal
+  const [terminalOpen, setTerminalOpen] = useState(true);
+  const terminalHeight = 220; // default open height (px)
 
   // ---- realtime shapes sync helpers ----
   const shapesClientId = useMemo(
@@ -184,6 +188,8 @@ const [popupErrors, setPopupErrors] = useState<Record<string, EditorError | null
       out[n.id()] = { x: p.x, y: p.y, hidden: n.hidden() };
     });
     return out;
+  
+  
   }
 
   // Auth/persistence
@@ -2170,7 +2176,13 @@ const setLocalAudioEnabled = (on: boolean) => {
 {/* Run / Test button */}
 <button
   onClick={async () => {
-    const allFiles = Object.entries(fileMap).map(([path, content]) => ({ path, content }));
+    // Use latest in-editor drafts across the whole project
+    const draftMap = new Map(popups.map(p => [p.path, p.draft]));
+    const mergedFiles = Object.entries(fileMap).map(([path, content]) => ({
+      path,
+      content: draftMap.has(path) ? (draftMap.get(path) as string) : content,
+    }));
+
     const extOf = (p: string) => (p.split(".").pop() || "").toLowerCase();
     const isJS = (e: string) => ["js", "mjs", "cjs"].includes(e);
     const isPY = (e: string) => e === "py";
@@ -2192,11 +2204,8 @@ const setLocalAudioEnabled = (on: boolean) => {
     let active = popupPath || undefined;
     if (!active) {
       for (const re of byPriority) {
-        const hit = allFiles.find((f) => re.test(f.path));
-        if (hit) {
-          active = hit.path;
-          break;
-        }
+        const hit = mergedFiles.find((f) => re.test(f.path));
+        if (hit) { active = hit.path; break; }
       }
     }
     if (!active) {
@@ -2206,55 +2215,57 @@ const setLocalAudioEnabled = (on: boolean) => {
 
     const ext = extOf(active);
 
-    // code source
+    // code source (prefer popup draft for the ACTIVE file)
     const opened = popups.find((p) => p.path === active);
-    const codeText = opened ? opened.draft : fileMap[active] ?? "";
+    const codeText = opened ? opened.draft : (fileMap[active] ?? "");
 
     // reset panels
     setTerminalLines([]);
     setPreviewHtml?.(null);
     setPopupErrors({});
 
-    // ------------------ 🧠 Static pre-run unresolved function check ------------------
+    // ------------------ Preflight: check ENTIRE project (merged) ------------------
     try {
-      const byFile = funcIndex?.byFile ?? {};
-      const allMeta = Object.values(byFile);
+      const pf = await preflightProject(mergedFiles);
+      if (pf.length) {
+        appendLine({ type: "err", text: `Found ${pf.length} error${pf.length > 1 ? "s" : ""} in project:` });
+        for (const e of pf) {
+          const loc = e.line ? `:${e.line}${e.col ? ":" + e.col : ""}` : "";
+          appendLine({ type: "err", text: `[${e.language}] ${e.path}${loc} — ${e.message}` });
 
-      // all declared function names
-      const declaredAnywhere = new Set<string>();
-      for (const m of allMeta) for (const name of m?.declared ?? []) declaredAnywhere.add(name);
+          try {
+            const failingPath = e.path;
+            const line = e.line;
+            const col = e.col;
+            const message = e.message || "Error";
 
-      // functions called in the active file
-      const calledInActive: string[] = byFile[active]?.called ?? [];
+            setPopupErrors((m) => ({ ...m, [failingPath]: { line, col, message } }));
 
-      // missing = called but not declared anywhere
-      const missing = calledInActive.filter((name) => !declaredAnywhere.has(name));
+            const cy = cyRef.current;
+            const node = cy?.$id(failingPath);
+            if (node && node.length) {
+              cy?.animate({ center: { eles: node } });
+              node.addClass("error-pulse");
+              setTimeout(() => node.removeClass("error-pulse"), 3000);
 
-      if (missing.length) {
-        appendLine({ type: "err", text: `Unresolved function${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}` });
-        appendLine({
-          type: "info",
-          text: "Tip: check spelling, add a prototype/definition, or include the correct file/header.",
-        });
-
-        // highlight node with pulse
-        try {
-          const cy = cyRef.current;
-          const node = cy?.$id(active);
-          if (node && node.length) {
-            cy?.animate({ center: { eles: node } });
-            node.addClass("error-pulse");
-            setTimeout(() => node.removeClass("error-pulse"), 3000);
-          }
-        } catch {}
-
-        // skip execution since errors found
-        return;
+              if (!popupsRef.current.some((p) => p.path === failingPath)) {
+                const rp = node.renderedPosition();
+                const code = (draftMap.get(failingPath) ?? fileMapRef.current[failingPath] ?? "") as string;
+                setPopups((cur) => [
+                  ...cur,
+                  { path: failingPath, x: rp.x, y: rp.y, draft: code, dirty: false },
+                ]);
+              }
+            }
+          } catch {}
+        }
+        appendLine({ type: "info", text: "Fix the errors above, then press Run again." });
+        return; // stop: project has errors elsewhere
       }
-    } catch (err) {
-      console.warn("Static check failed:", err);
+    } catch (e) {
+      console.warn("Preflight failed:", e);
     }
-    // -------------------------------------------------------------------------------
+    // --------------------------------------------------------------------------
 
     // headers: suggest a .c/.cpp instead
     if (isHeader(ext)) {
@@ -2266,12 +2277,9 @@ const setLocalAudioEnabled = (on: boolean) => {
     // HTML preview
     if (isHTML(ext)) {
       const activeDir = active.split("/").slice(0, -1).join("/");
-      const cssLinks = allFiles
+      const cssLinks = mergedFiles
         .filter((f) => isCSS(extOf(f.path)) && (activeDir === "" || f.path.startsWith(activeDir)))
-        .map(
-          (f) =>
-            `<style data-path="${f.path}">\n${fileMap[f.path] ?? ""}\n</style>`
-        )
+        .map((f) => `<style data-path="${f.path}">\n${(draftMap.get(f.path) ?? fileMap[f.path] ?? "")}\n</style>`)
         .join("\n");
       const html = codeText.includes("</head>")
         ? codeText.replace("</head>", `${cssLinks}\n</head>`)
@@ -2304,7 +2312,7 @@ const setLocalAudioEnabled = (on: boolean) => {
         language,
         code: codeText,
         path: active,
-        project: isPY(ext) ? allFiles : undefined,
+        project: isPY(ext) ? mergedFiles : undefined, // <-- IMPORTANT
       });
 
       if (res.ok) {
@@ -2314,13 +2322,12 @@ const setLocalAudioEnabled = (on: boolean) => {
         if (res.stdout) appendLine({ type: "out", text: res.stdout });
         if (res.stderr) appendLine({ type: "err", text: res.stderr });
 
-        // highlight line & node on runtime error
         try {
           const failingPath = res.failingPath || active;
-          let line: number | undefined = res.errorLine;
-          let col: number | undefined = res.errorColumn;
-          let message: string =
-            res.errorMessage || res.stderr || res.stdout || "Error";
+
+          let line: number | undefined = undefined;
+          let col: number | undefined = undefined;
+          let message: string = res.stderr || res.stdout || "Error";
 
           const stderr = String(res.stderr || "");
           const stdout = String(res.stdout || "");
@@ -2331,10 +2338,7 @@ const setLocalAudioEnabled = (on: boolean) => {
           }
           if (!line) {
             const m = (stderr || stdout).match(/:(\d+):(\d+)\)?\s*$/m);
-            if (m) {
-              line = Number(m[1]);
-              col = Number(m[2]);
-            }
+            if (m) { line = Number(m[1]); col = Number(m[2]); }
           }
           if (!line) {
             const m = (stderr || stdout).match(/\bline\s+(\d+)\b/i);
@@ -2342,10 +2346,7 @@ const setLocalAudioEnabled = (on: boolean) => {
           }
 
           if (line && Number.isFinite(line)) {
-            setPopupErrors((m) => ({
-              ...m,
-              [failingPath]: { line, col, message },
-            }));
+            setPopupErrors((m) => ({ ...m, [failingPath]: { line, col, message } }));
 
             const cy = cyRef.current;
             const node = cy?.$id(failingPath);
@@ -2353,7 +2354,7 @@ const setLocalAudioEnabled = (on: boolean) => {
               cy?.animate({ center: { eles: node } });
               if (!popupsRef.current.some((p) => p.path === failingPath)) {
                 const rp = node.renderedPosition();
-                const code = fileMapRef.current[failingPath] ?? "";
+                const code = (draftMap.get(failingPath) ?? fileMapRef.current[failingPath] ?? "") as string;
                 setPopups((cur) => [
                   ...cur,
                   { path: failingPath, x: rp.x, y: rp.y, draft: code, dirty: false },
@@ -2399,6 +2400,22 @@ const setLocalAudioEnabled = (on: boolean) => {
 </button>
 
 
+
+<button
+  onClick={() => setTerminalOpen((v) => !v)}
+  style={{
+    fontSize: 11,
+    padding: "4px 8px",
+    borderRadius: 6,
+    border: "1px solid #e5e7eb",
+    background: "#111827",
+    color: "white",
+    cursor: "pointer",
+  }}
+  title={terminalOpen ? "Hide terminal" : "Show terminal"}
+>
+  {terminalOpen ? "▾ Hide Terminal" : "▸ Show Terminal"}
+</button>
 
 
     <button
@@ -2947,11 +2964,50 @@ const setLocalAudioEnabled = (on: boolean) => {
     </svg>
         )}
         
-        <TerminalPanel
-  lines={terminalLines}
-  onClear={() => setTerminalLines([])}
-/>
+{/* Collapsible Terminal */}
+<div
+  style={{
+    height: terminalOpen ? terminalHeight : 0,
+    overflow: "hidden",
+    transition: "height 180ms ease",
+    borderTop: "1px solid #1f2937",
+    background: "#0b1020",
+    borderRadius: 8,
+    marginTop: 8,
+  }}
+>
+  {terminalOpen && (
+    <TerminalPanel
+      lines={terminalLines}
+      onClear={() => setTerminalLines([])}
+    />
+  )}
+</div>
+
 <PreviewPanel html={previewHtml} onClose={() => setPreviewHtml(null)} />
+
+        
+<PreviewPanel html={previewHtml} onClose={() => setPreviewHtml(null)} />
+
+        <style jsx global>{`
+  /* Bigger code text inside graph popups */
+  [data-popup-path] .cm-editor {
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  [data-popup-path] pre,
+  [data-popup-path] code,
+  [data-popup-path] textarea,
+  [data-popup-path] [contenteditable="true"] {
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  /* Make highlighted error line pop more */
+  [data-popup-path] .__errline {
+    font-weight: 600;
+    text-decoration: underline;
+  }
+`}</style>
 
 </section>
 

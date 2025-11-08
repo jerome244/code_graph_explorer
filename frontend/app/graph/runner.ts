@@ -56,6 +56,15 @@ const loadScript = (src: string) =>
     document.head.appendChild(s);
   });
 
+function joinPath(...parts: string[]): string {
+  return parts.join("/").replace(/\/+/g, "/").replace(/\/\.\//g, "/").replace(/\/$/, "");
+}
+
+function dirname(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i === -1 ? "" : p.slice(0, i);
+}
+
 /* -------------------- Pyodide (Python) -------------------- */
 
 let pyodideReady: Promise<any> | null = null;
@@ -78,15 +87,6 @@ async function ensurePyodide(): Promise<any> {
     })();
   }
   return pyodideReady;
-}
-
-function joinPath(...parts: string[]): string {
-  return parts.join("/").replace(/\/+/g, "/").replace(/\/\.\//g, "/").replace(/\/$/, "");
-}
-
-function dirname(p: string): string {
-  const i = p.lastIndexOf("/");
-  return i === -1 ? "" : p.slice(0, i);
 }
 
 async function writeProject(
@@ -120,7 +120,6 @@ importlib.invalidate_caches()
 /* -------------------- JSCPP (C/C++) -------------------- */
 
 let jscppReady: Promise<typeof window.JSCPP> | null = null;
-let jscppScriptAdded = false;
 
 function loadScriptWithTimeout(src: string, timeoutMs = 12000): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -260,6 +259,26 @@ importlib.invalidate_caches()
 `;
       pyodide.runPython(injectPathsPy);
 
+      // NEW: purge cached project modules so fresh imports read latest files
+      pyodide.runPython(`
+import sys, os, importlib
+_root = ${JSON.stringify(rootDir)}
+to_del = []
+for name, mod in list(sys.modules.items()):
+    try:
+        f = getattr(mod, "__file__", None)
+        if isinstance(f, str) and (f.startswith(_root + "/") or f.startswith(_root + "\\\\")):
+            to_del.append(name)
+    except Exception:
+        pass
+for name in to_del:
+    try:
+        del sys.modules[name]
+    except Exception:
+        pass
+importlib.invalidate_caches()
+`);
+
       // Bridge Python stdout/stderr to our JS loggers
       ;(window as any)._py_stdout = (s: any) => log(String(s));
       ;(window as any)._py_stderr = (s: any) => logErr(String(s));
@@ -328,4 +347,108 @@ sys.stderr = _StdErr()
 
   /* ---------- Unsupported ---------- */
   return { ok: false, stdout: "", stderr: "Unsupported language", failingPath: req.path };
+}
+
+/* -------------------- Preflight (multi-file syntax checks) -------------------- */
+
+export type PreflightError = {
+  path: string;
+  line?: number;
+  col?: number;
+  message: string;
+  language: "py" | "js" | "c";
+};
+
+/**
+ * Scans the entire project and returns a list of syntax/compile errors
+ * without executing user code. JS & Python are strong; C is best-effort
+ * (checks files containing main()).
+ */
+export async function preflightProject(
+  files: { path: string; content: string }[]
+): Promise<PreflightError[]> {
+  const errs: PreflightError[] = [];
+  const extOf = (p: string) => (p.split(".").pop() || "").toLowerCase();
+
+  // JS syntax (compile only)
+  for (const f of files) {
+    const ext = extOf(f.path);
+    if (["js", "mjs", "cjs"].includes(ext)) {
+      try {
+        // eslint-disable-next-line no-new-func
+        new Function(`${f.content}\n//# sourceURL=${f.path}`);
+      } catch (e: any) {
+        const msg = e?.stack ? String(e.stack) : String(e);
+        let line: number | undefined;
+        let col: number | undefined;
+        const m =
+          msg.match(/\(([^)]+):(\d+):(\d+)\)/) ||
+          msg.match(/at ([^\s]+):(\d+):(\d+)/) ||
+          msg.match(/<anonymous>:(\d+):(\d+)/);
+        if (m) {
+          line = Number(m[m.length - 2]);
+          col = Number(m[m.length - 1]);
+        }
+        errs.push({ path: f.path, line, col, message: msg, language: "js" });
+      }
+    }
+  }
+
+  // Python syntax (AST parse)
+  const pyFiles = files.filter(f => extOf(f.path) === "py");
+  if (pyFiles.length) {
+    try {
+      const pyodide = await ensurePyodide();
+      await writeProject(pyodide, files, "/work");
+      const script = `
+import ast, json
+from pathlib import Path
+out = []
+for rel in ${JSON.stringify(pyFiles.map(f => f.path))}:
+    p = "/work/" + rel
+    try:
+        src = Path(p).read_text(encoding="utf-8")
+        ast.parse(src, filename=p)
+    except SyntaxError as e:
+        out.append({"path": rel, "line": e.lineno, "col": e.offset, "message": f"{e.msg} (line {e.lineno}, col {e.offset})"})
+    except Exception as e:
+        out.append({"path": rel, "message": str(e)})
+json.dumps(out)
+`;
+      const raw = await pyodide.runPythonAsync(script);
+      const pyErrs: Array<{path:string; line?:number; col?:number; message:string}> =
+        JSON.parse(raw || "[]");
+      for (const e of pyErrs) errs.push({ ...e, language: "py" });
+    } catch (e: any) {
+      errs.push({ path: "<python>", message: String(e), language: "py" });
+    }
+  }
+
+  // C best-effort (compile files containing main())
+  const cFiles = files.filter(f => ["c", "cpp", "cc", "cxx"].includes(extOf(f.path)));
+  const mains = cFiles.filter(f => /\bint\s+main\s*\(/.test(f.content));
+  if (mains.length) {
+    try {
+      const JSCPP = await ensureJSCPP();
+      for (const f of mains) {
+        try {
+          JSCPP.run(f.content, "", { stdio: { write: () => {}, read: () => "" } });
+        } catch (e: any) {
+          const msg = String(e?.message || e);
+          const m = msg.match(/:(\d+):(\d+)/);
+          errs.push({
+            path: f.path,
+            line: m ? Number(m[1]) : undefined,
+            col: m ? Number(m[2]) : undefined,
+            message: msg,
+            language: "c",
+          });
+        }
+      }
+    } catch (e: any) {
+      errs.push({ path: "<c>", message: String(e), language: "c" });
+    }
+  }
+
+  return errs;
 }

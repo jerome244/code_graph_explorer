@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Code Graph Explorer</title>
-  <meta name="description" content="We propose a solution for exploring coding projects for teams in realtime." />
+  <meta name="description" content="Explore coding projects in realtime. Visualize, search, and share." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -14,85 +14,239 @@
       --border:rgba(255,255,255,0.08);
       --cardGrad: radial-gradient(1200px 400px at 50% -10%, rgba(124,143,255,0.12), rgba(11,16,32,0));
       --accent:#7aa2ff; --accent2:#9bb8ff;
+      --ink:#111827; --ink-2:#4b5563; --brand:#2563eb; --paper:#ffffff;
     }
     *{box-sizing:border-box}
     html,body{height:100%}
     body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif}
-    main{min-height:calc(100vh - 56px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:40px}
+
+    /* ------- Header (Nav.tsx look, but static) ------- */
+    header.topbar{
+      height:56px; display:flex; align-items:center; justify-content:space-between;
+      padding:0 24px; border-bottom:1px solid #e5e7eb; background:var(--paper);
+      position:sticky; top:0; z-index:50; box-shadow:0 2px 4px rgba(0,0,0,0.1); gap:16px;
+    }
+    .brand{display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--ink); font-weight:800}
+    .brand svg{display:block}
+    nav.site{display:flex; gap:24px; align-items:center}
+    nav.site a{font-size:16px; font-weight:600; color:#4b5563; text-decoration:none}
+    .auth{display:flex; gap:16px; align-items:center}
+    .auth a{font-size:14px; font-weight:500; color:var(--brand); text-decoration:none; padding:6px 12px; border-radius:4px}
+
+    /* ------- Main / hero ------- */
+    main{min-height:calc(100vh - 56px); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; gap:40px}
     .card{
-      width:100%;max-width:720px;text-align:center;padding:40px 28px;background:var(--cardGrad);
-      border:1px solid var(--border);border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,0.25)
+      width:100%; max-width:720px; text-align:center; padding:40px 28px; background:var(--cardGrad);
+      border:1px solid var(--border); border-radius:16px; box-shadow:0 8px 30px rgba(0,0,0,0.25)
     }
     h1{
-      font-size:40px;line-height:1.1;letter-spacing:-.02em;font-weight:700;margin:0;
+      font-size:40px; line-height:1.1; letter-spacing:-.02em; font-weight:700; margin:0;
       background-image:linear-gradient(180deg,#fff,rgba(255,255,255,.7));
-      -webkit-background-clip:text;background-clip:text;color:transparent
+      -webkit-background-clip:text; background-clip:text; color:transparent
     }
-    .sub{margin-top:14px;margin-bottom:24px;font-size:16px;line-height:1.6;color:var(--muted)}
-    .btnRow{display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap}
+    .sub{margin-top:14px; margin-bottom:24px; font-size:16px; line-height:1.6; color:var(--muted)}
+    .btnRow{display:flex; gap:12px; justify-content:center; align-items:center; flex-wrap:wrap}
     .btn{
-      display:inline-block;padding:12px 18px;font-size:15px;border-radius:12px;text-decoration:none;user-select:none;
+      display:inline-block; padding:12px 18px; font-size:15px; border-radius:12px; text-decoration:none; user-select:none;
       transition:transform 120ms ease, background-color 160ms ease, border-color 160ms ease;
-      background-color:rgba(255,255,255,0.10);color:#fff;border:1px solid rgba(255,255,255,0.18)
+      background-color:rgba(255,255,255,0.10); color:#fff; border:1px solid rgba(255,255,255,0.18)
     }
-    .btn:hover{background-color:rgba(255,255,255,0.16);transform:translateY(-1px)}
-    .btn--outline{background-color:transparent;color:#e6e8ee}
-    .btn--outline:hover{background-color:rgba(255,255,255,0.06);border-color:rgba(255,255,255,0.35)}
-    footer{width:100%;max-width:900px;text-align:center;opacity:.85;transform:scale(.85);margin-top:12px;display:flex;flex-direction:column;align-items:center;gap:10px}
-    .grid{width:100%;display:grid;grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));column-gap:16px;row-gap:10px;align-items:start}
-    .stack{border:1px solid var(--border);border-radius:12px;padding:16px;background:rgba(255,255,255,.03)}
-    .stack h3{margin:0 0 10px 0;font-size:16px;font-weight:800}
-    .chips{display:flex;flex-wrap:wrap;gap:8px}
-    .chip{padding:6px 10px;border:1px solid var(--border);border-radius:999px;font-size:13px;color:var(--text);opacity:.9}
-    .created{display:flex;flex-direction:column;align-items:center;font-size:13px;color:rgba(230,232,238,0.7);gap:4px;margin-top:4px}
-    .people{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center}
-    .alink{color:var(--accent2);text-decoration:none;transition:color .2s ease}
-    .copyrow{display:flex;align-items:center;justify-content:center;gap:12px;font-size:13px;color:rgba(230,232,238,0.7);margin-top:4px}
-    .gh{display:inline-flex;align-items:center;color:var(--accent);text-decoration:none;transition:opacity .2s ease;opacity:.9}
+    .btn:hover{background-color:rgba(255,255,255,0.16); transform:translateY(-1px)}
+    .btn--outline{background-color:transparent; color:#e6e8ee}
+    .btn--outline:hover{background-color:rgba(255,255,255,0.06); border-color:rgba(255,255,255,0.35)}
+
+    /* ------- Tech stack ------- */
+    footer.stack{width:100%; max-width:900px; text-align:center; opacity:.85; transform:scale(.85); margin-top:12px;
+      display:flex; flex-direction:column; align-items:center; gap:10px}
+    .grid{width:100%; display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); column-gap:16px; row-gap:10px; align-items:start}
+    .stackCard{border:1px solid var(--border); border-radius:12px; padding:16px; background:rgba(255,255,255,.03)}
+    .stackCard h3{margin:0 0 10px 0; font-size:16px; font-weight:800}
+    .chips{display:flex; flex-wrap:wrap; gap:8px}
+    .chip{display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid var(--border); border-radius:999px; font-size:13px; color:var(--text); opacity:.95}
+    .chip svg{display:block}
+
+    /* ------- Footer credits + GitHub ------- */
+    .created{display:flex; flex-direction:column; align-items:center; font-size:13px; color:rgba(230,232,238,0.7); gap:4px; margin-top:4px}
+    .people{display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:center}
+    .alink{color:var(--accent2); text-decoration:none; transition:color .2s ease}
+    .copyrow{display:flex; align-items:center; justify-content:center; gap:12px; font-size:13px; color:rgba(230,232,238,0.7); margin-top:4px}
+    .gh{display:inline-flex; align-items:center; color:var(--accent); text-decoration:none; transition:opacity .2s ease; opacity:.9}
     .gh svg{margin-right:6px}
-    /* top nav spacer height (since your app layout reserves ~56px) */
-    .navspacer{height:56px}
-    @media (max-width:480px){ h1{font-size:34px} }
+
+    @media (max-width:480px){ h1{font-size:34px} nav.site{gap:14px} }
   </style>
 </head>
 <body>
-  <div class="navspacer"></div> <!-- visually matches your app's reserved nav height -->
+  <!-- Header (static version of Nav.tsx) -->
+  <header class="topbar">
+    <a class="brand" href="#">
+      <!-- Simple brand mark -->
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden>
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#5b7cfa"/><stop offset="1" stop-color="#7fa8ff"/>
+          </linearGradient>
+        </defs>
+        <rect x="2" y="2" width="20" height="20" rx="6" stroke="url(#g)" fill="none" stroke-width="2"/>
+        <path d="M7 15l3-6 4 3 3-2" stroke="url(#g)" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Code Graph Explorer
+    </a>
+
+    <nav class="site">
+      <a href="#">Home</a>
+      <a href="#">Graph</a>
+      <a href="#">Games</a>
+      <a href="#">OSINT</a>
+      <a href="#">Pico</a>
+      <a href="#">Animal Detector</a>
+      <!-- You can add Messages/Profile when you have auth on your main app -->
+    </nav>
+
+    <div class="auth">
+      <a href="#">Login</a>
+      <a href="#">Register</a>
+    </div>
+  </header>
+
   <main>
     <!-- HERO -->
     <section class="card" aria-labelledby="cge-title">
       <h1 id="cge-title">Code Graph Explorer</h1>
       <p class="sub">we propose a solution for exploring coding projects for teams in realtime</p>
       <div class="btnRow">
-        <!-- TODO: replace # with your real app URLs -->
         <a class="btn" href="#">Login</a>
         <a class="btn btn--outline" href="#">Register</a>
       </div>
     </section>
 
     <!-- TECH STACK -->
-    <footer>
+    <footer class="stack">
       <div class="grid">
-        <div class="stack">
+        <div class="stackCard">
           <h3>Frontend</h3>
           <div class="chips">
-            <span class="chip">react</span>
-            <span class="chip">next</span>
-            <span class="chip">typescript</span>
-            <span class="chip">three.js</span>
-            <span class="chip">svg</span>
-            <span class="chip">cityscape</span>
+            <span class="chip">
+              <!-- React icon -->
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <circle cx="12" cy="12" r="2.2" fill="#61DAFB"/>
+                <ellipse cx="12" cy="12" rx="10" ry="4.5" stroke="#61DAFB" stroke-width="1.5" fill="none"/>
+                <ellipse cx="12" cy="12" rx="10" ry="4.5" stroke="#61DAFB" stroke-width="1.5" fill="none" transform="rotate(60 12 12)"/>
+                <ellipse cx="12" cy="12" rx="10" ry="4.5" stroke="#61DAFB" stroke-width="1.5" fill="none" transform="rotate(120 12 12)"/>
+              </svg>
+              react
+            </span>
+            <span class="chip">
+              <!-- Next.js N -->
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <circle cx="12" cy="12" r="10" stroke="#fff" opacity=".8"/>
+                <path d="M7 17V7l10 10" stroke="#fff" stroke-width="1.6"/>
+                <path d="M14 7h3v10" stroke="#fff" stroke-width="1.6"/>
+              </svg>
+              next
+            </span>
+            <span class="chip">
+              <!-- TS shield -->
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <path fill="#3178C6" d="M3 4h18v16l-9 3-9-3V4z"/>
+                <path fill="#fff" d="M11 9H7v2h2v6h2v-8zm3 8h2.2c1 0 1.8-.3 2.3-.8.6-.6.9-1.3.9-2.3 0-1-.3-1.7-.9-2.3-.5-.5-1.3-.8-2.3-.8-1 0-1.9.3-2.4 1l1.3 1c.2-.3.6-.5 1.1-.5.9 0 1.4.5 1.4 1.6s-.5 1.6-1.5 1.6H14v1.5z"/>
+              </svg>
+              typescript
+            </span>
+            <span class="chip">
+              <!-- Three.js-ish wireframe -->
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path d="M12 3l9 6-9 12L3 9l9-6z" stroke="#fff" opacity=".9"/>
+                <path d="M12 3v18M3 9h18M7.5 6.7l9 10.6" stroke="#fff" opacity=".4"/>
+              </svg>
+              three.js
+            </span>
+            <span class="chip">
+              <!-- SVG tag -->
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path d="M9 8l-4 4 4 4M15 8l4 4-4 4" stroke="#fff"/>
+                <rect x="3" y="5" width="18" height="14" rx="2" stroke="#fff" opacity=".6"/>
+              </svg>
+              svg
+            </span>
+            <span class="chip">
+              <!-- Cytoscape/graph node icon -->
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <circle cx="5" cy="12" r="2.2" fill="#9bb8ff"/>
+                <circle cx="12" cy="6" r="2.2" fill="#9bb8ff"/>
+                <circle cx="19" cy="12" r="2.2" fill="#9bb8ff"/>
+                <circle cx="12" cy="18" r="2.2" fill="#9bb8ff"/>
+                <path d="M7 12l3-4m2 4l3-4m-3 4l3 4m-3-4l-3 4" stroke="#9bb8ff"/>
+              </svg>
+              cytoscape
+            </span>
           </div>
         </div>
-        <div class="stack">
+
+        <div class="stackCard">
           <h3>Backend</h3>
           <div class="chips">
-            <span class="chip">python</span>
-            <span class="chip">django</span>
-            <span class="chip">daphne</span>
-            <span class="chip">postgre</span>
-            <span class="chip">redis</span>
-            <span class="chip">docker</span>
-            <span class="chip">c++</span>
+            <span class="chip">
+              <!-- Python -->
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <path fill="#3776AB" d="M12 3c-4 0-3.5 3-3.5 3v2h7V6s.5-3-3.5-3z"/>
+                <circle cx="9.5" cy="5.5" r="1" fill="#fff"/>
+                <path fill="#FFD43B" d="M12 21c4 0 3.5-3 3.5-3v-2h-7v2s-.5 3 3.5 3z"/>
+                <circle cx="14.5" cy="18.5" r="1" fill="#fff"/>
+              </svg>
+              python
+            </span>
+            <span class="chip">
+              <!-- Django -->
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <rect x="3" y="3" width="18" height="18" rx="4" fill="#0c4b33"/>
+                <text x="50%" y="58%" font-size="11" fill="#fff" text-anchor="middle" font-family="system-ui,Arial">dj</text>
+              </svg>
+              django
+            </span>
+            <span class="chip">
+              <!-- Daphne (lightning) -->
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path d="M12 2l-6 10h5l-1 10 8-12h-5l-1-8z" fill="#f59e0b"/>
+              </svg>
+              daphne
+            </span>
+            <span class="chip">
+              <!-- Postgres elephant-ish -->
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <path d="M6 7c0-2 1.7-3 6-3s6 1 6 3v6c0 2-1.7 3-6 3s-6-1-6-3V7z" fill="#336791"/>
+                <path d="M6 10c0 2 12 2 12 0" stroke="#fff" opacity=".7"/>
+              </svg>
+              postgre
+            </span>
+            <span class="chip">
+              <!-- Redis -->
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <path d="M4 9l8-4 8 4-8 4-8-4z" fill="#dc2626"/>
+                <path d="M4 13l8 4 8-4" stroke="#dc2626" fill="none"/>
+              </svg>
+              redis
+            </span>
+            <span class="chip">
+              <!-- Docker whale-ish -->
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <rect x="5" y="8" width="3" height="3" fill="#0db7ed"/>
+                <rect x="9" y="8" width="3" height="3" fill="#0db7ed"/>
+                <rect x="13" y="8" width="3" height="3" fill="#0db7ed"/>
+                <rect x="9" y="12" width="3" height="3" fill="#0db7ed"/>
+                <rect x="13" y="12" width="3" height="3" fill="#0db7ed"/>
+                <path d="M4 13c0 4 3 6 8 6s8-2 8-6" stroke="#0db7ed" fill="none"/>
+              </svg>
+              docker
+            </span>
+            <span class="chip">
+              <!-- C++ -->
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden>
+                <path d="M12 3l9 5v8l-9 5-9-5V8l9-5z" fill="#00599C"/>
+                <text x="50%" y="57%" font-size="9" fill="#fff" text-anchor="middle" font-family="system-ui,Arial">C++</text>
+              </svg>
+              c++
+            </span>
           </div>
         </div>
       </div>

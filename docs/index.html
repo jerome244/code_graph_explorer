@@ -4,34 +4,122 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Code Graph Explorer</title>
+  <meta name="description" content="We propose a solution for exploring coding projects for teams in realtime." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
   <style>
-    :root{--bg:#0b1020;--card:rgba(255,255,255,.06);--border:rgba(255,255,255,.12);--text:#e6e8ee;--muted:#98a2b3}
-    *{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
-    main{min-height:100vh;display:grid;place-items:center;padding:32px}
-    .card{max-width:900px;width:100%;padding:36px;border:1px solid var(--border);border-radius:16px;background:
-      radial-gradient(1200px 400px at 50% -10%, rgba(124,143,255,0.12), rgba(11,16,32,0))}
-    h1{font-size:48px;line-height:1.1;margin:0 0 8px}
-    p{margin:0 0 18px;color:var(--muted);font-size:18px}
-    .cta{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px}
-    .btn{padding:12px 18px;border-radius:12px;text-decoration:none;border:1px solid var(--border);color:#fff}
-    .btn--primary{background:linear-gradient(135deg,#5b7cfa,#7fa8ff);border:none}
-    .footer{margin-top:16px;font-size:12px;color:#8b95a7}
+    :root{
+      --bg:#0b1020; --text:#e6e8ee; --muted:rgba(230,232,238,0.8);
+      --border:rgba(255,255,255,0.08);
+      --cardGrad: radial-gradient(1200px 400px at 50% -10%, rgba(124,143,255,0.12), rgba(11,16,32,0));
+      --accent:#7aa2ff; --accent2:#9bb8ff;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif}
+    main{min-height:calc(100vh - 56px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:40px}
+    .card{
+      width:100%;max-width:720px;text-align:center;padding:40px 28px;background:var(--cardGrad);
+      border:1px solid var(--border);border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,0.25)
+    }
+    h1{
+      font-size:40px;line-height:1.1;letter-spacing:-.02em;font-weight:700;margin:0;
+      background-image:linear-gradient(180deg,#fff,rgba(255,255,255,.7));
+      -webkit-background-clip:text;background-clip:text;color:transparent
+    }
+    .sub{margin-top:14px;margin-bottom:24px;font-size:16px;line-height:1.6;color:var(--muted)}
+    .btnRow{display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap}
+    .btn{
+      display:inline-block;padding:12px 18px;font-size:15px;border-radius:12px;text-decoration:none;user-select:none;
+      transition:transform 120ms ease, background-color 160ms ease, border-color 160ms ease;
+      background-color:rgba(255,255,255,0.10);color:#fff;border:1px solid rgba(255,255,255,0.18)
+    }
+    .btn:hover{background-color:rgba(255,255,255,0.16);transform:translateY(-1px)}
+    .btn--outline{background-color:transparent;color:#e6e8ee}
+    .btn--outline:hover{background-color:rgba(255,255,255,0.06);border-color:rgba(255,255,255,0.35)}
+    footer{width:100%;max-width:900px;text-align:center;opacity:.85;transform:scale(.85);margin-top:12px;display:flex;flex-direction:column;align-items:center;gap:10px}
+    .grid{width:100%;display:grid;grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));column-gap:16px;row-gap:10px;align-items:start}
+    .stack{border:1px solid var(--border);border-radius:12px;padding:16px;background:rgba(255,255,255,.03)}
+    .stack h3{margin:0 0 10px 0;font-size:16px;font-weight:800}
+    .chips{display:flex;flex-wrap:wrap;gap:8px}
+    .chip{padding:6px 10px;border:1px solid var(--border);border-radius:999px;font-size:13px;color:var(--text);opacity:.9}
+    .created{display:flex;flex-direction:column;align-items:center;font-size:13px;color:rgba(230,232,238,0.7);gap:4px;margin-top:4px}
+    .people{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center}
+    .alink{color:var(--accent2);text-decoration:none;transition:color .2s ease}
+    .copyrow{display:flex;align-items:center;justify-content:center;gap:12px;font-size:13px;color:rgba(230,232,238,0.7);margin-top:4px}
+    .gh{display:inline-flex;align-items:center;color:var(--accent);text-decoration:none;transition:opacity .2s ease;opacity:.9}
+    .gh svg{margin-right:6px}
+    /* top nav spacer height (since your app layout reserves ~56px) */
+    .navspacer{height:56px}
+    @media (max-width:480px){ h1{font-size:34px} }
   </style>
 </head>
 <body>
+  <div class="navspacer"></div> <!-- visually matches your app's reserved nav height -->
   <main>
-    <section class="card" aria-labelledby="title">
-      <h1 id="title">Code Graph Explorer</h1>
-      <p>Explore coding projects in realtime. Visualize, search, and share.</p>
-      <div class="cta">
-        <a class="btn btn--primary" href="#">Get started</a>
-        <a class="btn" href="#">Docs</a>
+    <!-- HERO -->
+    <section class="card" aria-labelledby="cge-title">
+      <h1 id="cge-title">Code Graph Explorer</h1>
+      <p class="sub">we propose a solution for exploring coding projects for teams in realtime</p>
+      <div class="btnRow">
+        <!-- TODO: replace # with your real app URLs -->
+        <a class="btn" href="#">Login</a>
+        <a class="btn btn--outline" href="#">Register</a>
       </div>
-      <p class="footer">(Static landing served via GitHub Pages)</p>
     </section>
+
+    <!-- TECH STACK -->
+    <footer>
+      <div class="grid">
+        <div class="stack">
+          <h3>Frontend</h3>
+          <div class="chips">
+            <span class="chip">react</span>
+            <span class="chip">next</span>
+            <span class="chip">typescript</span>
+            <span class="chip">three.js</span>
+            <span class="chip">svg</span>
+            <span class="chip">cityscape</span>
+          </div>
+        </div>
+        <div class="stack">
+          <h3>Backend</h3>
+          <div class="chips">
+            <span class="chip">python</span>
+            <span class="chip">django</span>
+            <span class="chip">daphne</span>
+            <span class="chip">postgre</span>
+            <span class="chip">redis</span>
+            <span class="chip">docker</span>
+            <span class="chip">c++</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- CREATED BY -->
+      <div class="created">
+        <span>Created by</span>
+        <div class="people">
+          <a class="alink" href="https://github.com/hayama0024" target="_blank" rel="noopener noreferrer">Ryota Higa</a>
+          <span>•</span>
+          <a class="alink" href="https://github.com/PIERRE_GH_USERNAME" target="_blank" rel="noopener noreferrer">Pierre Lionnel Obiang</a>
+          <span>•</span>
+          <a class="alink" href="https://github.com/jerome244" target="_blank" rel="noopener noreferrer">Jerome Tran</a>
+        </div>
+      </div>
+
+      <!-- COPYRIGHT + GITHUB -->
+      <div class="copyrow">
+        <span>© 2025 Code Graph Explorer</span>
+        <a class="gh" href="https://github.com/jerome244/code_graph_explorer" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" aria-hidden>
+            <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.1-1.3-1.5-1.3-1.5-1-.7.1-.7.1-.7 1.1.1 1.7 1.2 1.7 1.2 1 .1.9 1.7.9 1.7.9 1.4 2.4 1 3 .8.1-.7.4-1 .8-1.3-2.6-.3-5.3-1.3-5.3-5.9 0-1.3.5-2.3 1.2-3.2-.1-.3-.5-1.4.1-2.9 0 0 1-.3 3.3 1.2a11.3 11.3 0 0 1 6 0C18 6 19 6.3 19 6.3c.6 1.5.2 2.6.1 2.9.8.9 1.2 2 1.2 3.2 0 4.6-2.7 5.6-5.3 5.9.4.3.8.9.8 1.8v2.7c0 .3.2.7.8.6A10.9 10.9 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/>
+          </svg>
+          GitHub
+        </a>
+      </div>
+    </footer>
   </main>
 </body>
 </html>

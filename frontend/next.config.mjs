@@ -3,19 +3,14 @@ const isPages = process.env.GITHUB_PAGES === "true";
 const repo = process.env.GITHUB_REPOSITORY?.split("/")[1] ?? "";
 
 const nextConfig = {
-  experimental: {
-    serverActions: { allowedOrigins: ["*"] },
-  },
-
-  // We only want to export static HTML when deploying to GitHub Pages
+  experimental: { serverActions: { allowedOrigins: ["*"] } },
   ...(isPages
     ? {
-        output: "export",              // enable `next export`
-        images: { unoptimized: true }, // Pages has no image optimizer
+        output: "export",
+        images: { unoptimized: true },
         basePath: `/${repo}`,
         assetPrefix: `/${repo}/`,
       }
     : {}),
 };
-
 export default nextConfig;
